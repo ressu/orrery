@@ -31,7 +31,8 @@ pub fn shape_of(transcript: &[Value], ignore: &[String]) -> Value {
                 out.insert("step".into(), entry["step"].clone());
                 out.insert("call".into(), entry["call"].clone());
                 if let Some(r) = entry.get("result") {
-                    out.insert("result".into(), shape(r, &mut Vec::new(), &patterns));
+                    // Paths start at `result`, as `ignore:` entries are written.
+                    out.insert("result".into(), shape(r, &mut vec!["result".to_owned()], &patterns));
                 }
                 if let Some(e) = entry.get("error") {
                     out.insert("error".into(), json!({"code": e["code"]}));
@@ -145,5 +146,17 @@ fn describe(v: &Value) -> String {
         Value::Object(_) => "object".into(),
         Value::Array(_) => "array".into(),
         other => other.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ignore_paths_start_at_result() {
+        let transcript = vec![json!({"step": 1, "call": "x", "result": {"a": {"b": 1, "c": 2}, "list": [{"t": 1}]}})];
+        let shape = shape_of(&transcript, &["result.a.b".into(), "result.list.*.t".into()]);
+        assert_eq!(shape[0]["result"], json!({"a": {"b": "any", "c": "number"}, "list": [{"t": "any"}]}));
     }
 }

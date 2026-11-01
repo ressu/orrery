@@ -100,7 +100,7 @@
       },
       "files": [
         {
-          "filename": "string",
+          "filename": "any",
           "sections": [
             "string"
           ]

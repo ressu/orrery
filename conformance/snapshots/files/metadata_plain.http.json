@@ -20,8 +20,8 @@
     "call": "server.files.metadata",
     "result": {
       "size": "number",
-      "modified": "number",
-      "uuid": "string",
+      "modified": "any",
+      "uuid": "any",
       "file_processors": [],
       "slicer": "string",
       "slicer_version": "string",

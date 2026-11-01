@@ -1,4 +1,6 @@
 name: protected namespaces can be read but not written, forbidden ones not at all
+# The moonraker namespace's keys are the server's own bookkeeping, so only its type is compared.
+ignore: [result.value]
 steps:
   # "moonraker" is always protected.
   - call: server.database.post_item

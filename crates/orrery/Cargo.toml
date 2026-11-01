@@ -7,5 +7,17 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+orrery-proto.workspace = true
 anyhow.workspace = true
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio", "ws"] }
 clap = { workspace = true, features = ["env"] }
+form_urlencoded = "1"
+futures-util.workspace = true
+redb = "4"
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

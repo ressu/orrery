@@ -20,7 +20,7 @@
     "call": "server.files.metadata",
     "result": {
       "size": "number",
-      "modified": "number",
+      "modified": "any",
       "uuid": "string",
       "file_processors": [],
       "slicer": "string",
@@ -57,8 +57,8 @@
           "relative_path": "string"
         }
       ],
-      "print_start_time": "null",
-      "job_id": "null",
+      "print_start_time": "any",
+      "job_id": "any",
       "filename": "string"
     }
   },

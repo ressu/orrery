@@ -19,19 +19,7 @@
     "result": {
       "namespace": "string",
       "key": "null",
-      "value": {
-        "file_manager": {
-          "metadata_version": "number"
-        },
-        "instance_id": "string",
-        "klippy_connection": {
-          "path": "string",
-          "executable": "string"
-        },
-        "validate_install": {
-          "install_version": "number"
-        }
-      }
+      "value": "any"
     }
   },
   {

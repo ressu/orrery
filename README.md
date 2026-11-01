@@ -10,7 +10,12 @@ starting with per-user state.
 ## Status
 
 The work starts with a conformance suite that checks Moonraker's API from the outside. Upstream
-Moonraker serves as the reference implementation. The orrery server itself hasn't been started yet.
+Moonraker serves as the reference implementation.
+
+orrery connects to Klippy and serves the `server.*`, `printer.*`, and `server.database.*` APIs.
+Files, history, the job queue, and authorization aren't written yet. **orrery has no
+authorization yet, so every client that can reach it has full access.** See
+[docs/regressions.md](docs/regressions.md).
 For the plan and the decisions made so far, see
 [docs/design/2026-11-01-orrery-plan.md](docs/design/2026-11-01-orrery-plan.md).
 
@@ -18,7 +23,7 @@ For the plan and the decisions made so far, see
 
 | Path | Contents |
 |---|---|
-| `crates/orrery` | The server (a stub for now) |
+| `crates/orrery` | The server |
 | `crates/orrery-proto` | Shared wire formats: Klippy socket framing and JSON-RPC envelopes |
 | `crates/fake-klippy` | A scriptable stand-in for Klipper's API socket |
 | `crates/conformance` | The conformance test runner |

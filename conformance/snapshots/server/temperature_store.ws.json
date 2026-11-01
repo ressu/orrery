@@ -4,26 +4,14 @@
     "call": "server.temperature_store",
     "result": {
       "heater_bed": {
-        "temperatures": [
-          "number"
-        ],
-        "targets": [
-          "number"
-        ],
-        "powers": [
-          "number"
-        ]
+        "temperatures": "any",
+        "targets": "any",
+        "powers": "any"
       },
       "extruder": {
-        "temperatures": [
-          "number"
-        ],
-        "targets": [
-          "number"
-        ],
-        "powers": [
-          "number"
-        ]
+        "temperatures": "any",
+        "targets": "any",
+        "powers": "any"
       }
     }
   }

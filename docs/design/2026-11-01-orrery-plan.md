@@ -242,3 +242,21 @@ Tiers, in order:
   compiler. Moonraker's database is read for import by a ~300-line pure-Rust SQLite reader, which
   matched Python's `sqlite3` row for row on a database built by upstream Moonraker. Still to
   check: the same numbers on a Pi's SD card.
+- **2026-11-01: redb chosen.** The server uses redb. Importing from Moonraker's database becomes
+  a second binary when it's needed, built on the spike's SQLite reader, instead of an
+  `orrery import` subcommand.
+- **2026-11-01: first orrery server.** It has the endpoint registry, JSON-RPC and HTTP
+  transports, the Klippy connection with shared subscriptions, `server.info`/`config`/`identify`,
+  the `printer.*` endpoints (Klippy's and the print/restart ones), the gcode and temperature
+  stores, and `server.database.*` on redb. It passes every printer, database, and JSON-RPC case,
+  on the fake and on real Klipper.
+  - orrery's own subscriptions (webhooks, job state, temperature sensors) are merged under the
+    subscription lock. Merging before taking the lock lost one component's objects when two
+    subscribed at once.
+  - `server.info` lists only the components orrery has, because Fluidd hides features whose
+    component isn't listed.
+  - `moonraker_version` is `orrery-<version>`. Fluidd's old-version warning only applies to valid
+    semver, so it stays quiet.
+- **2026-11-01: snapshot `ignore:` paths were never applied.** The runner built paths without the
+  leading `result`, so no `ignore:` entry matched. Fixed, with a test, and the snapshots were
+  re-recorded.
