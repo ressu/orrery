@@ -74,3 +74,7 @@ capture:
 build-arm:
     cargo build --release -p orrery --target aarch64-unknown-linux-musl
     cargo build --release -p orrery --target armv7-unknown-linux-musleabihf
+
+# Build orrery for a printer's CPU and copy it to ~/orrery-test/bin on the printer.
+copy-to-printer host:
+    scripts/copy-to-printer.sh {{host}}

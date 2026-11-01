@@ -48,3 +48,14 @@ just build-arm
 ```
 
 The binaries link with `rust-lld` and Rust's bundled musl, so they need no C cross toolchain.
+
+To build orrery for a printer's CPU and copy it to the printer over SSH, run:
+
+```
+scripts/copy-to-printer.sh <ssh host>
+```
+
+`<ssh host>` is what you'd give `ssh`, for example `pi@printer-1`. The binary goes to
+`~/orrery-test/bin/orrery` on the printer, and it's copied only when it changed. The script
+doesn't start orrery or change anything else on the printer. To close the SSH connection it keeps
+open for 10 minutes, run `scripts/copy-to-printer.sh --disconnect <ssh host>`.
