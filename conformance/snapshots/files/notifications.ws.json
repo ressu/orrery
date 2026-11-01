@@ -1,0 +1,64 @@
+[
+  {
+    "step": 1,
+    "call": "server.files.post_directory",
+    "result": {
+      "action": "string",
+      "item": {
+        "modified": "number",
+        "size": "number",
+        "permissions": "string",
+        "path": "string",
+        "root": "string"
+      }
+    }
+  },
+  {
+    "step": 3,
+    "call": "server.files.move",
+    "result": {
+      "action": "string",
+      "item": {
+        "modified": "number",
+        "size": "number",
+        "permissions": "string",
+        "path": "string",
+        "root": "string"
+      },
+      "source_item": {
+        "path": "string",
+        "root": "string"
+      }
+    }
+  },
+  {
+    "step": 5,
+    "call": "upload",
+    "result": {
+      "action": "string",
+      "item": {
+        "modified": "number",
+        "size": "number",
+        "permissions": "string",
+        "path": "string",
+        "root": "string"
+      },
+      "print_started": "bool",
+      "print_queued": "bool"
+    }
+  },
+  {
+    "step": 7,
+    "call": "server.files.delete_file",
+    "result": {
+      "action": "string",
+      "item": {
+        "modified": "number",
+        "size": "number",
+        "permissions": "string",
+        "path": "string",
+        "root": "string"
+      }
+    }
+  }
+]

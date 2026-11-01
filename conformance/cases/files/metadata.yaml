@@ -1,0 +1,37 @@
+name: metadata is extracted from a PrusaSlicer file
+ignore: [result.modified, result.print_start_time, result.job_id]
+steps:
+  - upload: cube.gcode
+    fixture: prusaslicer_cube.gcode
+  - call: server.files.metadata
+    params: {filename: cube.gcode}
+    retry_ms: 5000
+    expect:
+      filename: cube.gcode
+      size: $type:number
+      modified: $type:number
+      uuid: $type:string
+      slicer: PrusaSlicer
+      slicer_version: 2.7.1+linux-x64-GTK3
+      layer_height: 0.2
+      first_layer_height: 0.2
+      object_height: 2.0
+      nozzle_diameter: 0.4
+      filament_total: 1234.56
+      filament_weight_total: 3.68
+      filament_type: PLA
+      filament_name: Generic PLA
+      estimated_time: 930
+      first_layer_bed_temp: 60
+      first_layer_extr_temp: 215
+      gcode_start_byte: $type:number
+      gcode_end_byte: $type:number
+      thumbnails:
+        - {width: 32, height: 32, size: $type:number, relative_path: ".thumbs/cube-32x32.png"}
+        - {width: 300, height: 300, size: $type:number, relative_path: ".thumbs/cube-300x300.png"}
+  - download: gcodes/.thumbs/cube-32x32.png
+  - call: server.files.thumbnails
+    params: {filename: cube.gcode}
+    expect:
+      - {width: 32, height: 32, thumbnail_path: ".thumbs/cube-32x32.png"}
+      - {width: 300, height: 300, thumbnail_path: ".thumbs/cube-300x300.png"}

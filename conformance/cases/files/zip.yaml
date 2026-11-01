@@ -1,0 +1,10 @@
+name: server.files.zip packs files into an archive
+files:
+  gcodes/a.gcode: "G28\n"
+  gcodes/sub/b.gcode: "G28\n"
+steps:
+  - call: server.files.zip
+    params: {items: [gcodes/a.gcode, gcodes/sub], dest: config/backup.zip}
+    http: {verb: POST, path: /server/files/zip, body: {items: [gcodes/a.gcode, gcodes/sub], dest: config/backup.zip}}
+    expect: {destination: {root: config, path: backup.zip}, action: zip_files}
+  - download: config/backup.zip

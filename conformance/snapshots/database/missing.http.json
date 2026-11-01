@@ -1,0 +1,23 @@
+[
+  {
+    "step": 2,
+    "call": "server.database.get_item",
+    "error": {
+      "code": 404
+    }
+  },
+  {
+    "step": 4,
+    "call": "server.database.delete_item",
+    "error": {
+      "code": 404
+    }
+  },
+  {
+    "step": 5,
+    "call": "server.database.get_item",
+    "error": {
+      "code": 400
+    }
+  }
+]

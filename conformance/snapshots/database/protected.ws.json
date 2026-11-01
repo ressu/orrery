@@ -1,0 +1,54 @@
+[
+  {
+    "step": 1,
+    "call": "server.database.post_item",
+    "error": {
+      "code": 403
+    }
+  },
+  {
+    "step": 2,
+    "call": "server.database.delete_item",
+    "error": {
+      "code": 403
+    }
+  },
+  {
+    "step": 3,
+    "call": "server.database.get_item",
+    "result": {
+      "namespace": "string",
+      "key": "null",
+      "value": {
+        "file_manager": {
+          "metadata_version": "number"
+        },
+        "instance_id": "string",
+        "klippy_connection": {
+          "path": "string",
+          "executable": "string"
+        },
+        "validate_install": {
+          "install_version": "number"
+        }
+      }
+    }
+  },
+  {
+    "step": 4,
+    "call": "server.database.get_item",
+    "error": {
+      "code": 403
+    }
+  },
+  {
+    "step": 5,
+    "call": "server.database.list",
+    "result": {
+      "namespaces": [
+        "string"
+      ],
+      "backups": []
+    }
+  }
+]

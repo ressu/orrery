@@ -1,0 +1,32 @@
+[
+  {
+    "step": 1,
+    "call": "server.history.list",
+    "result": {
+      "count": "number",
+      "jobs": []
+    }
+  },
+  {
+    "step": 2,
+    "call": "server.history.totals",
+    "result": {
+      "job_totals": {
+        "total_jobs": "number",
+        "total_time": "number",
+        "total_print_time": "number",
+        "total_filament_used": "number",
+        "longest_job": "number",
+        "longest_print": "number"
+      },
+      "auxiliary_totals": []
+    }
+  },
+  {
+    "step": 3,
+    "call": "server.history.get_job",
+    "error": {
+      "code": 404
+    }
+  }
+]

@@ -1,0 +1,12 @@
+name: printer.gcode.script runs gcode and reports its output
+steps:
+  - call: printer.gcode.script
+    params: {script: ECHO_hello}
+    expect: ok
+  - expect_notification: notify_gcode_response
+    match: ["// hello"]
+  - call: printer.gcode.script
+    params: {script: FAIL_ME}
+    expect_error: {code: 400, message: Requested failure}
+  - expect_notification: notify_gcode_response
+    match: ["!! Requested failure"]

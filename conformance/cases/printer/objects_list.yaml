@@ -1,0 +1,6 @@
+name: printer.objects.list lists Klipper's printer objects
+tags: [real-klippy]
+steps:
+  - call: printer.objects.list
+    expect:
+      objects: {$contains: [webhooks, print_stats, toolhead, extruder, heater_bed, virtual_sdcard, gcode_move]}

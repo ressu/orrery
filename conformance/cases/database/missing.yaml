@@ -1,0 +1,22 @@
+name: missing namespaces and keys
+# On the websocket Moonraker reports a 404 as JSON-RPC -32601.
+steps:
+  - call: server.database.get_item
+    only: [ws]
+    params: {namespace: does_not_exist}
+    expect_error: {code: -32601, message: "$regex:does_not_exist"}
+  - call: server.database.get_item
+    only: [http]
+    params: {namespace: does_not_exist}
+    expect_error: {code: 404, message: "$regex:does_not_exist"}
+  - call: server.database.delete_item
+    only: [ws]
+    params: {namespace: does_not_exist, key: a}
+    expect_error: {code: -32601}
+  - call: server.database.delete_item
+    only: [http]
+    params: {namespace: does_not_exist, key: a}
+    expect_error: {code: 404}
+  - call: server.database.get_item
+    params: {}
+    expect_error: {code: 400, message: $type:string}

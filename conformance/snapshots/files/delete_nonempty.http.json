@@ -1,0 +1,23 @@
+[
+  {
+    "step": 1,
+    "call": "server.files.delete_directory",
+    "error": {
+      "code": 400
+    }
+  },
+  {
+    "step": 2,
+    "call": "server.files.delete_directory",
+    "result": {
+      "action": "string",
+      "item": {
+        "modified": "number",
+        "size": "number",
+        "permissions": "string",
+        "path": "string",
+        "root": "string"
+      }
+    }
+  }
+]

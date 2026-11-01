@@ -205,3 +205,33 @@ Tiers, in order:
   using the fake, which checks that the fake still matches real Klipper.
 - **2026-11-01: build check.** With the nix dev shell, `cargo build --release --target
   aarch64-unknown-linux-musl` and `armv7-unknown-linux-musleabihf` work with only `rust-lld`.
+- **2026-11-01: orrery's command line is free to differ.** The stub accepts Moonraker's flags for
+  now, but matching them isn't a requirement; change them as needed.
+- **2026-11-01: Phase 2 coverage is tracked in `conformance/coverage.md`**, listing every method,
+  notification, and HTTP route Fluidd uses.
+- **2026-11-01: more Moonraker behaviours the suite pinned down.** orrery must copy these:
+  - A Klippy request that returns `{}` is reported to the client as `"ok"`.
+  - Over HTTP, `GET /printer/objects/query` with no query string returns an empty `status`. Over
+    the websocket, the same call with no `objects` is a 400 error.
+  - Errors other than 404 and 401 keep their HTTP status as the JSON-RPC code, for example 403
+    for a write to the protected `moonraker` namespace.
+  - Writing a database key below a plain value replaces the value with an object.
+  - The job queue starts paused. Pausing it again sends no notification.
+  - The `gcodes` root lists only gcode files, but directory listings include `.thumbs`.
+  - An upload that replaces a file is still reported as `create_file`.
+  - Thumbnail paths in `server.files.thumbnails` are relative to the `gcodes` root.
+  - A file with no slicer comments gets `slicer: Unknown`.
+- **2026-11-01: runner isolation fixes.**
+  - Each server gets its own `TMPDIR`. Moonraker names upload temp files after the current second
+    of the monotonic clock, so servers running side by side overwrote each other's uploads.
+  - The reference processes run with `GIT_CEILING_DIRECTORIES` set to `conformance/.work`. Since
+    the project became a git repository, Klipper otherwise reported our commit as its version.
+  - The runner waits for the `print_stats` subscription as well as `webhooks` before a case
+    starts, because job tracking misses changes that arrive earlier.
+- **2026-11-01: a Moonraker race the suite works around.** Right after `server.files.post_directory`,
+  a copy into the new folder can hang for minutes, because Moonraker waits for an inotify event
+  from a watch that isn't in place yet. `files/directories` waits one second after creating the
+  folder. orrery shouldn't need that wait.
+- **2026-11-01: the fake answers read-only endpoints from the capture.** `fake-klippy capture` also
+  records `query_endstops/status` and `bed_mesh/dump_mesh`, and scripts can override endpoint
+  answers with `responses:`.

@@ -1,0 +1,11 @@
+[
+  {
+    "step": 1,
+    "call": "printer.query_endstops.status",
+    "result": {
+      "stepper_x": "string",
+      "stepper_y": "string",
+      "stepper_z": "string"
+    }
+  }
+]

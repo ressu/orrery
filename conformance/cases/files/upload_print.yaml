@@ -1,0 +1,7 @@
+name: upload with print starts the print
+steps:
+  - upload: cube.gcode
+    fixture: plain.gcode
+    form: {print: "true"}
+    expect: {print_started: true, print_queued: false, item: {path: cube.gcode}}
+  - expect_klippy_request: {method: gcode/script, params: {script: 'SDCARD_PRINT_FILE FILENAME="cube.gcode"'}}

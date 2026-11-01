@@ -1,0 +1,13 @@
+[
+  {
+    "step": 1,
+    "call": "server.files.roots",
+    "result": [
+      {
+        "name": "string",
+        "path": "string",
+        "permissions": "string"
+      }
+    ]
+  }
+]

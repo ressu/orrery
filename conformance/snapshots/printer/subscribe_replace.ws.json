@@ -1,0 +1,26 @@
+[
+  {
+    "step": 1,
+    "call": "printer.objects.subscribe",
+    "result": {
+      "eventtime": "number",
+      "status": {
+        "print_stats": {
+          "state": "string"
+        }
+      }
+    }
+  },
+  {
+    "step": 2,
+    "call": "printer.objects.subscribe",
+    "result": {
+      "eventtime": "number",
+      "status": {
+        "display_status": {
+          "message": "null"
+        }
+      }
+    }
+  }
+]

@@ -1,0 +1,48 @@
+[
+  {
+    "step": 1,
+    "call": "server.job_queue.pause",
+    "result": {
+      "queued_jobs": [],
+      "queue_state": "string"
+    }
+  },
+  {
+    "step": 2,
+    "call": "server.job_queue.post_job",
+    "result": {
+      "queued_jobs": [
+        {
+          "filename": "string",
+          "job_id": "string",
+          "time_added": "number",
+          "time_in_queue": "number"
+        }
+      ],
+      "queue_state": "string"
+    }
+  },
+  {
+    "step": 3,
+    "call": "server.job_queue.start",
+    "result": {
+      "queued_jobs": [
+        {
+          "filename": "string",
+          "job_id": "string",
+          "time_added": "number",
+          "time_in_queue": "number"
+        }
+      ],
+      "queue_state": "string"
+    }
+  },
+  {
+    "step": 5,
+    "call": "server.job_queue.status",
+    "result": {
+      "queued_jobs": [],
+      "queue_state": "string"
+    }
+  }
+]

@@ -1,0 +1,23 @@
+name: database namespaces, whole-namespace reads, and value types
+steps:
+  - call: server.database.post_item
+    params: {namespace: types, key: number, value: 1.5}
+  - call: server.database.post_item
+    params: {namespace: types, key: text, value: hello}
+  - call: server.database.post_item
+    params: {namespace: types, key: flag, value: false}
+  - call: server.database.post_item
+    params: {namespace: types, key: list, value: [1, "two", null]}
+  - call: server.database.get_item
+    params: {namespace: types}
+    expect: {namespace: types, key: null, value: {$exact: true, number: 1.5, text: hello, flag: false, list: [1, "two", null]}}
+  - call: server.database.get_item
+    params: {namespace: types, key: list}
+    expect: {value: [1, "two", null]}
+  - call: server.database.post_item
+    params: {namespace: types, key: number.inner, value: 1}
+    expect: {key: number.inner, value: 1}
+  # Writing below a plain value replaces it with an object.
+  - call: server.database.get_item
+    params: {namespace: types, key: number}
+    expect: {value: {$exact: true, inner: 1}}

@@ -1,0 +1,7 @@
+[
+  {
+    "step": 1,
+    "call": "printer.print.start",
+    "result": "string"
+  }
+]

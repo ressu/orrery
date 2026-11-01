@@ -1,0 +1,11 @@
+name: printer.emergency_stop shuts Klippy down
+steps:
+  - call: printer.emergency_stop
+    expect: ok
+  - expect_klippy_request: {method: emergency_stop}
+  - expect_notification: notify_klippy_shutdown
+  - call: server.info
+    retry_ms: 2000
+    expect: {klippy_state: shutdown}
+  - call: printer.info
+    expect: {state: shutdown, state_message: $type:string}

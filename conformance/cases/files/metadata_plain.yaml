@@ -1,0 +1,12 @@
+name: a file with no slicer comments gets basic metadata
+ignore: [result.modified, result.uuid]
+steps:
+  - upload: plain.gcode
+    fixture: plain.gcode
+  - call: server.files.metadata
+    params: {filename: plain.gcode}
+    retry_ms: 5000
+    expect: {filename: plain.gcode, size: 27, modified: $type:number, slicer: Unknown, thumbnails: $absent}
+  - call: server.files.metadata
+    params: {filename: missing.gcode}
+    expect_error: {code: $type:number}

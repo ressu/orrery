@@ -5,6 +5,7 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
+use serde_json::{Map, Value};
 use tokio::process::{Child, Command};
 
 /// Which server to test.
@@ -58,7 +59,7 @@ impl DataDir {
         // The name stays short so the Klippy socket path fits in a unix socket address; the
         // label goes in a file instead.
         let dir = tempfile::Builder::new().prefix("r-").tempdir_in(&runs)?;
-        for sub in ["config", "logs", "gcodes", "database", "comms"] {
+        for sub in ["config", "logs", "gcodes", "database", "comms", "tmp"] {
             std::fs::create_dir(dir.path().join(sub))?;
         }
         std::fs::write(dir.path().join("case.txt"), format!("{label}\n"))?;
@@ -75,6 +76,25 @@ impl DataDir {
     }
 
     /// Writes `moonraker.conf` from the base template plus a case's extra config.
+    /// Writes a case's `files` into the data directory.
+    pub fn write_files(&self, files: &Map<String, Value>) -> Result<()> {
+        for (rel, content) in files {
+            let rel = Path::new(rel);
+            if rel.is_absolute() || rel.components().any(|c| c == std::path::Component::ParentDir) {
+                bail!("files: {} must be a path inside the data directory", rel.display());
+            }
+            let Some(text) = content.as_str() else {
+                bail!("files: the content of {} must be a string", rel.display());
+            };
+            let path = self.path().join(rel);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&path, text).with_context(|| format!("writing {}", path.display()))?;
+        }
+        Ok(())
+    }
+
     pub fn write_config(&self, paths: &Paths, port: u16, extra: Option<&str>) -> Result<()> {
         let template_path = paths.conformance().join("fixtures/moonraker/base.conf");
         let template =
@@ -138,7 +158,7 @@ impl Server {
                     bail!("{} not found; run `just ref-setup` first", python.display());
                 }
                 let mut cmd = Command::new(python);
-                cmd.args(["-m", "moonraker"]);
+                cmd.args(["-m", "moonraker"]).env("GIT_CEILING_DIRECTORIES", paths.work());
                 cmd
             }
             TargetKind::Orrery => {
@@ -152,6 +172,10 @@ impl Server {
             }
         };
         cmd.arg("-d").arg(data.path()).stdout(Stdio::from(log.try_clone()?)).stderr(Stdio::from(log));
+        // Each server gets its own temp folder. Moonraker names upload temp files after the
+        // current second of the monotonic clock, so servers running side by side would overwrite
+        // each other's uploads.
+        cmd.env("TMPDIR", data.path().join("tmp"));
         cmd.kill_on_drop(true);
         let child = cmd.spawn().with_context(|| format!("starting {}", kind.as_str()))?;
         let mut server = Self { child, port, kind };
@@ -215,7 +239,10 @@ impl RealKlippy {
         let socket = data.klippy_socket();
         let log = std::fs::File::create(data.path().join("logs/klippy-stdout.log"))?;
         let mut cmd = Command::new(python);
-        cmd.arg(work.join("klipper-src/klippy/klippy.py"))
+        // Klipper asks git for its version. Without a ceiling, git finds this repository around
+        // the copied source and Klipper reports our commit instead of klippy/.version.
+        cmd.env("GIT_CEILING_DIRECTORIES", &work)
+            .arg(work.join("klipper-src/klippy/klippy.py"))
             .arg(&cfg_path)
             .args(["-o", "/dev/null", "-d"])
             .arg(fixtures.join("klipper.dict"))

@@ -61,7 +61,8 @@ capture:
     dir=$PWD/{{work}}/capture
     rm -rf "$dir" && mkdir -p "$dir/gcodes"
     sed "s|\${gcode_path}|$dir/gcodes|" conformance/fixtures/klipper/printer.cfg > "$dir/printer.cfg"
-    {{work}}/klipper-venv/bin/python {{work}}/klipper-src/klippy/klippy.py "$dir/printer.cfg" \
+    # The ceiling keeps git from finding this repository, so Klipper reports klippy/.version.
+    GIT_CEILING_DIRECTORIES=$PWD/{{work}} {{work}}/klipper-venv/bin/python {{work}}/klipper-src/klippy/klippy.py "$dir/printer.cfg" \
         -o /dev/null -d conformance/fixtures/klipper/klipper.dict -a "$dir/uds" -I "$dir/serial" \
         -l "$dir/klippy.log" > "$dir/stdout.log" 2>&1 &
     pid=$!

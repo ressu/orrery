@@ -1,0 +1,32 @@
+[
+  {
+    "step": 1,
+    "call": "printer.firmware_restart",
+    "result": "string"
+  },
+  {
+    "step": 3,
+    "call": "server.info",
+    "result": {
+      "klippy_connected": "bool",
+      "klippy_state": "string",
+      "components": [
+        "string"
+      ],
+      "failed_components": [],
+      "registered_directories": [
+        "string"
+      ],
+      "warnings": [
+        "string"
+      ],
+      "websocket_count": "number",
+      "moonraker_version": "string",
+      "missing_klippy_requirements": [],
+      "api_version": [
+        "number"
+      ],
+      "api_version_string": "string"
+    }
+  }
+]

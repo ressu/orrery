@@ -1,0 +1,11 @@
+[
+  {
+    "step": 1,
+    "call": "printer.objects.list",
+    "result": {
+      "objects": [
+        "string"
+      ]
+    }
+  }
+]

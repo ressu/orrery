@@ -1,0 +1,9 @@
+name: printer.firmware_restart restarts Klippy and the MCU
+tags: [real-klippy]
+steps:
+  - call: printer.firmware_restart
+    expect: ok
+  - expect_klippy_request: {method: gcode/script, params: {script: FIRMWARE_RESTART}}
+  - call: server.info
+    retry_ms: 10000
+    expect: {klippy_state: ready}

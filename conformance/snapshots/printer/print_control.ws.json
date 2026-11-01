@@ -1,0 +1,47 @@
+[
+  {
+    "step": 1,
+    "call": "printer.print.start",
+    "result": "string"
+  },
+  {
+    "step": 3,
+    "call": "printer.objects.query",
+    "result": {
+      "eventtime": "number",
+      "status": {
+        "print_stats": {
+          "state": "string",
+          "filename": "string"
+        }
+      }
+    }
+  },
+  {
+    "step": 4,
+    "call": "printer.print.pause",
+    "result": "string"
+  },
+  {
+    "step": 6,
+    "call": "printer.print.resume",
+    "result": "string"
+  },
+  {
+    "step": 8,
+    "call": "printer.print.cancel",
+    "result": "string"
+  },
+  {
+    "step": 10,
+    "call": "printer.objects.query",
+    "result": {
+      "eventtime": "number",
+      "status": {
+        "print_stats": {
+          "state": "string"
+        }
+      }
+    }
+  }
+]

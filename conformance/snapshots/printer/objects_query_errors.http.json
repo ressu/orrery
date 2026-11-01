@@ -1,0 +1,17 @@
+[
+  {
+    "step": 1,
+    "call": "printer.objects.query",
+    "error": {
+      "code": 400
+    }
+  },
+  {
+    "step": 3,
+    "call": "printer.objects.query",
+    "result": {
+      "eventtime": "number",
+      "status": {}
+    }
+  }
+]

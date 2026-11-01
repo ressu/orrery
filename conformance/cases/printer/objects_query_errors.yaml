@@ -1,0 +1,14 @@
+name: printer.objects.query rejects malformed objects
+steps:
+  - call: printer.objects.query
+    params: {objects: {print_stats: 5}}
+    http: {verb: POST, path: /printer/objects/query, body: {objects: {print_stats: 5}}}
+    expect_error: {code: 400, message: $type:string}
+  - call: printer.objects.query
+    only: [ws]
+    params: {}
+    expect_error: {code: 400, message: $type:string}
+  - call: printer.objects.query
+    only: [http]
+    http: {verb: GET, path: /printer/objects/query}
+    expect: {eventtime: $type:number, status: {$exact: true}}

@@ -370,9 +370,8 @@ fn dispatch(st: &mut State, conn: ConnId, method: &str, params: &Value, now: f64
             pause_resume(st, false, "cancelled", now);
             Outcome::Ok(json!({}))
         }
-        // Other captured endpoints (bed_mesh/dump_mesh, query_endstops/status, ...) answer `{}`
-        // unless a script gives them more behaviour.
-        _ => Outcome::Ok(json!({})),
+        // Other endpoints answer with their captured response, or `{}` without one.
+        _ => Outcome::Ok(st.script.capture.responses.get(method).cloned().unwrap_or_else(|| json!({}))),
     }
 }
 

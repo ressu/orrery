@@ -69,6 +69,9 @@ async fn main() -> Result<()> {
     }
 }
 
+/// Read-only endpoints without parameters whose responses the capture records.
+const CAPTURED_ENDPOINTS: &[&str] = &["query_endstops/status", "bed_mesh/dump_mesh"];
+
 async fn capture(socket: &PathBuf) -> Result<Capture> {
     let stream = UnixStream::connect(socket).await.with_context(|| format!("connecting to {}", socket.display()))?;
     let (read, mut write) = stream.into_split();
@@ -108,7 +111,7 @@ async fn capture(socket: &PathBuf) -> Result<Capture> {
     }
     // Replaced with the fake's own pid at runtime; fixed here so recaptures diff cleanly.
     info.insert("process_id".into(), json!(4242));
-    let endpoints = call("list_endpoints", json!({})).await?["endpoints"]
+    let endpoints: Vec<String> = call("list_endpoints", json!({})).await?["endpoints"]
         .as_array()
         .context("list_endpoints: no endpoints")?
         .iter()
@@ -124,7 +127,13 @@ async fn capture(socket: &PathBuf) -> Result<Capture> {
     let mut objects = as_map(call("objects/query", json!({"objects": requested})).await?["status"].clone());
     fake_klippy::script::set_sdcard_path(&mut objects, "/opt/printer_data/gcodes");
     let gcode_help = as_map(call("gcode/help", json!({})).await?);
-    Ok(Capture { info, endpoints, objects, gcode_help })
+    let mut responses = Map::new();
+    for endpoint in CAPTURED_ENDPOINTS {
+        if endpoints.iter().any(|e| e == endpoint) {
+            responses.insert((*endpoint).into(), call(endpoint, json!({})).await?);
+        }
+    }
+    Ok(Capture { info, endpoints, objects, gcode_help, responses })
 }
 
 fn as_map(v: Value) -> Map<String, Value> {

@@ -1,0 +1,9 @@
+name: printer.gcode.help lists Klipper's gcode commands
+tags: [real-klippy]
+ignore: [result.*]
+steps:
+  - call: printer.gcode.help
+    expect:
+      RESTART: $type:string
+      FIRMWARE_RESTART: $type:string
+      SDCARD_PRINT_FILE: $type:string

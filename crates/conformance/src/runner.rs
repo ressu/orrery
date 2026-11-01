@@ -1,9 +1,10 @@
 //! Runs one case on one transport against a fresh server.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use fake_klippy::{FakeKlippy, Script};
 use serde_json::{Map, Value, json};
 
@@ -68,6 +69,8 @@ struct Ctx {
     fake: Option<FakeKlippy>,
     real: Option<RealKlippy>,
     vars: Map<String, Value>,
+    /// `conformance/fixtures/files`, for upload and download steps.
+    fixtures: PathBuf,
 }
 
 async fn run_steps(
@@ -79,6 +82,7 @@ async fn run_steps(
 ) -> Result<()> {
     let port = free_port()?;
     data.write_config(&settings.paths, port, case.config.as_deref())?;
+    data.write_files(&case.files)?;
     let real = if case.uses_klippy() && settings.real_klipper {
         Some(RealKlippy::start(&settings.paths, data).await?)
     } else {
@@ -95,7 +99,8 @@ async fn run_steps(
     let server = Server::start(settings.target, &settings.paths, data, port).await?;
     let ws = WsClient::connect(&server.ws_url()).await?;
     let http = HttpClient::new(server.base_url(), settings.routes.clone());
-    let mut ctx = Ctx { transport, ws, http, fake, real, vars: Map::new() };
+    let fixtures = settings.paths.conformance().join("fixtures/files");
+    let mut ctx = Ctx { transport, ws, http, fake, real, vars: Map::new(), fixtures };
 
     if case.waits_ready() {
         wait_klippy_ready(&ctx).await?;
@@ -112,15 +117,19 @@ async fn run_steps(
     Ok(())
 }
 
-/// Waits until the server reports Klippy ready and has subscribed to the `webhooks` object.
-/// Moonraker reports `ready` slightly before it subscribes, and until then a state change in
-/// Klippy reaches nobody. With real Klipper the subscription can't be seen, so a short pause
+/// Objects the server must subscribe to before a case starts: `webhooks` for Klippy's state and
+/// `print_stats` for job tracking (history, job queue).
+const READY_SUBSCRIPTIONS: &[&str] = &["webhooks", "print_stats"];
+
+/// Waits until the server reports Klippy ready and has subscribed to [`READY_SUBSCRIPTIONS`].
+/// Moonraker reports `ready` slightly before it subscribes, and until then a change in Klippy
+/// reaches nobody. With real Klipper the subscription can't be seen, so a short pause
 /// stands in for it.
 async fn wait_klippy_ready(ctx: &Ctx) -> Result<()> {
     let deadline = Instant::now() + READY_TIMEOUT;
     loop {
         if let Ok(Ok(info)) = ctx.ws.call("server.info", None).await {
-            let subscribed = ctx.fake.as_ref().is_none_or(|f| f.is_subscribed("webhooks"));
+            let subscribed = ctx.fake.as_ref().is_none_or(|f| READY_SUBSCRIPTIONS.iter().all(|o| f.is_subscribed(o)));
             if info["klippy_state"] == "ready" && subscribed {
                 if ctx.real.is_some() {
                     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -249,11 +258,58 @@ async fn run_step(ctx: &mut Ctx, step: &Step, index: usize, result: &mut RunResu
             }
             Ok(())
         }
+        Step::Upload(u) => {
+            let content = match (&u.content, &u.fixture) {
+                (Some(text), None) => text.clone().into_bytes(),
+                (None, Some(name)) => read_fixture(&ctx.fixtures, name)?,
+                _ => bail!("an upload step needs either `content` or `fixture`"),
+            };
+            let form = match substitute(&Value::Object(u.form.clone()), &ctx.vars) {
+                Value::Object(m) => m,
+                _ => unreachable!("substitute keeps the value's type"),
+            };
+            let outcome = ctx.http.upload(&u.upload, content, &form).await?;
+            result.transcript.push(transcript_entry(index, "upload", &outcome));
+            let problems = check_outcome(&outcome, u.expect.as_ref(), u.expect_error.as_ref(), &ctx.vars);
+            if !problems.is_empty() {
+                return Err(anyhow!("upload {}: {}", u.upload, problems.join("; ")));
+            }
+            Ok(())
+        }
+        Step::Download(d) => {
+            let (status, body) = ctx.http.download(&d.download).await?;
+            result.transcript.push(json!({"step": index + 1, "download": d.download, "status": status}));
+            if status != d.expect_status {
+                return Err(anyhow!("download {}: expected status {}, got {status}", d.download, d.expect_status));
+            }
+            let expected = match (&d.expect_body, &d.expect_fixture) {
+                (Some(text), _) => Some(text.clone().into_bytes()),
+                (None, Some(name)) => Some(read_fixture(&ctx.fixtures, name)?),
+                (None, None) => None,
+            };
+            if let Some(expected) = expected
+                && expected != body
+            {
+                return Err(anyhow!(
+                    "download {}: body differs ({} bytes, expected {}): {}",
+                    d.download,
+                    body.len(),
+                    expected.len(),
+                    String::from_utf8_lossy(&body[..body.len().min(120)])
+                ));
+            }
+            Ok(())
+        }
         Step::Sleep(s) => {
             tokio::time::sleep(Duration::from_millis(s.sleep_ms)).await;
             Ok(())
         }
     }
+}
+
+fn read_fixture(dir: &Path, name: &str) -> Result<Vec<u8>> {
+    let path = dir.join(name);
+    std::fs::read(&path).with_context(|| format!("reading fixture {}", path.display()))
 }
 
 fn fake(ctx: &Ctx) -> Result<&FakeKlippy> {

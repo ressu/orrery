@@ -1,0 +1,44 @@
+[
+  {
+    "step": 1,
+    "call": "upload",
+    "result": {
+      "action": "string",
+      "item": {
+        "modified": "number",
+        "size": "number",
+        "permissions": "string",
+        "path": "string",
+        "root": "string"
+      },
+      "print_started": "bool",
+      "print_queued": "bool"
+    }
+  },
+  {
+    "step": 2,
+    "call": "server.files.metadata",
+    "result": {
+      "size": "number",
+      "modified": "number",
+      "uuid": "string",
+      "file_processors": [],
+      "slicer": "string",
+      "slicer_version": "string",
+      "gcode_start_byte": "number",
+      "gcode_end_byte": "number",
+      "object_height": "number",
+      "first_layer_height": "number",
+      "print_start_time": "null",
+      "job_id": "null",
+      "filename": "string"
+    }
+  },
+  {
+    "step": 3,
+    "call": "server.files.metadata",
+    "error": {
+      "code": 404
+    }
+  }
+]

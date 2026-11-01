@@ -1,0 +1,133 @@
+[
+  {
+    "step": 1,
+    "call": "server.history.list",
+    "result": {
+      "count": "number",
+      "jobs": []
+    }
+  },
+  {
+    "step": 6,
+    "call": "server.history.list",
+    "result": {
+      "count": "number",
+      "jobs": [
+        {
+          "job_id": "string",
+          "user": "string",
+          "filename": "string",
+          "status": "string",
+          "start_time": "number",
+          "end_time": "number",
+          "print_duration": "number",
+          "total_duration": "number",
+          "filament_used": "number",
+          "metadata": {
+            "size": "number",
+            "modified": "number",
+            "uuid": "string",
+            "file_processors": [],
+            "slicer": "string",
+            "slicer_version": "string",
+            "gcode_start_byte": "number",
+            "gcode_end_byte": "number"
+          },
+          "auxiliary_data": [],
+          "exists": "bool"
+        }
+      ]
+    }
+  },
+  {
+    "step": 7,
+    "call": "server.history.get_job",
+    "result": {
+      "job": {
+        "job_id": "string",
+        "user": "string",
+        "filename": "string",
+        "status": "string",
+        "start_time": "number",
+        "end_time": "number",
+        "print_duration": "number",
+        "total_duration": "number",
+        "filament_used": "number",
+        "metadata": {
+          "size": "number",
+          "modified": "number",
+          "uuid": "string",
+          "file_processors": [],
+          "slicer": "string",
+          "slicer_version": "string",
+          "gcode_start_byte": "number",
+          "gcode_end_byte": "number"
+        },
+        "auxiliary_data": [],
+        "exists": "bool"
+      }
+    }
+  },
+  {
+    "step": 8,
+    "call": "server.history.totals",
+    "result": {
+      "job_totals": {
+        "total_jobs": "number",
+        "total_time": "number",
+        "total_print_time": "number",
+        "total_filament_used": "number",
+        "longest_job": "number",
+        "longest_print": "number"
+      },
+      "auxiliary_totals": []
+    }
+  },
+  {
+    "step": 9,
+    "call": "server.history.delete_job",
+    "result": {
+      "deleted_jobs": [
+        "string"
+      ]
+    }
+  },
+  {
+    "step": 10,
+    "call": "server.history.list",
+    "result": {
+      "count": "number",
+      "jobs": []
+    }
+  },
+  {
+    "step": 11,
+    "call": "server.history.reset_totals",
+    "result": {
+      "last_totals": {
+        "total_jobs": "number",
+        "total_time": "number",
+        "total_print_time": "number",
+        "total_filament_used": "number",
+        "longest_job": "number",
+        "longest_print": "number"
+      },
+      "last_auxiliary_totals": []
+    }
+  },
+  {
+    "step": 12,
+    "call": "server.history.totals",
+    "result": {
+      "job_totals": {
+        "total_jobs": "number",
+        "total_time": "number",
+        "total_print_time": "number",
+        "total_filament_used": "number",
+        "longest_job": "number",
+        "longest_print": "number"
+      },
+      "auxiliary_totals": []
+    }
+  }
+]

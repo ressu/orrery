@@ -1,0 +1,14 @@
+[
+  {
+    "step": 1,
+    "call": "printer.gcode.script",
+    "result": "string"
+  },
+  {
+    "step": 3,
+    "call": "printer.gcode.script",
+    "error": {
+      "code": 400
+    }
+  }
+]

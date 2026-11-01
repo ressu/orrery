@@ -18,6 +18,9 @@ pub struct Capture {
     pub objects: Map<String, Value>,
     /// Response to `gcode/help`.
     pub gcode_help: Map<String, Value>,
+    /// Responses of read-only endpoints that take no parameters, such as `query_endstops/status`.
+    #[serde(default)]
+    pub responses: Map<String, Value>,
 }
 
 /// Klippy's printer state, as reported by `info` and the `webhooks` object.
@@ -93,6 +96,9 @@ pub struct ScriptFile {
     /// Extra endpoints to list.
     #[serde(default)]
     pub endpoints: Vec<String>,
+    /// Endpoint responses, replacing the capture's: `{endpoint: result}`.
+    #[serde(default)]
+    pub responses: Map<String, Value>,
     #[serde(default)]
     pub gcode: Vec<GcodeRule>,
 }
@@ -137,6 +143,7 @@ impl Script {
                 capture.endpoints.push(ep);
             }
         }
+        capture.responses.extend(file.responses);
         Ok(Self {
             capture,
             state: file.state.unwrap_or(KlippyState::Ready),

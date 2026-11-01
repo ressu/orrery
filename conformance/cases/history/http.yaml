@@ -1,0 +1,11 @@
+name: history over HTTP
+transports: [http]
+steps:
+  - call: server.history.list
+    params: {limit: 10, start: 0, order: desc}
+    expect: {count: 0, jobs: []}
+  - call: server.history.totals
+    expect: {job_totals: {total_jobs: 0, total_time: 0, total_print_time: 0, total_filament_used: 0}, auxiliary_totals: $type:array}
+  - call: server.history.get_job
+    params: {uid: "00000A"}
+    expect_error: {code: 404}

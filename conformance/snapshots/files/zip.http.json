@@ -1,0 +1,20 @@
+[
+  {
+    "step": 1,
+    "call": "server.files.zip",
+    "result": {
+      "destination": {
+        "modified": "number",
+        "size": "number",
+        "permissions": "string",
+        "path": "string",
+        "root": "string"
+      },
+      "action": "string"
+    }
+  },
+  {
+    "step": 2,
+    "call": null
+  }
+]

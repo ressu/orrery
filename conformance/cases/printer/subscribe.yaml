@@ -1,0 +1,23 @@
+name: printer.objects.subscribe sends only changed, subscribed fields
+transports: [ws]
+steps:
+  - call: printer.objects.subscribe
+    params: {objects: {print_stats: [state], display_status: null}}
+    expect:
+      eventtime: $type:number
+      status:
+        $exact: true
+        print_stats: {$exact: true, state: standby}
+        display_status: {message: $any, progress: $type:number}
+  - klippy: {update: {print_stats: {state: printing, filename: cube.gcode}}}
+  - expect_notification: notify_status_update
+    match:
+      - {$exact: true, print_stats: {$exact: true, state: printing}}
+      - $type:number
+  - klippy: {update: {print_stats: {filename: other.gcode}, toolhead: {print_time: 12.5}}}
+  - expect_no_notification: notify_status_update
+  - klippy: {update: {display_status: {message: hello}}}
+  - expect_notification: notify_status_update
+    match:
+      - {$exact: true, display_status: {$exact: true, message: hello}}
+      - $type:number

@@ -1,0 +1,10 @@
+name: a folder with files is deleted only with force
+files:
+  gcodes/full/a.gcode: "G28\n"
+steps:
+  - call: server.files.delete_directory
+    params: {path: gcodes/full}
+    expect_error: {code: 400, message: $type:string}
+  - call: server.files.delete_directory
+    params: {path: gcodes/full, force: true}
+    expect: {action: delete_dir}

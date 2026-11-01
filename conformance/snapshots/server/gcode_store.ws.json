@@ -1,0 +1,20 @@
+[
+  {
+    "step": 1,
+    "call": "printer.gcode.script",
+    "result": "string"
+  },
+  {
+    "step": 3,
+    "call": "server.gcode_store",
+    "result": {
+      "gcode_store": [
+        {
+          "message": "string",
+          "time": "number",
+          "type": "string"
+        }
+      ]
+    }
+  }
+]

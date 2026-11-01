@@ -1,0 +1,23 @@
+name: queue, list, and remove jobs while the queue is paused
+files:
+  gcodes/a.gcode: "G28\n"
+  gcodes/b.gcode: "G28\n"
+steps:
+  - call: server.job_queue.status
+    expect: {queued_jobs: [], queue_state: paused}
+  - call: server.job_queue.pause
+    expect: {queued_jobs: [], queue_state: paused}
+  - call: server.job_queue.post_job
+    params: {filenames: [a.gcode, b.gcode]}
+    expect:
+      queue_state: paused
+      queued_jobs:
+        - {filename: a.gcode, job_id: $type:string, time_added: $type:number, time_in_queue: $type:number}
+        - {filename: b.gcode, job_id: $type:string}
+    save: {first: queued_jobs.0.job_id}
+  - call: server.job_queue.delete_job
+    params: {job_ids: "${first}"}
+    expect: {queued_jobs: [{filename: b.gcode}]}
+  - call: server.job_queue.post_job
+    params: {filenames: [missing.gcode]}
+    expect_error: {code: $type:number}

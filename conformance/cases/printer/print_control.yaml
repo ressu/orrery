@@ -1,0 +1,23 @@
+name: start, pause, resume, and cancel a print
+steps:
+  - call: printer.print.start
+    params: {filename: cube.gcode}
+    expect: ok
+  - expect_klippy_request: {method: gcode/script, params: {script: 'SDCARD_PRINT_FILE FILENAME="cube.gcode"'}}
+  - call: printer.objects.query
+    params: {objects: {print_stats: [state, filename]}}
+    http: {verb: GET, path: /printer/objects/query, query: "print_stats=state,filename"}
+    expect: {status: {print_stats: {state: printing, filename: cube.gcode}}}
+  - call: printer.print.pause
+    expect: ok
+  - expect_klippy_request: {method: pause_resume/pause}
+  - call: printer.print.resume
+    expect: ok
+  - expect_klippy_request: {method: pause_resume/resume}
+  - call: printer.print.cancel
+    expect: ok
+  - expect_klippy_request: {method: pause_resume/cancel}
+  - call: printer.objects.query
+    params: {objects: {print_stats: [state]}}
+    http: {verb: GET, path: /printer/objects/query, query: "print_stats=state"}
+    expect: {status: {print_stats: {state: cancelled}}}

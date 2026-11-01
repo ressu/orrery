@@ -3,7 +3,8 @@
 //! An expected value matches an actual value when:
 //! - objects: every expected key matches (extra actual keys are fine, unless `"$exact": true`);
 //! - arrays: same length and every element matches, unless the expected array is wrapped as
-//!   `{"$contains": [...]}`, which only needs each expected element to match some actual one;
+//!   `{"$contains": [...]}`, which only needs each expected element to match some actual one, or
+//!   `{"$excludes": [...]}`, which needs each expected element to match no actual one;
 //! - numbers: equal as `f64`, so `1` matches `1.0`;
 //! - strings starting with `$` are patterns:
 //!   - `$any`: anything, including null;
@@ -36,18 +37,24 @@ fn check(expected: &Value, actual: Option<&Value>, path: &str, out: &mut Vec<Str
         return;
     };
     match (expected, actual) {
-        (Value::Object(exp), _) if exp.contains_key("$contains") => {
-            let Some(items) = exp["$contains"].as_array() else {
-                out.push(format!("{path}: $contains needs an array"));
-                return;
-            };
+        (Value::Object(exp), _) if exp.contains_key("$contains") || exp.contains_key("$excludes") => {
             let Value::Array(act) = actual else {
                 out.push(format!("{path}: expected an array, got {}", short(actual)));
                 return;
             };
-            for item in items {
-                if !act.iter().any(|a| mismatches(item, a).is_empty()) {
-                    out.push(format!("{path}: no element matches {}", short(item)));
+            for (op, want) in [("$contains", true), ("$excludes", false)] {
+                let Some(items) = exp.get(op) else { continue };
+                let Some(items) = items.as_array() else {
+                    out.push(format!("{path}: {op} needs an array"));
+                    return;
+                };
+                for item in items {
+                    let found = act.iter().find(|a| mismatches(item, a).is_empty());
+                    match (want, found) {
+                        (true, None) => out.push(format!("{path}: no element matches {}", short(item))),
+                        (false, Some(a)) => out.push(format!("{path}: unexpected element {}", short(a))),
+                        _ => {}
+                    }
                 }
             }
         }
@@ -162,6 +169,8 @@ mod tests {
         assert!(!mismatches(&json!([1]), &json!([1, 2])).is_empty());
         assert!(mismatches(&json!({"$contains": [2]}), &json!([1, 2])).is_empty());
         assert!(!mismatches(&json!({"$contains": [3]}), &json!([1, 2])).is_empty());
+        assert!(mismatches(&json!({"$excludes": [3]}), &json!([1, 2])).is_empty());
+        assert!(!mismatches(&json!({"$contains": [1], "$excludes": [2]}), &json!([1, 2])).is_empty());
     }
 
     #[test]

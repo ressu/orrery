@@ -1,0 +1,13 @@
+name: server.gcode_store keeps sent commands and gcode output
+steps:
+  - call: printer.gcode.script
+    params: {script: ECHO_stored}
+  - expect_notification: notify_gcode_response
+    match: ["// stored"]
+  - call: server.gcode_store
+    params: {count: 10}
+    expect:
+      gcode_store:
+        $contains:
+          - {message: ECHO_stored, type: command, time: $type:number}
+          - {message: "// stored", type: response, time: $type:number}

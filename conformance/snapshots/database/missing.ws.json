@@ -1,0 +1,23 @@
+[
+  {
+    "step": 1,
+    "call": "server.database.get_item",
+    "error": {
+      "code": -32601
+    }
+  },
+  {
+    "step": 3,
+    "call": "server.database.delete_item",
+    "error": {
+      "code": -32601
+    }
+  },
+  {
+    "step": 5,
+    "call": "server.database.get_item",
+    "error": {
+      "code": 400
+    }
+  }
+]

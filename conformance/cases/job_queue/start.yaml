@@ -1,0 +1,13 @@
+name: starting the queue prints the first job
+transports: [ws]
+files:
+  gcodes/a.gcode: "G28\n"
+steps:
+  - call: server.job_queue.pause
+  - call: server.job_queue.post_job
+    params: {filenames: [a.gcode]}
+  - call: server.job_queue.start
+  - expect_klippy_request: {method: gcode/script, params: {script: 'SDCARD_PRINT_FILE FILENAME="a.gcode"'}}
+  - call: server.job_queue.status
+    retry_ms: 2000
+    expect: {queued_jobs: []}

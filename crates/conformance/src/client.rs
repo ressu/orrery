@@ -206,6 +206,31 @@ impl HttpClient {
         self.send(req).await
     }
 
+    /// Uploads a file the way frontends do: multipart form data with a `file` part.
+    pub async fn upload(&self, name: &str, content: Vec<u8>, form: &Map<String, Value>) -> Result<Outcome> {
+        let mut multipart = reqwest::multipart::Form::new();
+        for (k, v) in form {
+            let text = match v {
+                Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            multipart = multipart.text(k.clone(), text);
+        }
+        let part =
+            reqwest::multipart::Part::bytes(content).file_name(name.to_owned()).mime_str("application/octet-stream")?;
+        multipart = multipart.part("file", part);
+        let url = format!("{}/server/files/upload", self.base);
+        self.send(self.client.post(url).multipart(multipart)).await
+    }
+
+    /// Downloads a file. Returns the status and body.
+    pub async fn download(&self, path: &str) -> Result<(u16, Vec<u8>)> {
+        let url = format!("{}/server/files/{path}", self.base);
+        let resp = self.client.get(url).timeout(CALL_TIMEOUT).send().await?;
+        let status = resp.status().as_u16();
+        Ok((status, resp.bytes().await?.to_vec()))
+    }
+
     async fn send(&self, req: reqwest::RequestBuilder) -> Result<Outcome> {
         let resp = req.timeout(CALL_TIMEOUT).send().await?;
         let status = resp.status();

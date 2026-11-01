@@ -1,0 +1,12 @@
+name: database backups are listed and deleted
+steps:
+  - call: server.database.post_backup
+    params: {filename: conformance.db}
+    expect: {backup_path: "$regex:conformance\\.db$"}
+  - call: server.database.list
+    expect: {namespaces: $type:array, backups: [conformance.db]}
+  - call: server.database.delete_backup
+    params: {filename: conformance.db}
+    expect: {backup_path: "$regex:conformance\\.db$"}
+  - call: server.database.list
+    expect: {backups: []}

@@ -1,0 +1,21 @@
+[
+  {
+    "step": 1,
+    "call": "server.files.metascan",
+    "result": {
+      "size": "number",
+      "modified": "number",
+      "uuid": "string",
+      "file_processors": [],
+      "slicer": "string",
+      "slicer_version": "string",
+      "filament_colors": [],
+      "extruder_colors": [],
+      "filament_temps": [],
+      "referenced_tools": [],
+      "print_start_time": "null",
+      "job_id": "null",
+      "filename": "string"
+    }
+  }
+]

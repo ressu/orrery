@@ -60,6 +60,10 @@ pub struct Case {
     /// Response paths whose values vary between runs, ignored in snapshot comparisons.
     #[serde(default)]
     pub ignore: Vec<String>,
+    /// Files written into the data directory before the server starts: `{relative path: text}`,
+    /// for example `gcodes/cube.gcode: "G28\n"`.
+    #[serde(default)]
+    pub files: Map<String, Value>,
     pub steps: Vec<Step>,
 
     /// Set by the loader: `<area>/<file stem>`.
@@ -96,6 +100,8 @@ pub enum Step {
     Klippy(KlippyStep),
     KlippyRequest(KlippyRequestStep),
     Raw(RawStep),
+    Upload(Box<UploadStep>),
+    Download(DownloadStep),
     Sleep(SleepStep),
 }
 
@@ -218,6 +224,49 @@ pub struct RawStep {
     pub raw_ws: String,
     #[serde(default)]
     pub expect: Option<Value>,
+}
+
+/// Uploads a file with a multipart `POST /server/files/upload`, as frontends do. It goes over
+/// HTTP on both transports.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UploadStep {
+    /// The file name sent with the file, which can include folders: `dir/cube.gcode`.
+    pub upload: String,
+    /// The file's text.
+    #[serde(default)]
+    pub content: Option<String>,
+    /// A file under `conformance/fixtures/files/` to send instead of `content`.
+    #[serde(default)]
+    pub fixture: Option<String>,
+    /// Other form fields, such as `root`, `path`, `print`, or `checksum`.
+    #[serde(default)]
+    pub form: Map<String, Value>,
+    #[serde(default)]
+    pub expect: Option<Value>,
+    #[serde(default)]
+    pub expect_error: Option<Value>,
+}
+
+/// Downloads `GET /server/files/<root>/<path>`. It goes over HTTP on both transports.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DownloadStep {
+    /// `<root>/<path>`, for example `gcodes/dir/cube.gcode`.
+    pub download: String,
+    /// The HTTP status to expect. Defaults to 200.
+    #[serde(default = "default_status")]
+    pub expect_status: u16,
+    /// The exact body to expect.
+    #[serde(default)]
+    pub expect_body: Option<String>,
+    /// The body must be identical to this file under `conformance/fixtures/files/`.
+    #[serde(default)]
+    pub expect_fixture: Option<String>,
+}
+
+fn default_status() -> u16 {
+    200
 }
 
 #[derive(Debug, Clone, Deserialize)]

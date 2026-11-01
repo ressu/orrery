@@ -1,0 +1,19 @@
+name: printer.objects.query returns the requested fields
+tags: [real-klippy]
+steps:
+  - call: printer.objects.query
+    params:
+      objects:
+        print_stats: [state, filename]
+        webhooks: null
+        extruder: [no_such_field]
+        no_such_object: null
+    http: {verb: GET, path: /printer/objects/query, query: "print_stats=state,filename&webhooks&extruder=no_such_field&no_such_object"}
+    expect:
+      eventtime: $type:number
+      status:
+        $exact: true
+        print_stats: {$exact: true, state: standby, filename: ""}
+        webhooks: {state: ready, state_message: "Printer is ready"}
+        extruder: {$exact: true, no_such_field: null}
+        no_such_object: {$exact: true}

@@ -1,0 +1,34 @@
+name: create, move, copy, and delete folders and files
+files:
+  gcodes/a.gcode: "G28\n"
+steps:
+  - call: server.files.post_directory
+    params: {path: gcodes/new}
+    expect: {item: {path: new, root: gcodes}, action: create_dir}
+  # Moonraker waits for inotify to report a copied file. Right after a folder is created, its
+  # watch may not be in place yet and the copy can hang for minutes. A person clicking in a
+  # frontend never hits this, so give the watch a moment.
+  - sleep_ms: 1000
+  - call: server.files.copy
+    params: {source: gcodes/a.gcode, dest: gcodes/new/b.gcode}
+    expect: {item: {path: new/b.gcode, root: gcodes}, action: create_file}
+  - call: server.files.move
+    params: {source: gcodes/new/b.gcode, dest: gcodes/c.gcode}
+    expect: {item: {path: c.gcode, root: gcodes}, source_item: {path: new/b.gcode, root: gcodes}, action: move_file}
+  - call: server.files.move
+    params: {source: gcodes/new, dest: gcodes/renamed}
+    expect: {item: {path: renamed, root: gcodes}, action: move_dir}
+  # The folder still holds the .thumbs folder made when b.gcode was copied in, so it needs force.
+  - call: server.files.delete_directory
+    params: {path: gcodes/renamed, force: true}
+    expect: {item: {path: renamed, root: gcodes}, action: delete_dir}
+  - call: server.files.get_directory
+    params: {path: gcodes}
+    expect: {dirs: {$excludes: [{dirname: renamed}]}, files: {$contains: [{filename: a.gcode}, {filename: c.gcode}]}}
+  - call: server.files.delete_file
+    only: [ws]
+    params: {path: gcodes/c.gcode}
+    expect: {item: {path: c.gcode, root: gcodes}, action: delete_file}
+  - call: server.files.post_directory
+    params: {path: logs/forbidden}
+    expect_error: {code: $type:number}

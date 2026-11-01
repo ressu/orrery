@@ -1,0 +1,14 @@
+name: queue changes are broadcast
+transports: [ws]
+files:
+  gcodes/a.gcode: "G28\n"
+steps:
+  - call: server.job_queue.post_job
+    params: {filenames: [a.gcode]}
+    save: {job: queued_jobs.0.job_id}
+  - expect_notification: notify_job_queue_changed
+    match: [{$exact: true, action: jobs_added, updated_queue: [{filename: a.gcode, job_id: "${job}"}], queue_state: paused}]
+  - call: server.job_queue.delete_job
+    params: {job_ids: "${job}"}
+  - expect_notification: notify_job_queue_changed
+    match: [{action: jobs_removed, updated_queue: [], queue_state: paused}]

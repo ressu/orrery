@@ -1,0 +1,10 @@
+name: an upload with a wrong checksum is rejected
+steps:
+  - upload: a.gcode
+    content: "G28\n"
+    form: {checksum: "0000000000000000000000000000000000000000000000000000000000000000"}
+    expect_error: {code: 422, message: $type:string}
+  - upload: a.gcode
+    content: "G28\n"
+    form: {checksum: "8080cd1d636d28b227689516fdadfd2aaed94e57b113db13523a38b51d0d09e9"}
+    expect: {action: create_file}

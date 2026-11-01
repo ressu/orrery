@@ -1,0 +1,38 @@
+name: a print is recorded in history from start to finish
+transports: [ws]
+files:
+  gcodes/cube.gcode: "G28\nG1 X10 Y10\n"
+ignore: [result.job.start_time, result.job.end_time, result.jobs.*.start_time, result.jobs.*.end_time]
+steps:
+  - call: server.history.list
+    expect: {count: 0, jobs: []}
+  - klippy: {update: {print_stats: {state: printing, filename: cube.gcode}}}
+  - expect_notification: notify_history_changed
+    match:
+      - action: added
+        job: {filename: cube.gcode, status: in_progress, exists: true, job_id: $type:string, start_time: $type:number, end_time: null}
+  - klippy: {update: {print_stats: {state: complete, print_duration: 120.0, total_duration: 130.0, filament_used: 42.5}}}
+  - expect_notification: notify_history_changed
+    match:
+      - action: finished
+        job: {filename: cube.gcode, status: completed, print_duration: 120.0, total_duration: 130.0, filament_used: 42.5, end_time: $type:number}
+  - call: server.history.list
+    expect:
+      count: 1
+      jobs: [{filename: cube.gcode, status: completed, job_id: $type:string}]
+    save: {job: jobs.0.job_id}
+  - call: server.history.get_job
+    params: {uid: "${job}"}
+    expect: {job: {job_id: "${job}", filename: cube.gcode, status: completed}}
+  - call: server.history.totals
+    expect:
+      job_totals: {total_jobs: 1, total_time: 130.0, total_print_time: 120.0, total_filament_used: 42.5, longest_job: 130.0, longest_print: 120.0}
+  - call: server.history.delete_job
+    params: {uid: "${job}"}
+    expect: {deleted_jobs: ["${job}"]}
+  - call: server.history.list
+    expect: {count: 0}
+  - call: server.history.reset_totals
+    expect: {last_totals: {total_jobs: 1}}
+  - call: server.history.totals
+    expect: {job_totals: {total_jobs: 0}}

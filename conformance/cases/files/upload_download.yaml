@@ -1,0 +1,28 @@
+name: upload and download files
+steps:
+  - upload: plain.gcode
+    fixture: plain.gcode
+    expect: {item: {path: plain.gcode, root: gcodes}, action: create_file, print_started: false, print_queued: false}
+  - download: gcodes/plain.gcode
+    expect_fixture: plain.gcode
+  # Folders go in the `path` field; Moonraker creates them.
+  - upload: other.gcode
+    fixture: plain.gcode
+    form: {path: deep/folder}
+    expect: {item: {path: deep/folder/other.gcode, root: gcodes}}
+  - upload: printer.cfg
+    content: "[printer]\n"
+    form: {root: config}
+    expect: {item: {path: printer.cfg, root: config}, action: create_file}
+  - download: config/printer.cfg
+    expect_body: "[printer]\n"
+  # Replacing a file through an upload is still reported as create_file.
+  - upload: plain.gcode
+    fixture: plain.gcode
+    expect: {action: create_file}
+  - download: gcodes/missing.gcode
+    expect_status: 404
+  - upload: nope.log
+    content: "x"
+    form: {root: logs}
+    expect_error: {code: $type:number}

@@ -1,0 +1,21 @@
+name: file changes are broadcast
+transports: [ws]
+files:
+  gcodes/a.gcode: "G28\n"
+steps:
+  - call: server.files.post_directory
+    params: {path: gcodes/dir}
+  - expect_notification: notify_filelist_changed
+    match: [{action: create_dir, item: {path: dir, root: gcodes}}]
+  - call: server.files.move
+    params: {source: gcodes/a.gcode, dest: gcodes/dir/a.gcode}
+  - expect_notification: notify_filelist_changed
+    match: [{action: move_file, item: {path: dir/a.gcode, root: gcodes}, source_item: {path: a.gcode, root: gcodes}}]
+  - upload: up.gcode
+    content: "G28\n"
+  - expect_notification: notify_filelist_changed
+    match: [{action: create_file, item: {path: up.gcode, root: gcodes, size: 4}}]
+  - call: server.files.delete_file
+    params: {path: gcodes/up.gcode}
+  - expect_notification: notify_filelist_changed
+    match: [{action: delete_file, item: {path: up.gcode, root: gcodes}}]

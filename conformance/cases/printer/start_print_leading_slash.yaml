@@ -1,0 +1,6 @@
+name: printer.print.start strips a leading slash and escapes quotes
+steps:
+  - call: printer.print.start
+    params: {filename: '/dir/a "b".gcode'}
+    expect: ok
+  - expect_klippy_request: {method: gcode/script, params: {script: 'SDCARD_PRINT_FILE FILENAME="dir/a \"b\".gcode"'}}

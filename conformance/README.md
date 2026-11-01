@@ -31,7 +31,10 @@ Runner flags go after the target, for example `just conformance reference --filt
 5. It runs the steps in order. The first failing step ends the case.
 
 Cases run once per transport. On the `http` run, `call` steps go over HTTP, using the routes in
-`http_routes.json`. Notifications always come over the websocket.
+`http_routes.json`. Notifications always come over the websocket. Uploads and downloads always go
+over HTTP, as they do in frontends.
+
+The suite's coverage of the methods Fluidd uses is tracked in [coverage.md](coverage.md).
 
 ## Writing a case
 
@@ -61,6 +64,8 @@ Other case fields:
   still reported, but its failure doesn't fail the run.
 - `ignore: [result.files.*.filename]` lists response paths that vary between runs. They're left out
   of snapshot comparisons.
+- `files:` lists files to put in the data directory before the server starts, as
+  `{path: text}`. For example, `gcodes/cube.gcode: "G28\n"`.
 
 ### Steps
 
@@ -72,6 +77,8 @@ Other case fields:
 | `klippy: <action>` | Drives the fake Klippy (see below). |
 | `expect_klippy_request: {method, params}` | Checks that Klippy received a matching request. It's skipped with real Klipper. |
 | `raw_ws: <text>` | Sends a raw websocket frame and checks the reply with `expect`. It runs on the `ws` transport only. |
+| `upload: <file name>` | Uploads `content` (text) or `fixture` (a file in `fixtures/files/`) to `/server/files/upload`. `form` adds fields such as `root`, `path`, `print`, or `checksum`. Checks the result with `expect` or `expect_error`. |
+| `download: <root>/<path>` | Downloads a file. Checks `expect_status` (default 200) and the body with `expect_body` or `expect_fixture`. |
 | `sleep_ms: <n>` | Waits. |
 
 A `call` step also takes these fields:
@@ -109,6 +116,7 @@ also available:
 | `$type:number` | A value of that type: `null`, `bool`, `number`, `string`, `array`, or `object` |
 | `$regex:^v\d+` | A string that matches the regular expression |
 | `{$contains: [a, b]}` | An array that has a matching element for each item |
+| `{$excludes: [a, b]}` | An array that has no matching element for any item |
 | `{$exact: true, ...}` | An object with no keys beyond the ones listed |
 
 To match a literal string that starts with `$`, write `$$`.
@@ -129,10 +137,11 @@ behaviour.
 |---|---|---|
 | `fixtures/klipper/printer.cfg` | Moonraker's test printer config, adapted for current Klipper and the Linux host MCU | Edit by hand |
 | `fixtures/klipper/klipper.dict` | Data dictionary for the Linux host MCU, so Klipper runs with no hardware | `just klipper-dict` |
-| `klippy-scripts/base_printer.capture.json` | Klipper's info, endpoints, printer objects, and gcode help for that config | `just capture` |
+| `klippy-scripts/base_printer.capture.json` | Klipper's info, endpoints, printer objects, gcode help, and the answers of read-only endpoints such as `query_endstops/status`, for that config | `just capture` |
 | `klippy-scripts/*.yaml` | Fake Klippy scripts: a capture plus a state and gcode rules | Edit by hand |
 | `http_routes.json` | Moonraker's method to HTTP route table | `just routes` |
 | `fixtures/moonraker/base.conf` | The base `moonraker.conf` | Edit by hand |
+| `fixtures/files/` | Files for upload and download steps; see its README | Edit by hand |
 
 `.work/` holds the copied upstream sources, their Python environments, and the run directories.
 It isn't tracked.

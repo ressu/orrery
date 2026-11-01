@@ -1,0 +1,18 @@
+name: protected namespaces can be read but not written, forbidden ones not at all
+steps:
+  # "moonraker" is always protected.
+  - call: server.database.post_item
+    params: {namespace: moonraker, key: test, value: 1}
+    expect_error: {code: 403, message: "Write access to namespace 'moonraker' is forbidden"}
+  - call: server.database.delete_item
+    params: {namespace: moonraker, key: test}
+    expect_error: {code: 403}
+  - call: server.database.get_item
+    params: {namespace: moonraker}
+    expect: {namespace: moonraker, value: $type:object}
+  # "database" is always forbidden, and it's left out of the namespace list.
+  - call: server.database.get_item
+    params: {namespace: database}
+    expect_error: {code: 403, message: "Read/Write access to namespace 'database' is forbidden"}
+  - call: server.database.list
+    expect: {namespaces: {$contains: [moonraker]}}

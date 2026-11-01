@@ -1,0 +1,38 @@
+[
+  {
+    "step": 1,
+    "call": "server.database.post_backup",
+    "result": {
+      "backup_path": "string"
+    }
+  },
+  {
+    "step": 2,
+    "call": "server.database.list",
+    "result": {
+      "namespaces": [
+        "string"
+      ],
+      "backups": [
+        "string"
+      ]
+    }
+  },
+  {
+    "step": 3,
+    "call": "server.database.delete_backup",
+    "result": {
+      "backup_path": "string"
+    }
+  },
+  {
+    "step": 4,
+    "call": "server.database.list",
+    "result": {
+      "namespaces": [
+        "string"
+      ],
+      "backups": []
+    }
+  }
+]

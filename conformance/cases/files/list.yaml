@@ -1,0 +1,28 @@
+name: server.files.list and get_directory show files and folders
+files:
+  gcodes/top.gcode: "G28\n"
+  gcodes/sub/inner.gcode: "G28\nG1 X1\n"
+  gcodes/notes.txt: "not gcode\n"
+ignore: [result.*.modified, result.files.*.modified, result.dirs.*.modified, result.disk_usage.*]
+steps:
+  - call: server.files.list
+    params: {root: gcodes}
+    expect:
+      # The gcodes root lists only gcode files.
+      $contains:
+        - {path: top.gcode, size: 4, modified: $type:number, permissions: rw}
+        - {path: sub/inner.gcode, size: 10}
+      $excludes: [{path: notes.txt}]
+  - call: server.files.get_directory
+    params: {path: gcodes, extended: false}
+    expect:
+      dirs: {$contains: [{dirname: sub, modified: $type:number, size: $type:number, permissions: rw}]}
+      files: {$contains: [{filename: top.gcode, size: 4}]}
+      disk_usage: {total: $type:number, used: $type:number, free: $type:number}
+      root_info: {name: gcodes, permissions: rw}
+  - call: server.files.get_directory
+    params: {path: gcodes/sub}
+    expect: {files: [{filename: inner.gcode, size: 10}]}
+  - call: server.files.get_directory
+    params: {path: gcodes/missing}
+    expect_error: {code: $type:number}

@@ -1,0 +1,9 @@
+name: server.temperature_store keeps heater history
+ignore: [result.*.temperatures, result.*.targets, result.*.powers]
+steps:
+  - call: server.temperature_store
+    params: {include_monitors: false}
+    retry_ms: 3000
+    expect:
+      extruder: {temperatures: $type:array, targets: $type:array, powers: $type:array}
+      heater_bed: {temperatures: $type:array, targets: $type:array, powers: $type:array}

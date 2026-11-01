@@ -1,0 +1,14 @@
+name: a new printer.objects.subscribe replaces the previous one
+transports: [ws]
+steps:
+  - call: printer.objects.subscribe
+    params: {objects: {print_stats: [state]}}
+  - call: printer.objects.subscribe
+    params: {objects: {display_status: [message]}}
+    expect:
+      status: {$exact: true, display_status: {$exact: true, message: $any}}
+  - klippy: {update: {print_stats: {state: printing}}}
+  - expect_no_notification: notify_status_update
+  - klippy: {update: {display_status: {message: replaced}}}
+  - expect_notification: notify_status_update
+    match: [{$exact: true, display_status: {message: replaced}}, $type:number]

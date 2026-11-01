@@ -1,0 +1,11 @@
+name: a cancelled print is recorded as cancelled
+transports: [ws]
+files:
+  gcodes/cube.gcode: "G28\n"
+steps:
+  - klippy: {update: {print_stats: {state: printing, filename: cube.gcode}}}
+  - expect_notification: notify_history_changed
+    match: [{action: added}]
+  - call: printer.print.cancel
+  - expect_notification: notify_history_changed
+    match: [{action: finished, job: {status: cancelled}}]

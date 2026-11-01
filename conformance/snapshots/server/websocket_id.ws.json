@@ -1,0 +1,9 @@
+[
+  {
+    "step": 1,
+    "call": "server.websocket.id",
+    "result": {
+      "websocket_id": "number"
+    }
+  }
+]

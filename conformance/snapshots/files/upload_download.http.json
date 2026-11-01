@@ -1,0 +1,83 @@
+[
+  {
+    "step": 1,
+    "call": "upload",
+    "result": {
+      "action": "string",
+      "item": {
+        "modified": "number",
+        "size": "number",
+        "permissions": "string",
+        "path": "string",
+        "root": "string"
+      },
+      "print_started": "bool",
+      "print_queued": "bool"
+    }
+  },
+  {
+    "step": 2,
+    "call": null
+  },
+  {
+    "step": 3,
+    "call": "upload",
+    "result": {
+      "action": "string",
+      "item": {
+        "modified": "number",
+        "size": "number",
+        "permissions": "string",
+        "path": "string",
+        "root": "string"
+      },
+      "print_started": "bool",
+      "print_queued": "bool"
+    }
+  },
+  {
+    "step": 4,
+    "call": "upload",
+    "result": {
+      "action": "string",
+      "item": {
+        "modified": "number",
+        "size": "number",
+        "permissions": "string",
+        "path": "string",
+        "root": "string"
+      }
+    }
+  },
+  {
+    "step": 5,
+    "call": null
+  },
+  {
+    "step": 6,
+    "call": "upload",
+    "result": {
+      "action": "string",
+      "item": {
+        "modified": "number",
+        "size": "number",
+        "permissions": "string",
+        "path": "string",
+        "root": "string"
+      },
+      "print_started": "bool",
+      "print_queued": "bool"
+    }
+  },
+  {
+    "step": 7,
+    "call": null
+  },
+  {
+    "step": 8,
+    "call": "upload",
+    "error": {
+      "code": 400
+    }
+  }
+]

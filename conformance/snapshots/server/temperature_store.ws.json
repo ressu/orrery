@@ -1,0 +1,30 @@
+[
+  {
+    "step": 1,
+    "call": "server.temperature_store",
+    "result": {
+      "heater_bed": {
+        "temperatures": [
+          "number"
+        ],
+        "targets": [
+          "number"
+        ],
+        "powers": [
+          "number"
+        ]
+      },
+      "extruder": {
+        "temperatures": [
+          "number"
+        ],
+        "targets": [
+          "number"
+        ],
+        "powers": [
+          "number"
+        ]
+      }
+    }
+  }
+]

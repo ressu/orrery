@@ -1,0 +1,9 @@
+name: server.files.roots lists the registered roots
+tags: [real-klippy]
+steps:
+  - call: server.files.roots
+    expect:
+      $contains:
+        - {name: config, path: $type:string, permissions: rw}
+        - {name: gcodes, path: $type:string, permissions: rw}
+        - {name: logs, path: $type:string, permissions: r}

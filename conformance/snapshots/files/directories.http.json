@@ -1,0 +1,118 @@
+[
+  {
+    "step": 1,
+    "call": "server.files.post_directory",
+    "result": {
+      "action": "string",
+      "item": {
+        "modified": "number",
+        "size": "number",
+        "permissions": "string",
+        "path": "string",
+        "root": "string"
+      }
+    }
+  },
+  {
+    "step": 3,
+    "call": "server.files.copy",
+    "result": {
+      "action": "string",
+      "item": {
+        "modified": "number",
+        "size": "number",
+        "permissions": "string",
+        "path": "string",
+        "root": "string"
+      }
+    }
+  },
+  {
+    "step": 4,
+    "call": "server.files.move",
+    "result": {
+      "action": "string",
+      "item": {
+        "modified": "number",
+        "size": "number",
+        "permissions": "string",
+        "path": "string",
+        "root": "string"
+      },
+      "source_item": {
+        "path": "string",
+        "root": "string"
+      }
+    }
+  },
+  {
+    "step": 5,
+    "call": "server.files.move",
+    "result": {
+      "action": "string",
+      "item": {
+        "modified": "number",
+        "size": "number",
+        "permissions": "string",
+        "path": "string",
+        "root": "string"
+      },
+      "source_item": {
+        "path": "string",
+        "root": "string"
+      }
+    }
+  },
+  {
+    "step": 6,
+    "call": "server.files.delete_directory",
+    "result": {
+      "action": "string",
+      "item": {
+        "modified": "number",
+        "size": "number",
+        "permissions": "string",
+        "path": "string",
+        "root": "string"
+      }
+    }
+  },
+  {
+    "step": 7,
+    "call": "server.files.get_directory",
+    "result": {
+      "dirs": [
+        {
+          "modified": "number",
+          "size": "number",
+          "permissions": "string",
+          "dirname": "string"
+        }
+      ],
+      "files": [
+        {
+          "modified": "number",
+          "size": "number",
+          "permissions": "string",
+          "filename": "string"
+        }
+      ],
+      "disk_usage": {
+        "total": "number",
+        "used": "number",
+        "free": "number"
+      },
+      "root_info": {
+        "name": "string",
+        "permissions": "string"
+      }
+    }
+  },
+  {
+    "step": 9,
+    "call": "server.files.post_directory",
+    "error": {
+      "code": 405
+    }
+  }
+]

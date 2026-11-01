@@ -1,0 +1,87 @@
+[
+  {
+    "step": 1,
+    "call": "server.database.post_item",
+    "result": {
+      "namespace": "string",
+      "key": "string",
+      "value": "number"
+    }
+  },
+  {
+    "step": 2,
+    "call": "server.database.post_item",
+    "result": {
+      "namespace": "string",
+      "key": "string",
+      "value": "string"
+    }
+  },
+  {
+    "step": 3,
+    "call": "server.database.post_item",
+    "result": {
+      "namespace": "string",
+      "key": "string",
+      "value": "bool"
+    }
+  },
+  {
+    "step": 4,
+    "call": "server.database.post_item",
+    "result": {
+      "namespace": "string",
+      "key": "string",
+      "value": [
+        "number"
+      ]
+    }
+  },
+  {
+    "step": 5,
+    "call": "server.database.get_item",
+    "result": {
+      "namespace": "string",
+      "key": "null",
+      "value": {
+        "flag": "bool",
+        "list": [
+          "number"
+        ],
+        "number": "number",
+        "text": "string"
+      }
+    }
+  },
+  {
+    "step": 6,
+    "call": "server.database.get_item",
+    "result": {
+      "namespace": "string",
+      "key": "string",
+      "value": [
+        "number"
+      ]
+    }
+  },
+  {
+    "step": 7,
+    "call": "server.database.post_item",
+    "result": {
+      "namespace": "string",
+      "key": "string",
+      "value": "number"
+    }
+  },
+  {
+    "step": 8,
+    "call": "server.database.get_item",
+    "result": {
+      "namespace": "string",
+      "key": "string",
+      "value": {
+        "inner": "number"
+      }
+    }
+  }
+]
