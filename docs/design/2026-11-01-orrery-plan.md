@@ -260,3 +260,14 @@ Tiers, in order:
 - **2026-11-01: snapshot `ignore:` paths were never applied.** The runner built paths without the
   leading `result`, so no `ignore:` entry matched. Fixed, with a test, and the snapshots were
   re-recorded.
+- **2026-11-01: file manager.** orrery has the `config`, `logs`, and `gcodes` roots, listing,
+  folders, move, copy, zip, upload (with checksum and print), download (with ranges), and gcode
+  metadata with thumbnails. It passes every files case on the fake and on real Klipper.
+  - It works like Moonraker without a file system observer: changes made through the API are
+    handled at once, and the gcodes folder is scanned for metadata when orrery starts. A watcher
+    is a later step (see `docs/regressions.md`, `no-file-observer`).
+  - Metadata lives in a table the API can't reach, not in a `gcode_metadata` namespace.
+  - Image handling uses the `image` crate with only PNG, JPEG, and QOI, and zip uses zlib-rs, so
+    the build still has no C code. The aarch64 binary grew from 4.25 MB to 6.5 MB.
+  - Moonraker's thumbnail pattern needs a backreference, which Rust's `regex` lacks. orrery finds
+    the closing tag by hand and checks the same characters.

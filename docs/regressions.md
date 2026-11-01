@@ -60,6 +60,53 @@ change how safe or complete orrery is to run.
 - **Why:** see `docs/design/2026-11-01-datastore-spike.md`.
 - **Cases:** none; the API behaves the same.
 
+### no-file-observer: changes made outside the API aren't seen right away
+
+- **Area:** files
+- **Moonraker:** watches the roots with inotify. When a file changes on disk, it sends
+  `notify_filelist_changed` and reads the new file's metadata.
+- **orrery:** works like Moonraker with `file_system_observer: none`. It sees the changes made
+  through its API, and it reads metadata for the gcodes folder when it starts. A file copied
+  in with scp, or a `printer.cfg` that Klipper saves, shows up when a client lists the folder
+  again. Its metadata is read the first time a client asks for it with
+  `server.files.metadata`, or with `server.files.metascan`. The same request also gets
+  metadata for a file that the startup scan hasn't reached yet. Moonraker answers 404 until
+  its scan gets there.
+- **Why:** the API cases come first. A watcher can follow.
+- **Cases:** none yet.
+
+### partial-metadata: some slicers get only basic metadata
+
+- **Area:** files
+- **Moonraker:** reads metadata from PrusaSlicer and its forks, Slic3r, Cura, BambuStudio,
+  Simplify3D, KISSlicer, ideaMaker, IceSL, and Kiri:Moto. It also unpacks `.ufp` uploads, runs
+  gcode file processors, and can add object definitions (`enable_object_processing`).
+- **orrery:** reads PrusaSlicer and its forks (SuperSlicer, OrcaSlicer, and others), Slic3r,
+  Slic3r PE, BambuStudio, and Cura. A file from another slicer gets only the size, times, first
+  layer height, and object height. orrery refuses `.ufp` uploads, and it has no file processors
+  or object processing.
+- **Why:** these are the slicers most printers use. The others can be ported one at a time.
+- **Cases:** `files/metadata`, `files/metadata_plain`, `files/metascan`.
+
+### missing-file-roots: no `config_examples`, `docs`, or log file links
+
+- **Area:** files
+- **Moonraker:** adds the `config_examples` and `docs` roots from Klipper's folder, and serves
+  `klippy.log` and `moonraker.log` at `/server/files/<name>`.
+- **orrery:** has the `config`, `logs`, and `gcodes` roots. Logs are still reachable through the
+  `logs` root.
+- **Why:** frontends work without them.
+- **Cases:** none yet.
+
+### upload-queue: uploads can't add a print to the job queue
+
+- **Area:** files
+- **Moonraker:** with `queue_gcode_uploads: True`, an upload with `print=true` goes into the job
+  queue when a print can't start right away.
+- **orrery:** has no job queue yet, so `print_queued` is always false.
+- **Why:** the job queue comes later.
+- **Cases:** `files/upload_print` (the print-now part).
+
 ## Planned entries
 
 These differences are already decided in the plan. Each gets an entry when the code that

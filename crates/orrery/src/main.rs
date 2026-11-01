@@ -2,6 +2,7 @@ mod api;
 mod config;
 mod data_store;
 mod database;
+mod files;
 mod job_state;
 mod klippy;
 mod server;

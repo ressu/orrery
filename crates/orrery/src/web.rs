@@ -5,11 +5,12 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::body::Bytes;
+use axum::extract::DefaultBodyLimit;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{RawQuery, State};
 use axum::http::{HeaderMap, Method, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Map, Value, json};
 use tokio::sync::mpsc;
@@ -18,7 +19,12 @@ use crate::api::{ApiError, Args, Request, RequestType, Transport};
 use crate::server::App;
 
 pub fn router(app: Arc<App>) -> Router {
-    Router::new().route("/websocket", get(websocket)).fallback(http_request).with_state(app)
+    let upload_limit = app.files.max_upload_size;
+    Router::new()
+        .route("/websocket", get(websocket))
+        .route("/server/files/upload", post(crate::files::http::upload).layer(DefaultBodyLimit::max(upload_limit)))
+        .fallback(http_request)
+        .with_state(app)
 }
 
 async fn websocket(State(app): State<Arc<App>>, ws: WebSocketUpgrade) -> Response {
@@ -58,7 +64,7 @@ async fn serve_socket(app: Arc<App>, socket: WebSocket) {
     tracing::info!("Websocket Closed: ID: {conn}");
 }
 
-fn error_response(status: u16, message: &str) -> Response {
+pub fn error_response(status: u16, message: &str) -> Response {
     let code = StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     let body = json!({"error": {"code": status, "message": message}});
     (code, [(header::CONTENT_TYPE, "application/json; charset=UTF-8")], body.to_string()).into_response()
@@ -74,6 +80,9 @@ async fn http_request(
 ) -> Response {
     let found = app.registry.read().expect("registry lock").by_path(uri.path());
     let Some(endpoint) = found.filter(|e| e.http) else {
+        if let Some(resp) = crate::files::http::file_request(&app, &method, uri.path(), &headers).await {
+            return resp;
+        }
         return error_response(404, "Not Found");
     };
     let Some(kind) = RequestType::from_http(method.as_str()).filter(|k| endpoint.types.contains(k)) else {

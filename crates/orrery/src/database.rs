@@ -19,6 +19,8 @@ use crate::server::{App, Paths};
 
 /// `(namespace, key) -> JSON`.
 const NAMESPACES: TableDefinition<(&str, &str), &[u8]> = TableDefinition::new("namespaces");
+/// orrery's own data, like gcode metadata, which the API doesn't reach. `(namespace, key) -> JSON`.
+const LOCAL: TableDefinition<(&str, &str), &[u8]> = TableDefinition::new("local");
 
 pub struct Database {
     db: redb::Database,
@@ -44,6 +46,7 @@ impl Database {
         let db = redb::Database::create(&path).with_context(|| format!("opening {}", path.display()))?;
         let tx = db.begin_write()?;
         tx.open_table(NAMESPACES)?;
+        tx.open_table(LOCAL)?;
         tx.commit()?;
         let mut namespaces: BTreeSet<String> = ["moonraker".to_owned(), "database".to_owned()].into();
         {
@@ -187,6 +190,41 @@ impl Database {
         Ok(removed)
     }
 
+    /// Every key in one of orrery's own namespaces.
+    pub fn local_items(&self, namespace: &str) -> Result<Vec<(String, Value)>> {
+        let tx = self.db.begin_read()?;
+        let table = tx.open_table(LOCAL)?;
+        let mut out = Vec::new();
+        for entry in table.range((namespace, "")..)? {
+            let (k, v) = entry?;
+            let (ns, key) = k.value();
+            if ns != namespace {
+                break;
+            }
+            out.push((key.to_owned(), serde_json::from_slice(v.value())?));
+        }
+        Ok(out)
+    }
+
+    pub fn local_put(&self, namespace: &str, key: &str, value: &Value) -> Result<()> {
+        let tx = self.db.begin_write()?;
+        tx.open_table(LOCAL)?.insert((namespace, key), serde_json::to_vec(value)?.as_slice())?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn local_delete(&self, namespace: &str, keys: &[String]) -> Result<()> {
+        let tx = self.db.begin_write()?;
+        {
+            let mut table = tx.open_table(LOCAL)?;
+            for k in keys {
+                table.remove((namespace, k.as_str()))?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Copies the store to `dest`. Writes wait until the copy is done.
     pub async fn backup(&self, dest: &Path) -> Result<()> {
         let _guard = self.write_lock.lock().await;
@@ -320,7 +358,7 @@ async fn backup_request(app: Arc<App>, req: Request) -> ApiResult {
 }
 
 /// `YYYYmmdd-HHMMSS` in UTC.
-fn timestamp() -> String {
+pub fn timestamp() -> String {
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     let (days, rem) = (secs / 86400, secs % 86400);
     // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).

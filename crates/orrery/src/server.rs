@@ -14,6 +14,7 @@ use crate::api::{ApiError, ApiResult, Args, ConnId, Registry, Request, RequestTy
 use crate::config::Config;
 use crate::data_store::DataStore;
 use crate::database::Database;
+use crate::files::FileManager;
 use crate::job_state::JobState;
 use crate::klippy::Klippy;
 
@@ -73,14 +74,23 @@ pub struct App {
     pub events: broadcast::Sender<Event>,
     pub klippy: Klippy,
     pub database: Database,
+    pub files: FileManager,
     pub data_store: DataStore,
     pub job_state: JobState,
     warnings: Mutex<Vec<String>>,
 }
 
 /// Moonraker's names for the components orrery implements, as `server.info` lists them.
-const COMPONENTS: &[&str] =
-    &["application", "websockets", "klippy_connection", "database", "klippy_apis", "data_store", "job_state"];
+const COMPONENTS: &[&str] = &[
+    "application",
+    "websockets",
+    "klippy_connection",
+    "database",
+    "file_manager",
+    "klippy_apis",
+    "data_store",
+    "job_state",
+];
 
 impl App {
     pub fn new(config: Config, paths: Paths) -> Result<Arc<Self>> {
@@ -88,6 +98,7 @@ impl App {
         let server = config.section("server");
         let socket = server.get_str("klippy_uds_address", &paths.data.join("comms/klippy.sock").to_string_lossy());
         let database = Database::open(&config, &paths)?;
+        let files = FileManager::new(&config, &paths)?;
         let data_store = DataStore::new(&config)?;
         // Connection ids look like Moonraker's (Python object ids): large numbers.
         let base = 0x7f00_0000_0000 + (std::process::id() as u64) * 0x1000;
@@ -100,6 +111,7 @@ impl App {
             next_conn: AtomicU64::new(base),
             events,
             database,
+            files,
             data_store,
             job_state: JobState::default(),
             warnings: Mutex::new(Vec::new()),
@@ -108,6 +120,7 @@ impl App {
         crate::klippy::register_endpoints(&app);
         crate::database::register_endpoints(&app);
         crate::data_store::register_endpoints(&app);
+        crate::files::register_endpoints(&app);
         Ok(app)
     }
 
@@ -116,6 +129,7 @@ impl App {
         tokio::spawn(crate::klippy::run(self.clone()));
         tokio::spawn(forward_notifications(self.clone()));
         crate::data_store::start(self);
+        crate::files::start(self);
         crate::job_state::start(self);
     }
 
@@ -277,7 +291,7 @@ async fn server_info(app: Arc<App>, req: Request) -> ApiResult {
         "klippy_state": state.0.as_str(),
         "components": COMPONENTS,
         "failed_components": [],
-        "registered_directories": ["config", "logs", "gcodes"],
+        "registered_directories": app.files.root_names(),
         "warnings": warnings,
         "websocket_count": app.client_count(),
         "moonraker_version": concat!("orrery-", env!("CARGO_PKG_VERSION")),

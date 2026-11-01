@@ -12,8 +12,9 @@ starting with per-user state.
 The work starts with a conformance suite that checks Moonraker's API from the outside. Upstream
 Moonraker serves as the reference implementation.
 
-orrery connects to Klippy and serves the `server.*`, `printer.*`, and `server.database.*` APIs.
-Files, history, the job queue, and authorization aren't written yet. **orrery has no
+orrery connects to Klippy and serves the `server.*`, `printer.*`, `server.database.*`, and
+`server.files.*` APIs, with file upload and download. History, the job queue, and authorization
+aren't written yet. **orrery has no
 authorization yet, so every client that can reach it has full access.** See
 [docs/regressions.md](docs/regressions.md).
 For the plan and the decisions made so far, see

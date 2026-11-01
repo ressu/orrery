@@ -13,6 +13,13 @@ pub struct JobState {
     last_stats: Mutex<Map<String, Value>>,
 }
 
+impl JobState {
+    /// The latest `print_stats` fields.
+    pub fn last_stats(&self) -> Map<String, Value> {
+        self.last_stats.lock().expect("job state lock").clone()
+    }
+}
+
 pub fn start(app: &Arc<App>) {
     tokio::spawn(follow_events(app.clone(), app.events.subscribe()));
 }

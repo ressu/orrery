@@ -9,15 +9,23 @@ publish.workspace = true
 [dependencies]
 orrery-proto.workspace = true
 anyhow.workspace = true
-axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio", "ws"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "multipart", "query", "tokio", "ws"] }
 clap = { workspace = true, features = ["env"] }
 form_urlencoded = "1"
 futures-util.workspace = true
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "qoi"] }
+percent-encoding = "2.3.2"
 redb = "4"
+regex.workspace = true
+rustix = { version = "1.1.6", features = ["fs"] }
 serde_json.workspace = true
+sha2 = "0.11.1"
+tokio-util = { version = "0.7.20", features = ["io"] }
 tokio.workspace = true
-tracing.workspace = true
 tracing-subscriber.workspace = true
+tracing.workspace = true
+uuid = { version = "1.29.0", features = ["v4"] }
+zip = { version = "9.2.1", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [dev-dependencies]
 tempfile.workspace = true
