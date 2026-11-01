@@ -1,0 +1,342 @@
+{
+ "access.delete_user": {
+  "verb": "DELETE",
+  "path": "/access/user"
+ },
+ "access.get_api_key": {
+  "verb": "GET",
+  "path": "/access/api_key"
+ },
+ "access.get_user": {
+  "verb": "GET",
+  "path": "/access/user"
+ },
+ "access.info": {
+  "verb": "GET",
+  "path": "/access/info"
+ },
+ "access.login": {
+  "verb": "POST",
+  "path": "/access/login"
+ },
+ "access.logout": {
+  "verb": "POST",
+  "path": "/access/logout"
+ },
+ "access.oneshot_token": {
+  "verb": "GET",
+  "path": "/access/oneshot_token"
+ },
+ "access.post_api_key": {
+  "verb": "POST",
+  "path": "/access/api_key"
+ },
+ "access.post_user": {
+  "verb": "POST",
+  "path": "/access/user"
+ },
+ "access.refresh_jwt": {
+  "verb": "POST",
+  "path": "/access/refresh_jwt"
+ },
+ "access.user.password": {
+  "verb": "POST",
+  "path": "/access/user/password"
+ },
+ "access.users.list": {
+  "verb": "GET",
+  "path": "/access/users/list"
+ },
+ "connection.register_remote_method": {
+  "verb": "POST",
+  "path": null
+ },
+ "connection.send_event": {
+  "verb": "POST",
+  "path": null
+ },
+ "machine.peripherals.canbus": {
+  "verb": "GET",
+  "path": "/machine/peripherals/canbus"
+ },
+ "machine.peripherals.serial": {
+  "verb": "GET",
+  "path": "/machine/peripherals/serial"
+ },
+ "machine.peripherals.usb": {
+  "verb": "GET",
+  "path": "/machine/peripherals/usb"
+ },
+ "machine.peripherals.video": {
+  "verb": "GET",
+  "path": "/machine/peripherals/video"
+ },
+ "machine.proc_stats": {
+  "verb": "GET",
+  "path": "/machine/proc_stats"
+ },
+ "machine.reboot": {
+  "verb": "POST",
+  "path": "/machine/reboot"
+ },
+ "machine.services.restart": {
+  "verb": "POST",
+  "path": "/machine/services/restart"
+ },
+ "machine.services.start": {
+  "verb": "POST",
+  "path": "/machine/services/start"
+ },
+ "machine.services.stop": {
+  "verb": "POST",
+  "path": "/machine/services/stop"
+ },
+ "machine.shutdown": {
+  "verb": "POST",
+  "path": "/machine/shutdown"
+ },
+ "machine.sudo.info": {
+  "verb": "GET",
+  "path": "/machine/sudo/info"
+ },
+ "machine.sudo.password": {
+  "verb": "POST",
+  "path": "/machine/sudo/password"
+ },
+ "machine.system_info": {
+  "verb": "GET",
+  "path": "/machine/system_info"
+ },
+ "printer.firmware_restart": {
+  "verb": "POST",
+  "path": "/printer/firmware_restart"
+ },
+ "printer.print.cancel": {
+  "verb": "POST",
+  "path": "/printer/print/cancel"
+ },
+ "printer.print.pause": {
+  "verb": "POST",
+  "path": "/printer/print/pause"
+ },
+ "printer.print.resume": {
+  "verb": "POST",
+  "path": "/printer/print/resume"
+ },
+ "printer.print.start": {
+  "verb": "POST",
+  "path": "/printer/print/start"
+ },
+ "printer.restart": {
+  "verb": "POST",
+  "path": "/printer/restart"
+ },
+ "server.announcements.delete_feed": {
+  "verb": "DELETE",
+  "path": "/server/announcements/feed"
+ },
+ "server.announcements.dismiss": {
+  "verb": "POST",
+  "path": "/server/announcements/dismiss"
+ },
+ "server.announcements.feeds": {
+  "verb": "GET",
+  "path": "/server/announcements/feeds"
+ },
+ "server.announcements.list": {
+  "verb": "GET",
+  "path": "/server/announcements/list"
+ },
+ "server.announcements.post_feed": {
+  "verb": "POST",
+  "path": "/server/announcements/feed"
+ },
+ "server.announcements.update": {
+  "verb": "POST",
+  "path": "/server/announcements/update"
+ },
+ "server.config": {
+  "verb": "GET",
+  "path": "/server/config"
+ },
+ "server.connection.identify": {
+  "verb": "POST",
+  "path": null
+ },
+ "server.database.compact": {
+  "verb": "POST",
+  "path": "/server/database/compact"
+ },
+ "server.database.delete_backup": {
+  "verb": "DELETE",
+  "path": "/server/database/backup"
+ },
+ "server.database.delete_item": {
+  "verb": "DELETE",
+  "path": "/server/database/item"
+ },
+ "server.database.get_item": {
+  "verb": "GET",
+  "path": "/server/database/item"
+ },
+ "server.database.list": {
+  "verb": "GET",
+  "path": "/server/database/list"
+ },
+ "server.database.post_backup": {
+  "verb": "POST",
+  "path": "/server/database/backup"
+ },
+ "server.database.post_item": {
+  "verb": "POST",
+  "path": "/server/database/item"
+ },
+ "server.database.restore": {
+  "verb": "POST",
+  "path": "/server/database/restore"
+ },
+ "server.extensions.list": {
+  "verb": "GET",
+  "path": "/server/extensions/list"
+ },
+ "server.extensions.request": {
+  "verb": "POST",
+  "path": "/server/extensions/request"
+ },
+ "server.files.copy": {
+  "verb": "POST",
+  "path": "/server/files/copy"
+ },
+ "server.files.delete_directory": {
+  "verb": "DELETE",
+  "path": "/server/files/directory"
+ },
+ "server.files.delete_file": {
+  "verb": "DELETE",
+  "path": null
+ },
+ "server.files.get_directory": {
+  "verb": "GET",
+  "path": "/server/files/directory"
+ },
+ "server.files.list": {
+  "verb": "GET",
+  "path": "/server/files/list"
+ },
+ "server.files.metadata": {
+  "verb": "GET",
+  "path": "/server/files/metadata"
+ },
+ "server.files.metascan": {
+  "verb": "POST",
+  "path": "/server/files/metascan"
+ },
+ "server.files.move": {
+  "verb": "POST",
+  "path": "/server/files/move"
+ },
+ "server.files.post_directory": {
+  "verb": "POST",
+  "path": "/server/files/directory"
+ },
+ "server.files.roots": {
+  "verb": "GET",
+  "path": "/server/files/roots"
+ },
+ "server.files.thumbnails": {
+  "verb": "GET",
+  "path": "/server/files/thumbnails"
+ },
+ "server.files.zip": {
+  "verb": "POST",
+  "path": "/server/files/zip"
+ },
+ "server.gcode_store": {
+  "verb": "GET",
+  "path": "/server/gcode_store"
+ },
+ "server.history.delete_job": {
+  "verb": "DELETE",
+  "path": "/server/history/job"
+ },
+ "server.history.get_job": {
+  "verb": "GET",
+  "path": "/server/history/job"
+ },
+ "server.history.list": {
+  "verb": "GET",
+  "path": "/server/history/list"
+ },
+ "server.history.reset_totals": {
+  "verb": "POST",
+  "path": "/server/history/reset_totals"
+ },
+ "server.history.totals": {
+  "verb": "GET",
+  "path": "/server/history/totals"
+ },
+ "server.info": {
+  "verb": "GET",
+  "path": "/server/info"
+ },
+ "server.job_queue.delete_job": {
+  "verb": "DELETE",
+  "path": "/server/job_queue/job"
+ },
+ "server.job_queue.jump": {
+  "verb": "POST",
+  "path": "/server/job_queue/jump"
+ },
+ "server.job_queue.pause": {
+  "verb": "POST",
+  "path": "/server/job_queue/pause"
+ },
+ "server.job_queue.post_job": {
+  "verb": "POST",
+  "path": "/server/job_queue/job"
+ },
+ "server.job_queue.start": {
+  "verb": "POST",
+  "path": "/server/job_queue/start"
+ },
+ "server.job_queue.status": {
+  "verb": "GET",
+  "path": "/server/job_queue/status"
+ },
+ "server.logs.rollover": {
+  "verb": "POST",
+  "path": "/server/logs/rollover"
+ },
+ "server.restart": {
+  "verb": "POST",
+  "path": "/server/restart"
+ },
+ "server.temperature_store": {
+  "verb": "GET",
+  "path": "/server/temperature_store"
+ },
+ "server.webcams.delete_item": {
+  "verb": "DELETE",
+  "path": "/server/webcams/item"
+ },
+ "server.webcams.get_item": {
+  "verb": "GET",
+  "path": "/server/webcams/item"
+ },
+ "server.webcams.list": {
+  "verb": "GET",
+  "path": "/server/webcams/list"
+ },
+ "server.webcams.post_item": {
+  "verb": "POST",
+  "path": "/server/webcams/item"
+ },
+ "server.webcams.test": {
+  "verb": "POST",
+  "path": "/server/webcams/test"
+ },
+ "server.websocket.id": {
+  "verb": "GET",
+  "path": null
+ }
+}

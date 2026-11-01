@@ -1,0 +1,7 @@
+name: Klippy disconnect and reconnect
+transports: [ws]
+steps:
+  - klippy: disconnect
+  - expect_notification: notify_klippy_disconnected
+  - expect_notification: notify_klippy_ready
+    within_ms: 10000

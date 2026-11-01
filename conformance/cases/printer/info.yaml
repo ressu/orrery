@@ -1,0 +1,14 @@
+name: printer.info proxies Klippy info
+tags: [real-klippy]
+steps:
+  - call: printer.info
+    expect:
+      state: ready
+      state_message: Printer is ready
+      hostname: $type:string
+      software_version: v0.13.0-816-gee2c6fb6b
+      klipper_path: $type:string
+      python_path: $type:string
+      process_id: $type:number
+      user_id: $type:number
+      group_id: $type:number

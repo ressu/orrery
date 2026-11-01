@@ -1,0 +1,50 @@
+# orrery
+
+orrery is an experimental API server for Klipper that aims to work as a drop-in replacement for
+[Moonraker](https://github.com/Arksine/moonraker), so that Fluidd, Mainsail, and KlipperScreen work with
+it unchanged. It's written in Rust and builds as one static binary for the Raspberry Pi.
+
+"orrery" is a placeholder name. The long-term goal is to try out ideas Moonraker doesn't have,
+starting with per-user state.
+
+## Status
+
+The work starts with a conformance suite that checks Moonraker's API from the outside. Upstream
+Moonraker serves as the reference implementation. The orrery server itself hasn't been started yet.
+For the plan and the decisions made so far, see
+[docs/design/2026-11-01-orrery-plan.md](docs/design/2026-11-01-orrery-plan.md).
+
+## Layout
+
+| Path | Contents |
+|---|---|
+| `crates/orrery` | The server (a stub for now) |
+| `crates/orrery-proto` | Shared wire formats: Klippy socket framing and JSON-RPC envelopes |
+| `crates/fake-klippy` | A scriptable stand-in for Klipper's API socket |
+| `crates/conformance` | The conformance test runner |
+| `conformance/` | Test cases, fixtures, and recorded snapshots; see [conformance/README.md](conformance/README.md) |
+| `docs/regressions.md` | Known differences from Moonraker |
+
+## Development setup
+
+The development tools come from a nix flake. With direnv, they load when you enter the directory.
+Without direnv, run `nix develop`.
+
+To set up the reference Moonraker and Klipper, then run everything:
+
+```
+just ref-setup
+just klipper-setup
+just
+```
+
+By default the recipes copy Moonraker and Klipper from `~/sources/moonraker` and `~/sources/klipper`.
+Set `MOONRAKER_SRC` or `KLIPPER_SRC` to use other checkouts. The originals are never modified.
+
+To build release binaries for the Pi:
+
+```
+just build-arm
+```
+
+The binaries link with `rust-lld` and Rust's bundled musl, so they need no C cross toolchain.

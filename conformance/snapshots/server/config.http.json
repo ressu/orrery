@@ -1,0 +1,111 @@
+[
+  {
+    "step": 1,
+    "call": "server.config",
+    "result": {
+      "config": {
+        "server": {
+          "host": "string",
+          "port": "number",
+          "ssl_port": "number",
+          "enable_debug_logging": "bool",
+          "klippy_uds_address": "string",
+          "use_xheaders": "bool",
+          "max_upload_size": "number",
+          "ssl_certificate_path": "null",
+          "ssl_key_path": "null",
+          "route_prefix": "null",
+          "max_websocket_connections": "number"
+        },
+        "template": {},
+        "secrets": {
+          "secrets_path": "null"
+        },
+        "database": {
+          "database_path": "null",
+          "enable_database_debug": "bool"
+        },
+        "dbus_manager": {},
+        "file_manager": {
+          "enable_object_processing": "bool",
+          "default_metadata_parser_timeout": "number",
+          "file_system_observer": "string",
+          "enable_observer_warnings": "bool",
+          "enable_inotify_warnings": "bool",
+          "queue_gcode_uploads": "bool",
+          "check_klipper_config_path": "bool",
+          "config_path": "null",
+          "enable_config_write_access": "bool",
+          "log_path": "null"
+        },
+        "authorization": {
+          "login_timeout": "number",
+          "force_logins": "bool",
+          "default_source": "string",
+          "enable_api_key": "bool",
+          "max_login_attempts": "null",
+          "cors_domains": [],
+          "trusted_clients": [
+            "string"
+          ]
+        },
+        "klippy_apis": {},
+        "machine": {
+          "sudo_password": "null",
+          "provider": "string",
+          "shutdown_action": "string",
+          "force_validation": "bool",
+          "validate_service": "bool",
+          "validate_config": "bool"
+        },
+        "shell_command": {},
+        "data_store": {
+          "temperature_store_size": "number",
+          "gcode_store_size": "number"
+        },
+        "proc_stats": {},
+        "job_state": {},
+        "job_queue": {
+          "load_on_startup": "bool",
+          "automatic_transition": "bool",
+          "job_transition_delay": "number",
+          "job_transition_gcode": "string"
+        },
+        "history": {},
+        "http_client": {},
+        "announcements": {
+          "enable_moonlight": "bool",
+          "dev_mode": "bool",
+          "subscriptions": []
+        },
+        "webcam": {},
+        "extensions": {}
+      },
+      "orig": {
+        "DEFAULT": {},
+        "server": {
+          "host": "string",
+          "port": "string",
+          "klippy_uds_address": "string"
+        },
+        "machine": {
+          "provider": "string"
+        },
+        "authorization": {
+          "trusted_clients": "string"
+        },
+        "announcements": {
+          "enable_moonlight": "string"
+        }
+      },
+      "files": [
+        {
+          "filename": "string",
+          "sections": [
+            "string"
+          ]
+        }
+      ]
+    }
+  }
+]

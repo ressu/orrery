@@ -1,0 +1,3 @@
+# Klippy stays in `startup` for two seconds before becoming ready.
+capture: base_printer.capture.json
+startup_ms: 2000

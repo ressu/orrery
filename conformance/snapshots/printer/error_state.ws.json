@@ -1,0 +1,45 @@
+[
+  {
+    "step": 1,
+    "call": "server.info",
+    "result": {
+      "klippy_connected": "bool",
+      "klippy_state": "string",
+      "components": [
+        "string"
+      ],
+      "failed_components": [],
+      "registered_directories": [
+        "string"
+      ],
+      "warnings": [
+        "string"
+      ],
+      "websocket_count": "number",
+      "moonraker_version": "string",
+      "missing_klippy_requirements": [],
+      "api_version": [
+        "number"
+      ],
+      "api_version_string": "string"
+    }
+  },
+  {
+    "step": 2,
+    "call": "printer.info",
+    "result": {
+      "state": "string",
+      "state_message": "string",
+      "hostname": "string",
+      "klipper_path": "string",
+      "python_path": "string",
+      "process_id": "number",
+      "user_id": "number",
+      "group_id": "number",
+      "log_file": "string",
+      "config_file": "string",
+      "software_version": "string",
+      "cpu_info": "string"
+    }
+  }
+]

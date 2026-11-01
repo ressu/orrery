@@ -1,0 +1,22 @@
+[package]
+name = "conformance"
+description = "Black-box conformance suite for Moonraker-compatible servers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+fake-klippy.workspace = true
+orrery-proto.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+futures-util.workspace = true
+regex.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml_ng.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true

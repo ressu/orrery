@@ -1,0 +1,9 @@
+name: printer.restart restarts Klippy
+tags: [real-klippy]
+steps:
+  - call: printer.restart
+    expect: ok
+  - expect_klippy_request: {method: gcode/script, params: {script: RESTART}}
+  - call: server.info
+    retry_ms: 10000
+    expect: {klippy_state: ready}

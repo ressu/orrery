@@ -1,0 +1,8 @@
+name: JSON-RPC error responses
+transports: [ws]
+klippy: none
+steps:
+  - raw_ws: '{"jsonrpc": "2.0", "method": "no.such.method", "id": 7}'
+    expect: {jsonrpc: "2.0", id: 7, error: {code: -32601, message: $type:string}}
+  - raw_ws: 'this is not json'
+    expect: {jsonrpc: "2.0", error: {code: -32700}}

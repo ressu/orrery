@@ -1,0 +1,4 @@
+# Klippy started with a config error, like a printer.cfg typo.
+capture: base_printer.capture.json
+state: error
+state_message: "Option 'bad_option' is not valid in section 'printer'\n\nOnce the underlying issue is corrected, use the \"RESTART\"\ncommand to reload the config and restart the host software.\nPrinter is halted\n"

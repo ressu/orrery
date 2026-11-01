@@ -1,0 +1,9 @@
+name: Klippy started with a config error
+klippy: error
+wait_ready: false
+steps:
+  - call: server.info
+    retry_ms: 8000
+    expect: {klippy_connected: true, klippy_state: error}
+  - call: printer.info
+    expect: {state: error, state_message: "$regex:bad_option"}

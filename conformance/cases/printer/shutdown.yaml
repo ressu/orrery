@@ -1,0 +1,8 @@
+name: Klippy shutdown is broadcast
+transports: [ws]
+steps:
+  - klippy: {state: {state: shutdown, message: "MCU 'mcu' shutdown: Timer too close"}}
+  - expect_notification: notify_klippy_shutdown
+  - call: server.info
+    retry_ms: 2000
+    expect: {klippy_state: shutdown}

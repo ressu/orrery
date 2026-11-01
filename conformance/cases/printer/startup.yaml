@@ -1,0 +1,11 @@
+name: Klippy goes from startup to ready
+klippy: startup
+wait_ready: false
+transports: [ws]
+steps:
+  - call: server.info
+    expect: {klippy_state: $regex:^(startup|disconnected)$}
+  - expect_notification: notify_klippy_ready
+    within_ms: 10000
+  - call: server.info
+    expect: {klippy_state: ready}

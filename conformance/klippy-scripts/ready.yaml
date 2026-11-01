@@ -1,0 +1,19 @@
+# The default script: the fixture printer, recorded from real Klipper, in the `ready` state.
+capture: base_printer.capture.json
+gcode:
+  - match: '^SDCARD_PRINT_FILE FILENAME="?(?P<file>[^"]+)"?$'
+    set:
+      print_stats: {state: printing, filename: "{file}"}
+      virtual_sdcard: {is_active: true, file_path: "{file}"}
+      idle_timeout: {state: Printing}
+  - match: '^(CANCEL_PRINT|SDCARD_RESET_FILE)$'
+    set:
+      print_stats: {state: cancelled}
+      virtual_sdcard: {is_active: false}
+  - match: '^M117 (?P<msg>.*)$'
+    set:
+      display_status: {message: "{msg}"}
+  - match: '^ECHO_(?P<text>\S+)$'
+    respond: ["// {text}"]
+  - match: '^FAIL_ME$'
+    error: "Requested failure"

@@ -1,0 +1,7 @@
+name: server.info without Klippy
+klippy: none
+steps:
+  - call: server.info
+    expect:
+      klippy_connected: false
+      klippy_state: disconnected

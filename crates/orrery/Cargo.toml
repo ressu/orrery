@@ -1,0 +1,9 @@
+[package]
+name = "orrery"
+description = "Experimental Moonraker-compatible API server for Klipper"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]

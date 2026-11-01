@@ -1,0 +1,24 @@
+name: database post, get, list and delete
+tags: [real-klippy]
+steps:
+  - call: server.database.post_item
+    params: {namespace: conformance, key: settings.theme, value: {dark: true, accent: "#ff0000"}}
+    expect: {namespace: conformance, key: settings.theme, value: {dark: true, accent: "#ff0000"}}
+  - call: server.database.get_item
+    params: {namespace: conformance, key: settings}
+    expect: {namespace: conformance, key: settings, value: {theme: {dark: true, accent: "#ff0000"}}}
+  - call: server.database.list
+    expect: {namespaces: {$contains: [conformance]}}
+  - call: server.database.delete_item
+    params: {namespace: conformance, key: settings.theme}
+    expect: {value: {dark: true}}
+  # Moonraker turns a 404 into JSON-RPC's -32601 ("Method not found") on the websocket
+  # (common.py, JsonRPC.execute_method); HTTP keeps the status code.
+  - call: server.database.get_item
+    only: [http]
+    params: {namespace: conformance, key: settings.theme}
+    expect_error: {code: 404, message: "$regex:not found"}
+  - call: server.database.get_item
+    only: [ws]
+    params: {namespace: conformance, key: settings.theme}
+    expect_error: {code: -32601, message: "$regex:not found"}

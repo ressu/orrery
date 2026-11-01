@@ -1,0 +1,16 @@
+name: server.info with Klippy ready
+tags: [real-klippy]
+steps:
+  - call: server.info
+    expect:
+      klippy_connected: true
+      klippy_state: ready
+      components: {$contains: [database, file_manager, klippy_apis, history, job_queue, websockets]}
+      failed_components: []
+      registered_directories: {$contains: [config, logs, gcodes]}
+      warnings: $type:array
+      websocket_count: $type:number
+      moonraker_version: $type:string
+      missing_klippy_requirements: []
+      api_version: $type:array
+      api_version_string: $regex:^\d+\.\d+\.\d+$

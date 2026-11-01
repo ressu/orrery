@@ -1,0 +1,11 @@
+name: server.config reports parsed config
+tags: [real-klippy]
+ignore: [result.files.*.filename]
+steps:
+  - call: server.config
+    expect:
+      config:
+        server: {host: 127.0.0.1, port: $type:number}
+        authorization: $type:object
+      orig: $type:object
+      files: $type:array
