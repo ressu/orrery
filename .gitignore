@@ -3,3 +3,4 @@
 /.direnv
 .worktrees/
 /conformance/.work
+/spikes/*/target

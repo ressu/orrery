@@ -235,3 +235,10 @@ Tiers, in order:
 - **2026-11-01: the fake answers read-only endpoints from the capture.** `fake-klippy capture` also
   records `query_endstops/status` and `bed_mesh/dump_mesh`, and scripts can override endpoint
   answers with `responses:`.
+- **2026-11-01: datastore spike done; recommendation is redb.** See
+  [2026-11-01-datastore-spike.md](2026-11-01-datastore-spike.md). redb was faster on committed
+  writes (about 4x on NVMe) and kept history lists flat at 20,000 jobs with a hand-kept index. It
+  adds 0.98 MB to the aarch64 binary against 1.73 MB for SQLite, and it needs no C cross
+  compiler. Moonraker's database is read for import by a ~300-line pure-Rust SQLite reader, which
+  matched Python's `sqlite3` row for row on a database built by upstream Moonraker. Still to
+  check: the same numbers on a Pi's SD card.
