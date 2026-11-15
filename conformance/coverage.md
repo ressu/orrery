@@ -149,7 +149,7 @@ tokens, and API keys.
 | `machine.reboot`, `machine.shutdown` | To do (guarded; never run in tests) |
 | `machine.services.restart`, `.start`, `.stop` | To do (guarded; never run in tests) |
 | `machine.peripherals.usb`, `.serial`, `.video`, `.canbus` | To do |
-| `server.webcams.list`, `.post_item`, `.delete_item` | To do |
+| `server.webcams.list`, `.get_item`, `.post_item`, `.delete_item`, `.test` | Covered | `webcam/config`, `webcam/saved` |
 | `server.announcements.list`, `.dismiss` | To do |
 | `server.sensors.list` | Stub |
 
@@ -157,7 +157,7 @@ tokens, and API keys.
 |---|---|---|
 | `notify_proc_stat_update` | Covered | `machine/proc_stats` |
 | `notify_cpu_throttled` | Written | Needs a Raspberry Pi; not testable in the suite |
-| `notify_webcams_changed` | To do |
+| `notify_webcams_changed` | Covered | `webcam/saved` |
 | `notify_announcement_update`, `_dismissed`, `_wake` | To do |
 | `notify_service_state_changed` | To do |
 | `notify_sensor_update` | Stub |

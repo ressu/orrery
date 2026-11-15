@@ -1,0 +1,101 @@
+[
+  {
+    "step": 1,
+    "call": "server.webcams.list",
+    "result": {
+      "webcams": [
+        {
+          "name": "string",
+          "enabled": "bool",
+          "icon": "string",
+          "aspect_ratio": "string",
+          "target_fps": "number",
+          "target_fps_idle": "number",
+          "location": "string",
+          "service": "string",
+          "stream_url": "string",
+          "snapshot_url": "string",
+          "flip_horizontal": "bool",
+          "flip_vertical": "bool",
+          "rotation": "number",
+          "source": "string",
+          "extra_data": {},
+          "uid": "string"
+        }
+      ]
+    }
+  },
+  {
+    "step": 2,
+    "call": "server.webcams.get_item",
+    "result": {
+      "webcam": {
+        "name": "string",
+        "enabled": "bool",
+        "icon": "string",
+        "aspect_ratio": "string",
+        "target_fps": "number",
+        "target_fps_idle": "number",
+        "location": "string",
+        "service": "string",
+        "stream_url": "string",
+        "snapshot_url": "string",
+        "flip_horizontal": "bool",
+        "flip_vertical": "bool",
+        "rotation": "number",
+        "source": "string",
+        "extra_data": {},
+        "uid": "string"
+      }
+    }
+  },
+  {
+    "step": 3,
+    "call": "server.webcams.post_item",
+    "error": {
+      "code": 400
+    }
+  },
+  {
+    "step": 4,
+    "call": "server.webcams.delete_item",
+    "error": {
+      "code": 400
+    }
+  },
+  {
+    "step": 5,
+    "call": "server.webcams.get_item",
+    "error": {
+      "code": 404
+    }
+  },
+  {
+    "step": 6,
+    "call": "server.webcams.get_item",
+    "error": {
+      "code": 404
+    }
+  },
+  {
+    "step": 7,
+    "call": "server.webcams.post_item",
+    "error": {
+      "code": 400
+    }
+  },
+  {
+    "step": 8,
+    "call": "server.webcams.post_item",
+    "error": {
+      "code": 400
+    }
+  },
+  {
+    "step": 9,
+    "call": "server.webcams.post_item",
+    "error": {
+      "code": 400
+    }
+  }
+]

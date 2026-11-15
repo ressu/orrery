@@ -25,7 +25,7 @@ tokio.workspace = true
 tracing-appender = "0.2.5"
 tracing-subscriber.workspace = true
 tracing.workspace = true
-uuid = { version = "1.29.0", features = ["v4"] }
+uuid = { version = "1.29.0", features = ["v4", "v5"] }
 zip = { version = "9.2.1", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [dev-dependencies]

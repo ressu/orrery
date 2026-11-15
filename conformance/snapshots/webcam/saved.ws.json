@@ -1,0 +1,201 @@
+[
+  {
+    "step": 1,
+    "call": "server.webcams.post_item",
+    "result": {
+      "webcam": {
+        "name": "string",
+        "enabled": "bool",
+        "icon": "string",
+        "aspect_ratio": "string",
+        "target_fps": "number",
+        "target_fps_idle": "number",
+        "location": "string",
+        "service": "string",
+        "stream_url": "string",
+        "snapshot_url": "string",
+        "flip_horizontal": "bool",
+        "flip_vertical": "bool",
+        "rotation": "number",
+        "source": "string",
+        "extra_data": {
+          "a": "number"
+        },
+        "uid": "string"
+      }
+    }
+  },
+  {
+    "step": 3,
+    "call": "server.webcams.post_item",
+    "result": {
+      "webcam": {
+        "name": "string",
+        "enabled": "bool",
+        "icon": "string",
+        "aspect_ratio": "string",
+        "target_fps": "number",
+        "target_fps_idle": "number",
+        "location": "string",
+        "service": "string",
+        "stream_url": "string",
+        "snapshot_url": "string",
+        "flip_horizontal": "bool",
+        "flip_vertical": "bool",
+        "rotation": "number",
+        "source": "string",
+        "extra_data": {
+          "a": "number"
+        },
+        "uid": "string"
+      }
+    }
+  },
+  {
+    "step": 5,
+    "call": "server.webcams.list",
+    "result": {
+      "webcams": [
+        {
+          "name": "string",
+          "enabled": "bool",
+          "icon": "string",
+          "aspect_ratio": "string",
+          "target_fps": "number",
+          "target_fps_idle": "number",
+          "location": "string",
+          "service": "string",
+          "stream_url": "string",
+          "snapshot_url": "string",
+          "flip_horizontal": "bool",
+          "flip_vertical": "bool",
+          "rotation": "number",
+          "source": "string",
+          "extra_data": {
+            "a": "number"
+          },
+          "uid": "string"
+        }
+      ]
+    }
+  },
+  {
+    "step": 6,
+    "call": "server.database.get_item",
+    "result": {
+      "namespace": "string",
+      "key": "string",
+      "value": {
+        "name": "string",
+        "service": "string",
+        "targetFps": "number",
+        "urlStream": "string",
+        "urlSnapshot": "string",
+        "flipX": "bool",
+        "flipY": "bool",
+        "enabled": "bool",
+        "targetFpsIdle": "number",
+        "aspectRatio": "string",
+        "icon": "string",
+        "location": "string",
+        "rotation": "number",
+        "extra_data": {
+          "a": "number"
+        }
+      }
+    }
+  },
+  {
+    "step": 7,
+    "call": "server.webcams.test",
+    "result": {
+      "name": "string",
+      "snapshot_reachable": "bool",
+      "snapshot_url": "string",
+      "stream_url": "string"
+    }
+  },
+  {
+    "step": 8,
+    "call": "server.webcams.post_item",
+    "result": {
+      "webcam": {
+        "name": "string",
+        "enabled": "bool",
+        "icon": "string",
+        "aspect_ratio": "string",
+        "target_fps": "number",
+        "target_fps_idle": "number",
+        "location": "string",
+        "service": "string",
+        "stream_url": "string",
+        "snapshot_url": "string",
+        "flip_horizontal": "bool",
+        "flip_vertical": "bool",
+        "rotation": "number",
+        "source": "string",
+        "extra_data": {},
+        "uid": "string"
+      }
+    }
+  },
+  {
+    "step": 9,
+    "call": "server.webcams.post_item",
+    "error": {
+      "code": 400
+    }
+  },
+  {
+    "step": 10,
+    "call": "server.webcams.delete_item",
+    "result": {
+      "webcam": {
+        "name": "string",
+        "enabled": "bool",
+        "icon": "string",
+        "aspect_ratio": "string",
+        "target_fps": "number",
+        "target_fps_idle": "number",
+        "location": "string",
+        "service": "string",
+        "stream_url": "string",
+        "snapshot_url": "string",
+        "flip_horizontal": "bool",
+        "flip_vertical": "bool",
+        "rotation": "number",
+        "source": "string",
+        "extra_data": {
+          "a": "number"
+        },
+        "uid": "string"
+      }
+    }
+  },
+  {
+    "step": 12,
+    "call": "server.webcams.list",
+    "result": {
+      "webcams": [
+        {
+          "name": "string",
+          "enabled": "bool",
+          "icon": "string",
+          "aspect_ratio": "string",
+          "target_fps": "number",
+          "target_fps_idle": "number",
+          "location": "string",
+          "service": "string",
+          "stream_url": "string",
+          "snapshot_url": "string",
+          "flip_horizontal": "bool",
+          "flip_vertical": "bool",
+          "rotation": "number",
+          "source": "string",
+          "extra_data": {},
+          "uid": "string"
+        }
+      ]
+    }
+  }
+]

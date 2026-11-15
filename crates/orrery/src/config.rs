@@ -139,6 +139,11 @@ impl Config {
         Section { config: self, name: name.to_owned(), options }
     }
 
+    /// The names of sections that start with `prefix`, such as every `[webcam <name>]`.
+    pub fn section_names(&self, prefix: &str) -> Vec<String> {
+        self.sections.iter().map(|(n, _)| n).filter(|n| n.starts_with(prefix)).cloned().collect()
+    }
+
     /// `server.config`'s `orig`: every section's raw options, after a `DEFAULT` entry.
     pub fn orig(&self) -> Value {
         let mut out = Map::new();

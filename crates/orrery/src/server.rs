@@ -82,6 +82,7 @@ pub struct App {
     pub job_queue: crate::job_queue::JobQueue,
     pub machine: crate::machine::Machine,
     pub proc_stats: crate::proc_stats::ProcStats,
+    pub webcams: crate::webcam::Webcams,
     pub history: crate::history::History,
     pub cors: crate::access::Cors,
     warnings: Mutex<Vec<String>>,
@@ -101,6 +102,7 @@ const COMPONENTS: &[&str] = &[
     "job_state",
     "job_queue",
     "history",
+    "webcam",
 ];
 
 impl App {
@@ -112,6 +114,7 @@ impl App {
         let files = FileManager::new(&config, &paths)?;
         let machine = crate::machine::Machine::new(&config)?;
         let data_store = DataStore::new(&config)?;
+        let webcams = crate::webcam::Webcams::new(&config, &paths)?;
         let job_queue = crate::job_queue::JobQueue::new(&config)?;
         let (cors, warnings) = crate::access::Cors::new(&config);
         // Connection ids look like Moonraker's (Python object ids): large numbers.
@@ -131,6 +134,7 @@ impl App {
             job_queue,
             machine,
             proc_stats: crate::proc_stats::ProcStats::default(),
+            webcams,
             history: crate::history::History::default(),
             cors,
             warnings: Mutex::new(warnings),
@@ -144,6 +148,7 @@ impl App {
         crate::machine::register_endpoints(&app);
         crate::proc_stats::register_endpoints(&app);
         crate::job_queue::register_endpoints(&app);
+        crate::webcam::register_endpoints(&app);
         crate::history::register_endpoints(&app);
         Ok(app)
     }
@@ -159,6 +164,7 @@ impl App {
         crate::job_queue::start(self);
         crate::machine::start(self);
         crate::proc_stats::start(self);
+        crate::webcam::start(self);
     }
 
     pub fn add_warning(&self, message: impl Into<String>) {

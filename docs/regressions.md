@@ -146,6 +146,15 @@ change how safe or complete orrery is to run.
 - **Why:** service control comes later.
 - **Cases:** none.
 
+### webcam-test-no-tls: `server.webcams.test` can't reach `https` snapshots
+
+- **Area:** API
+- **Moonraker:** fetches the snapshot URL over HTTP or HTTPS to report `snapshot_reachable`.
+- **orrery:** has no TLS, so an `https` snapshot URL is always reported as unreachable. Plain
+  `http` URLs work as in Moonraker.
+- **Why:** orrery stays free of C dependencies, and the check is only a hint for clients.
+- **Cases:** none.
+
 ## Planned entries
 
 These differences are already decided in the plan. Each gets an entry when the code that

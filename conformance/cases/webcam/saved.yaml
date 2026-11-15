@@ -1,0 +1,38 @@
+name: add, rename, test, and delete a saved webcam
+transports: [ws]
+steps:
+  - call: server.webcams.post_item
+    params: {name: cam1, stream_url: "http://127.0.0.1:1/stream", snapshot_url: "http://127.0.0.1:1/snap", extra_data: {a: 1}}
+    expect: {webcam: {name: cam1, source: database, target_fps: 15, extra_data: {a: 1}, uid: $type:string}}
+    save: {uid: webcam.uid}
+  - expect_notification: notify_webcams_changed
+    match: [{webcams: [{name: cam1, uid: "${uid}"}]}]
+  - call: server.webcams.post_item
+    params: {uid: "${uid}", name: cam2, target_fps: 30, flip_vertical: true}
+    expect: {webcam: {name: cam2, target_fps: 30, flip_vertical: true, uid: "${uid}"}}
+  - expect_notification: notify_webcams_changed
+    match: [{webcams: [{name: cam2}]}]
+  - call: server.webcams.list
+    expect: {webcams: [{name: cam2, stream_url: "http://127.0.0.1:1/stream"}]}
+  - call: server.database.get_item
+    params: {namespace: webcams, key: "${uid}"}
+    expect:
+      value: {$exact: true, name: cam2, service: mjpegstreamer, targetFps: 30, urlStream: "http://127.0.0.1:1/stream",
+              urlSnapshot: "http://127.0.0.1:1/snap", flipX: false, flipY: true, enabled: true, targetFpsIdle: 5,
+              aspectRatio: "4:3", icon: mdiWebcam, location: printer, rotation: 0, extra_data: {a: 1}}
+  - call: server.webcams.test
+    params: {name: cam2}
+    expect: {$exact: true, name: cam2, snapshot_reachable: false, snapshot_url: "http://127.0.0.1:1/snap",
+             stream_url: "http://127.0.0.1:1/stream"}
+  - call: server.webcams.post_item
+    params: {name: cam3, stream_url: /s3}
+  - call: server.webcams.post_item
+    params: {uid: "${uid}", name: cam3}
+    expect_error: {code: 400, message: "Cannot rename webcam from 'cam2' to 'cam3'.  Webcam with requested name 'cam3' already exists."}
+  - call: server.webcams.delete_item
+    params: {uid: "${uid}"}
+    expect: {webcam: {name: cam2, uid: "${uid}"}}
+  - expect_notification: notify_webcams_changed
+    match: [{webcams: [{name: cam3}]}]
+  - call: server.webcams.list
+    expect: {webcams: [{name: cam3}]}

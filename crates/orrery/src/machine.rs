@@ -339,6 +339,37 @@ async fn check_virt_status(provider: &str) -> Value {
     json!({"virt_type": virt_type, "virt_identifier": virt_id})
 }
 
+/// The address this host uses to reach other networks, as Moonraker's `_find_public_ip`: the
+/// source address of a UDP socket "connected" to a broadcast or remote address. Nothing is sent.
+pub fn public_ip() -> Option<std::net::IpAddr> {
+    use std::net::UdpSocket;
+    let attempts: [(&str, &str, bool); 3] = [
+        ("0.0.0.0:0", "255.255.255.255:1", true),
+        ("0.0.0.0:0", "10.255.255.255:1", false),
+        ("[::]:0", "[2001:db8::1234]:1", false),
+    ];
+    attempts.into_iter().find_map(|(bind, target, broadcast)| {
+        let socket = UdpSocket::bind(bind).ok()?;
+        if broadcast {
+            socket.set_broadcast(true).ok()?;
+        }
+        socket.connect(target).ok()?;
+        Some(socket.local_addr().ok()?.ip())
+    })
+}
+
+/// Every address of this host's network interfaces.
+pub fn local_ips(app: &App) -> Vec<String> {
+    let info = app.machine.info();
+    info["network"]
+        .as_object()
+        .into_iter()
+        .flat_map(|n| n.values())
+        .flat_map(|i| i["ip_addresses"].as_array().cloned().unwrap_or_default())
+        .filter_map(|a| a["address"].as_str().map(str::to_owned))
+        .collect()
+}
+
 /// Moonraker's `_parse_network_interfaces`: reads `ip -json -det address`.
 pub async fn update_network(app: &Arc<App>) {
     let output = tokio::process::Command::new("ip").args(["-json", "-det", "address"]).output().await;

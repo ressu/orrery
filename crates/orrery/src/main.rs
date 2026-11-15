@@ -13,6 +13,7 @@ mod machine;
 mod proc_stats;
 mod server;
 mod web;
+mod webcam;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
