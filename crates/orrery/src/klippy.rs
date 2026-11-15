@@ -614,7 +614,10 @@ async fn print_start(app: Arc<App>, req: Request) -> ApiResult {
 pub async fn start_print(app: &Arc<App>, filename: &str) -> ApiResult {
     let name = filename.strip_prefix('/').unwrap_or(filename).replace('"', "\\\"");
     tracing::info!("Requesting Job Start, filename = {name}");
-    run_gcode(app, &format!("SDCARD_PRINT_FILE FILENAME=\"{name}\"")).await
+    let result = run_gcode(app, &format!("SDCARD_PRINT_FILE FILENAME=\"{name}\"")).await;
+    // Every client is trusted until orrery has authorization.
+    crate::history::job_requested(app, crate::access::TRUSTED_USER).await;
+    result
 }
 
 async fn restart(app: Arc<App>, gcode: &str) -> ApiResult {

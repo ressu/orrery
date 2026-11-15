@@ -79,6 +79,7 @@ pub struct App {
     pub files: FileManager,
     pub data_store: DataStore,
     pub job_state: JobState,
+    pub history: crate::history::History,
     pub cors: crate::access::Cors,
     warnings: Mutex<Vec<String>>,
 }
@@ -93,6 +94,7 @@ const COMPONENTS: &[&str] = &[
     "klippy_apis",
     "data_store",
     "job_state",
+    "history",
 ];
 
 impl App {
@@ -118,6 +120,7 @@ impl App {
             files,
             data_store,
             job_state: JobState::default(),
+            history: crate::history::History::default(),
             cors,
             warnings: Mutex::new(warnings),
         });
@@ -127,6 +130,7 @@ impl App {
         crate::data_store::register_endpoints(&app);
         crate::files::register_endpoints(&app);
         crate::access::register_endpoints(&app);
+        crate::history::register_endpoints(&app);
         Ok(app)
     }
 
@@ -136,6 +140,7 @@ impl App {
         tokio::spawn(forward_notifications(self.clone()));
         crate::data_store::start(self);
         crate::files::start(self);
+        crate::history::start(self);
         crate::job_state::start(self);
     }
 

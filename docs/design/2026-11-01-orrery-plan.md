@@ -279,3 +279,12 @@ Tiers, in order:
     `TimedRotatingFileHandler` does. `tracing-appender` only moves the writes off the async
     threads; its own rolling files always carry a date in the name, so the current file
     wouldn't have a fixed path.
+- **2026-11-15: history.** orrery records jobs and totals as Moonraker does, and passes every
+  history case on the fake Klippy.
+  - Job state turns `print_stats` changes into job events with Moonraker's rules and calls
+    history directly, so history sees events in order. Moonraker sends them through its event
+    loop, which is also in order.
+  - Jobs and totals are redb tables keyed like Moonraker's SQL tables: `(instance_id, job_id)`
+    and `(provider, field, instance_id)`. The import can then upsert rows by the same keys.
+  - New ids are one past the highest, as SQLite's rowid gives them, so deleting the newest job
+    frees its id.

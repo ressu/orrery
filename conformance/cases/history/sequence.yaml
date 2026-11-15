@@ -1,0 +1,39 @@
+name: pause, resume, a second job, list paging, and delete all
+transports: [ws]
+files:
+  gcodes/a.gcode: "G28\n"
+  gcodes/b.gcode: "G28\n"
+ignore: [result.jobs.*.start_time, result.jobs.*.end_time]
+steps:
+  - klippy: {update: {print_stats: {state: printing, filename: a.gcode, total_duration: 1.0}}}
+  - expect_notification: notify_history_changed
+    match: [{action: added, job: {filename: a.gcode, status: in_progress}}]
+  # Pausing and resuming the same file keeps the job going.
+  - klippy: {update: {print_stats: {state: paused}}}
+  - klippy: {update: {print_stats: {state: printing, total_duration: 5.0}}}
+  - klippy: {update: {print_stats: {state: complete, total_duration: 10.0, print_duration: 8.0}}}
+  - expect_notification: notify_history_changed
+    match: [{action: finished, job: {filename: a.gcode, status: completed, total_duration: 10.0}}]
+  - klippy: {update: {print_stats: {state: printing, filename: b.gcode, total_duration: 0.0, print_duration: 0.0}}}
+  - expect_notification: notify_history_changed
+    match: [{action: added, job: {filename: b.gcode}}]
+  - klippy: {update: {print_stats: {state: error, total_duration: 2.0}}}
+  - expect_notification: notify_history_changed
+    match: [{action: finished, job: {filename: b.gcode, status: error, total_duration: 2.0}}]
+  - call: server.history.list
+    expect: {count: 2, jobs: [{filename: b.gcode, status: error, exists: true}, {filename: a.gcode, status: completed}]}
+  - call: server.history.list
+    params: {order: asc, limit: 1, start: 1}
+    expect: {count: 1, jobs: [{filename: b.gcode}]}
+  - call: server.history.list
+    params: {order: sideways}
+    expect_error: {code: 400}
+  - call: server.history.totals
+    expect: {job_totals: {total_jobs: 2, total_time: 12.0, longest_job: 10.0, longest_print: 8.0}}
+  - call: server.history.reset_totals
+    expect: {last_totals: {total_jobs: 2}, last_auxiliary_totals: []}
+  - call: server.history.delete_job
+    params: {all: true}
+    expect: {deleted_jobs: ["000001", "000002"]}
+  - call: server.history.list
+    expect: {count: 0, jobs: []}

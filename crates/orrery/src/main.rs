@@ -4,6 +4,7 @@ mod config;
 mod data_store;
 mod database;
 mod files;
+mod history;
 mod job_state;
 mod klippy;
 mod logfile;
@@ -126,7 +127,8 @@ async fn run(paths: Paths, log_warning: Option<String>) -> Result<()> {
     let addr = format!("{host}:{port}");
     let listener = tokio::net::TcpListener::bind(&addr).await.with_context(|| format!("listening on {addr}"))?;
     tracing::info!("Listening on {addr}");
-    axum::serve(listener, web::router(app)).with_graceful_shutdown(shutdown_signal()).await?;
+    axum::serve(listener, web::router(app.clone())).with_graceful_shutdown(shutdown_signal()).await?;
+    history::on_exit(&app).await;
     Ok(())
 }
 

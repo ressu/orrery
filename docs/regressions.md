@@ -115,6 +115,16 @@ change how safe or complete orrery is to run.
 - **Why:** frontends download the log by its Moonraker address. Rollover can follow.
 - **Cases:** `files/log_downloads`.
 
+### history-aux-fields: history has no auxiliary fields
+
+- **Area:** history
+- **Moonraker:** the `[sensor]` and `[spoolman]` components add auxiliary fields to each job,
+  such as energy used or the spool, and their totals.
+- **orrery:** has neither component, so `auxiliary_data` and `auxiliary_totals` are always empty.
+  Jobs and totals are otherwise the same.
+- **Why:** both components are out of scope for now.
+- **Cases:** none.
+
 ### upload-queue: uploads can't add a print to the job queue
 
 - **Area:** files

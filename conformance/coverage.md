@@ -97,11 +97,11 @@ fixture in `fixtures/files/`.
 
 | Method | Status | Cases |
 |---|---|---|
-| `server.history.list` | Covered | `history/job_lifecycle`, `history/http` |
+| `server.history.list` | Covered | `history/job_lifecycle`, `history/http`, `history/sequence` |
 | `server.history.get_job` | Covered | `history/job_lifecycle`, `history/http` |
-| `server.history.delete_job` | Covered | `history/job_lifecycle` |
+| `server.history.delete_job` | Covered | `history/job_lifecycle`, `history/sequence` |
 | `server.history.totals` | Covered | `history/job_lifecycle`, `history/http` |
-| `server.history.reset_totals` | Covered | `history/job_lifecycle` |
+| `server.history.reset_totals` | Covered | `history/job_lifecycle`, `history/sequence` |
 | `server.job_queue.status` | Covered | `job_queue/queue`, `job_queue/start` |
 | `server.job_queue.post_job` | Covered | `job_queue/queue`, `job_queue/notifications` |
 | `server.job_queue.delete_job` | Covered | `job_queue/queue`, `job_queue/notifications` |

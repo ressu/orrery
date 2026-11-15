@@ -279,6 +279,15 @@ impl FileManager {
         self.metadata.lock().expect("metadata lock").get(rel).cloned()
     }
 
+    /// Records the latest job for a file, as Moonraker's history does with `print_start_time`
+    /// and `job_id`. Files without metadata are left alone.
+    pub fn set_job_info(&self, db: &Database, rel: &str, start_time: f64, job_id: &str) {
+        let Some(mut md) = self.get_metadata(rel) else { return };
+        md.insert("print_start_time".into(), json!(start_time));
+        md.insert("job_id".into(), json!(job_id));
+        self.store_metadata(db, rel, md);
+    }
+
     fn store_metadata(&self, db: &Database, rel: &str, md: Map<String, Value>) {
         if let Err(e) = db.local_put(METADATA_NAMESPACE, rel, &Value::Object(md.clone())) {
             tracing::warn!("Can't store metadata for {rel}: {e:#}");

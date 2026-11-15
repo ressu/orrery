@@ -161,6 +161,21 @@ impl Args {
         if self.0.contains_key(key) { self.int(key).map(Some) } else { Ok(None) }
     }
 
+    pub fn float(&self, key: &str) -> Result<f64, ApiError> {
+        let v = self.require(key)?;
+        match v {
+            Value::Number(n) => n.as_f64(),
+            Value::String(s) => s.trim().parse().ok(),
+            Value::Bool(b) => Some(f64::from(u8::from(*b))),
+            _ => None,
+        }
+        .ok_or_else(|| Self::convert_error(key, "<class 'float'>", v))
+    }
+
+    pub fn opt_float(&self, key: &str) -> Result<Option<f64>, ApiError> {
+        if self.0.contains_key(key) { self.float(key).map(Some) } else { Ok(None) }
+    }
+
     pub fn bool(&self, key: &str) -> Result<bool, ApiError> {
         let v = self.require(key)?;
         match v {

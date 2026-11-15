@@ -21,6 +21,16 @@ use crate::server::{App, Paths};
 const NAMESPACES: TableDefinition<(&str, &str), &[u8]> = TableDefinition::new("namespaces");
 /// orrery's own data, like gcode metadata, which the API doesn't reach. `(namespace, key) -> JSON`.
 const LOCAL: TableDefinition<(&str, &str), &[u8]> = TableDefinition::new("local");
+/// Moonraker's `job_history` table: `(instance_id, job_id) -> JSON` of the other columns.
+const JOB_HISTORY: TableDefinition<(&str, u64), &[u8]> = TableDefinition::new("job_history");
+/// Moonraker's `job_totals` table: `(provider, field, instance_id) -> JSON [maximum, total]`.
+const JOB_TOTALS: TableDefinition<(&str, &str, &str), &[u8]> = TableDefinition::new("job_totals");
+
+/// The `instance_id` orrery writes. Rows imported from other printers keep their own.
+pub const INSTANCE: &str = "default";
+
+/// One `job_totals` row: provider, field, maximum, total.
+pub type TotalsRow = (String, String, Value, Value);
 
 pub struct Database {
     db: redb::Database,
@@ -47,6 +57,8 @@ impl Database {
         let tx = db.begin_write()?;
         tx.open_table(NAMESPACES)?;
         tx.open_table(LOCAL)?;
+        tx.open_table(JOB_HISTORY)?;
+        tx.open_table(JOB_TOTALS)?;
         tx.commit()?;
         let mut namespaces: BTreeSet<String> = ["moonraker".to_owned(), "database".to_owned()].into();
         {
@@ -219,6 +231,123 @@ impl Database {
             let mut table = tx.open_table(LOCAL)?;
             for k in keys {
                 table.remove((namespace, k.as_str()))?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    // *** Job history ***
+
+    /// The id the next job gets: one past the highest, as SQLite's rowid does.
+    pub fn history_next_id(&self) -> Result<u64> {
+        let tx = self.db.begin_read()?;
+        let table = tx.open_table(JOB_HISTORY)?;
+        let last = table.range((INSTANCE, 0)..=(INSTANCE, u64::MAX))?.next_back().transpose()?;
+        Ok(last.map_or(1, |(k, _)| k.value().1 + 1))
+    }
+
+    pub fn history_put(&self, job_id: u64, row: &Value) -> Result<()> {
+        let tx = self.db.begin_write()?;
+        tx.open_table(JOB_HISTORY)?.insert((INSTANCE, job_id), serde_json::to_vec(row)?.as_slice())?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn history_get(&self, job_id: u64) -> Result<Option<Value>> {
+        let tx = self.db.begin_read()?;
+        let table = tx.open_table(JOB_HISTORY)?;
+        Ok(match table.get((INSTANCE, job_id))? {
+            Some(v) => Some(serde_json::from_slice(v.value())?),
+            None => None,
+        })
+    }
+
+    /// Calls `visit` for each job in id order until it returns false.
+    pub fn history_scan(&self, descending: bool, mut visit: impl FnMut(u64, Value) -> bool) -> Result<()> {
+        let tx = self.db.begin_read()?;
+        let table = tx.open_table(JOB_HISTORY)?;
+        let range = table.range((INSTANCE, 0)..=(INSTANCE, u64::MAX))?;
+        let iter: Box<dyn Iterator<Item = _>> = if descending { Box::new(range.rev()) } else { Box::new(range) };
+        for entry in iter {
+            let (k, v) = entry?;
+            if !visit(k.value().1, serde_json::from_slice(v.value())?) {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// Removes one job. Returns false if there was none.
+    pub fn history_delete(&self, job_id: u64) -> Result<bool> {
+        let tx = self.db.begin_write()?;
+        let removed = tx.open_table(JOB_HISTORY)?.remove((INSTANCE, job_id))?.is_some();
+        tx.commit()?;
+        Ok(removed)
+    }
+
+    /// Removes every job and returns their ids.
+    pub fn history_delete_all(&self) -> Result<Vec<u64>> {
+        let tx = self.db.begin_write()?;
+        let mut ids = Vec::new();
+        {
+            let mut table = tx.open_table(JOB_HISTORY)?;
+            for entry in table.extract_from_if((INSTANCE, 0)..=(INSTANCE, u64::MAX), |_, _| true)? {
+                ids.push(entry?.0.value().1);
+            }
+        }
+        tx.commit()?;
+        Ok(ids)
+    }
+
+    /// Changes the status of every job that has `from`. Returns their ids.
+    pub fn history_replace_status(&self, from: &str, to: &str) -> Result<Vec<u64>> {
+        let mut changed = Vec::new();
+        self.history_scan(false, |id, row| {
+            if row.get("status").and_then(Value::as_str) == Some(from) {
+                changed.push((id, row));
+            }
+            true
+        })?;
+        let tx = self.db.begin_write()?;
+        {
+            let mut table = tx.open_table(JOB_HISTORY)?;
+            for (id, row) in &mut changed {
+                row["status"] = json!(to);
+                table.insert((INSTANCE, *id), serde_json::to_vec(row)?.as_slice())?;
+            }
+        }
+        tx.commit()?;
+        Ok(changed.into_iter().map(|(id, _)| id).collect())
+    }
+
+    pub fn totals_load(&self) -> Result<Vec<TotalsRow>> {
+        let tx = self.db.begin_read()?;
+        let table = tx.open_table(JOB_TOTALS)?;
+        let mut out = Vec::new();
+        for entry in table.iter()? {
+            let (k, v) = entry?;
+            let (provider, field, instance) = k.value();
+            if instance != INSTANCE {
+                continue;
+            }
+            let (maximum, total): (Value, Value) = serde_json::from_slice(v.value())?;
+            out.push((provider.to_owned(), field.to_owned(), maximum, total));
+        }
+        Ok(out)
+    }
+
+    /// Replaces this instance's totals.
+    pub fn totals_save(&self, rows: &[TotalsRow]) -> Result<()> {
+        let tx = self.db.begin_write()?;
+        {
+            let mut table = tx.open_table(JOB_TOTALS)?;
+            table.retain(|(_, _, instance), _| instance != INSTANCE)?;
+            for (provider, field, maximum, total) in rows {
+                table.insert(
+                    (provider.as_str(), field.as_str(), INSTANCE),
+                    serde_json::to_vec(&(maximum, total))?.as_slice(),
+                )?;
             }
         }
         tx.commit()?;

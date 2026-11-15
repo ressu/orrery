@@ -14,7 +14,7 @@ use crate::api::{ApiError, ApiResult, Request, RequestType, Transports, handler}
 use crate::config::Config;
 use crate::server::App;
 
-const TRUSTED_USER: &str = "_TRUSTED_USER_";
+pub const TRUSTED_USER: &str = "_TRUSTED_USER_";
 
 /// When the trusted user was first seen, as Moonraker records it.
 static TRUSTED_SINCE: OnceLock<f64> = OnceLock::new();
