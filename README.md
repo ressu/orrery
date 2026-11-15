@@ -30,6 +30,7 @@ For the plan and the decisions made so far, see
 | `crates/conformance` | The conformance test runner |
 | `conformance/` | Test cases, fixtures, and recorded snapshots; see [conformance/README.md](conformance/README.md) |
 | `docs/regressions.md` | Known differences from Moonraker |
+| `docs/oddities.md` | Moonraker behaviour that looks odd but that orrery keeps on purpose |
 | `docs/design/` | The plan, its decision log, and design notes such as the datastore spike |
 | `spikes/` | Throwaway experiments, each a standalone crate outside the workspace |
 
