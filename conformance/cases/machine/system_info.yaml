@@ -1,0 +1,28 @@
+name: machine.system_info describes the host
+tags: [real-klippy]
+known_regression: no-python-info
+ignore:
+  - result.system_info.sd_info
+  - result.system_info.network
+  - result.system_info.canbus
+  - result.system_info.distribution.release_info
+steps:
+  - call: machine.system_info
+    expect:
+      system_info:
+        cpu_info:
+          cpu_count: $type:number
+          bits: $regex:^(32|64)bit$
+          processor: $type:string
+          total_memory: $type:number
+          memory_units: kB
+        distribution:
+          name: $type:string
+          id: $type:string
+          version_parts: {major: $type:string}
+          kernel_version: $type:string
+        virtualization: {virt_type: $type:string, virt_identifier: $type:string}
+        provider: none
+        available_services: []
+        service_state: {}
+        instance_ids: {moonraker: moonraker, klipper: klipper}

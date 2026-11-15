@@ -1,0 +1,20 @@
+[
+  {
+    "step": 2,
+    "call": "machine.proc_stats",
+    "result": {
+      "moonraker_stats": "any",
+      "throttled_state": "null",
+      "cpu_temp": "number",
+      "network": "any",
+      "system_cpu_usage": "any",
+      "system_uptime": "number",
+      "system_memory": {
+        "total": "number",
+        "available": "number",
+        "used": "number"
+      },
+      "websocket_connections": "number"
+    }
+  }
+]

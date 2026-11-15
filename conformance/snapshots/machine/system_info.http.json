@@ -1,0 +1,50 @@
+[
+  {
+    "step": 1,
+    "call": "machine.system_info",
+    "result": {
+      "system_info": {
+        "python": "any",
+        "cpu_info": {
+          "cpu_count": "number",
+          "bits": "string",
+          "processor": "string",
+          "cpu_desc": "string",
+          "serial_number": "string",
+          "hardware_desc": "string",
+          "model": "string",
+          "total_memory": "number",
+          "memory_units": "string"
+        },
+        "sd_info": "any",
+        "distribution": {
+          "name": "string",
+          "id": "string",
+          "version": "string",
+          "version_parts": {
+            "major": "string",
+            "minor": "string",
+            "build_number": "string"
+          },
+          "like": "string",
+          "codename": "string",
+          "release_info": "any",
+          "kernel_version": "string"
+        },
+        "virtualization": {
+          "virt_type": "string",
+          "virt_identifier": "string"
+        },
+        "network": "any",
+        "canbus": "any",
+        "provider": "string",
+        "available_services": [],
+        "service_state": {},
+        "instance_ids": {
+          "moonraker": "string",
+          "klipper": "string"
+        }
+      }
+    }
+  }
+]

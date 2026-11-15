@@ -17,7 +17,7 @@ image = { version = "0.25.10", default-features = false, features = ["png", "jpe
 percent-encoding = "2.3.2"
 redb = "4"
 regex.workspace = true
-rustix = { version = "1.1.6", features = ["fs"] }
+rustix = { version = "1.1.6", features = ["fs", "system", "time"] }
 serde_json.workspace = true
 sha2 = "0.11.1"
 tokio-util = { version = "0.7.20", features = ["io"] }

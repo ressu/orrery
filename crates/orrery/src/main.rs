@@ -9,6 +9,8 @@ mod job_queue;
 mod job_state;
 mod klippy;
 mod logfile;
+mod machine;
+mod proc_stats;
 mod server;
 mod web;
 

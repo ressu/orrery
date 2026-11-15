@@ -1,0 +1,21 @@
+name: machine.proc_stats and the once-a-second update
+transports: [ws]
+ignore: [result.network, result.system_cpu_usage, result.moonraker_stats, params.0.network, params.0.system_cpu_usage]
+steps:
+  - expect_notification: notify_proc_stat_update
+    within_ms: 3000
+    match:
+      - moonraker_stats: {time: $type:number, cpu_usage: $type:number, memory: $type:number, mem_units: kB}
+        network: $type:object
+        system_cpu_usage: $type:object
+        system_memory: {total: $type:number, available: $type:number, used: $type:number}
+        websocket_connections: 1
+  - call: machine.proc_stats
+    expect:
+      moonraker_stats: $type:array
+      throttled_state: null
+      network: $type:object
+      system_cpu_usage: $type:object
+      system_uptime: $type:number
+      system_memory: {total: $type:number}
+      websocket_connections: 1

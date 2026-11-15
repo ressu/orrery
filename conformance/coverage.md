@@ -142,10 +142,10 @@ tokens, and API keys.
 
 ## Machine, webcams, and announcements
 
-| Method | Status |
-|---|---|
-| `machine.system_info` | To do |
-| `machine.proc_stats` | To do |
+| Method | Status | Cases |
+|---|---|---|
+| `machine.system_info` | Covered | `machine/system_info` (known regression: `no-python-info`) |
+| `machine.proc_stats` | Covered | `machine/proc_stats` |
 | `machine.reboot`, `machine.shutdown` | To do (guarded; never run in tests) |
 | `machine.services.restart`, `.start`, `.stop` | To do (guarded; never run in tests) |
 | `machine.peripherals.usb`, `.serial`, `.video`, `.canbus` | To do |
@@ -153,10 +153,10 @@ tokens, and API keys.
 | `server.announcements.list`, `.dismiss` | To do |
 | `server.sensors.list` | Stub |
 
-| Notification | Status |
-|---|---|
-| `notify_proc_stat_update` | To do |
-| `notify_cpu_throttled` | To do |
+| Notification | Status | Cases |
+|---|---|---|
+| `notify_proc_stat_update` | Covered | `machine/proc_stats` |
+| `notify_cpu_throttled` | Written | Needs a Raspberry Pi; not testable in the suite |
 | `notify_webcams_changed` | To do |
 | `notify_announcement_update`, `_dismissed`, `_wake` | To do |
 | `notify_service_state_changed` | To do |

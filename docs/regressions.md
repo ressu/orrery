@@ -125,6 +125,27 @@ change how safe or complete orrery is to run.
 - **Why:** both components are out of scope for now.
 - **Cases:** none.
 
+### no-python-info: `machine.system_info` has no `python` field
+
+- **Area:** API
+- **Moonraker:** `system_info.python` gives the version of the Python that runs Moonraker.
+- **orrery:** leaves the field out. orrery isn't a Python program, and a made-up version would
+  mislead anyone who reads it.
+- **Why:** there's no true value to give.
+- **Cases:** `machine/system_info`.
+
+### no-service-control: no service list, reboot, or shutdown
+
+- **Area:** API
+- **Moonraker:** with a systemd or supervisord `provider`, `machine.system_info` lists the
+  services clients can control, with their state. `machine.services.*`, `machine.reboot`, and
+  `machine.shutdown` control them.
+- **orrery:** lists no services, as Moonraker does with `provider: none`, and has none of the
+  control endpoints yet. `instance_ids` are always `moonraker` and `klipper`. For
+  virtualization, orrery runs `systemd-detect-virt` instead of asking systemd over D-Bus.
+- **Why:** service control comes later.
+- **Cases:** none.
+
 ## Planned entries
 
 These differences are already decided in the plan. Each gets an entry when the code that

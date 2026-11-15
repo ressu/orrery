@@ -80,6 +80,8 @@ pub struct App {
     pub data_store: DataStore,
     pub job_state: JobState,
     pub job_queue: crate::job_queue::JobQueue,
+    pub machine: crate::machine::Machine,
+    pub proc_stats: crate::proc_stats::ProcStats,
     pub history: crate::history::History,
     pub cors: crate::access::Cors,
     warnings: Mutex<Vec<String>>,
@@ -93,7 +95,9 @@ const COMPONENTS: &[&str] = &[
     "database",
     "file_manager",
     "klippy_apis",
+    "machine",
     "data_store",
+    "proc_stats",
     "job_state",
     "job_queue",
     "history",
@@ -106,6 +110,7 @@ impl App {
         let socket = server.get_str("klippy_uds_address", &paths.data.join("comms/klippy.sock").to_string_lossy());
         let database = Database::open(&config, &paths)?;
         let files = FileManager::new(&config, &paths)?;
+        let machine = crate::machine::Machine::new(&config)?;
         let data_store = DataStore::new(&config)?;
         let job_queue = crate::job_queue::JobQueue::new(&config)?;
         let (cors, warnings) = crate::access::Cors::new(&config);
@@ -124,6 +129,8 @@ impl App {
             data_store,
             job_state: JobState::default(),
             job_queue,
+            machine,
+            proc_stats: crate::proc_stats::ProcStats::default(),
             history: crate::history::History::default(),
             cors,
             warnings: Mutex::new(warnings),
@@ -134,6 +141,8 @@ impl App {
         crate::data_store::register_endpoints(&app);
         crate::files::register_endpoints(&app);
         crate::access::register_endpoints(&app);
+        crate::machine::register_endpoints(&app);
+        crate::proc_stats::register_endpoints(&app);
         crate::job_queue::register_endpoints(&app);
         crate::history::register_endpoints(&app);
         Ok(app)
@@ -148,6 +157,8 @@ impl App {
         crate::history::start(self);
         crate::job_state::start(self);
         crate::job_queue::start(self);
+        crate::machine::start(self);
+        crate::proc_stats::start(self);
     }
 
     pub fn add_warning(&self, message: impl Into<String>) {
