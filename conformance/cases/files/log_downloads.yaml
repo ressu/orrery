@@ -1,0 +1,23 @@
+name: log file and download content types
+steps:
+  # The server's own log, at a fixed address outside the roots.
+  - download: moonraker.log
+    expect_content_type: text/plain
+  - upload: plain.gcode
+    fixture: plain.gcode
+    expect: {action: create_file}
+  - download: gcodes/plain.gcode
+    expect_fixture: plain.gcode
+    expect_content_type: text/plain
+  - upload: printer.cfg
+    content: "[printer]\n"
+    form: {root: config}
+    expect: {action: create_file}
+  - download: config/printer.cfg
+    expect_content_type: text/plain
+  - upload: notes.json
+    content: "{}"
+    form: {root: config}
+    expect: {action: create_file}
+  - download: config/notes.json
+    expect_content_type: application/json

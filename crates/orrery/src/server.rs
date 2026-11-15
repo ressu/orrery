@@ -21,11 +21,13 @@ use crate::klippy::Klippy;
 /// The API version orrery reports. It's Moonraker's, since orrery serves the same API.
 pub const API_VERSION: [u32; 3] = [1, 5, 0];
 
-/// Where orrery keeps its files, from `-d` and `-c`.
+/// Where orrery keeps its files, from `-d`, `-c`, and `-l`.
 #[derive(Debug, Clone)]
 pub struct Paths {
     pub data: PathBuf,
     pub config_file: PathBuf,
+    /// orrery's own log file, or `None` with `-n`.
+    pub log_file: Option<PathBuf>,
 }
 
 impl Paths {

@@ -5,6 +5,7 @@ mod database;
 mod files;
 mod job_state;
 mod klippy;
+mod logfile;
 mod server;
 mod web;
 
@@ -26,6 +27,12 @@ struct Cli {
     /// The config file. The default is config/moonraker.conf in the data folder.
     #[arg(short = 'c', long = "configfile", env = "MOONRAKER_CONFIG_PATH", value_name = "config file")]
     config_file: Option<PathBuf>,
+    /// The log file. The default is logs/orrery.log in the data folder.
+    #[arg(short = 'l', long = "logfile", value_name = "log file")]
+    log_file: Option<PathBuf>,
+    /// Log only to the terminal.
+    #[arg(short = 'n', long = "nologfile", conflicts_with = "log_file")]
+    no_log_file: bool,
     /// Log more detail.
     #[arg(short = 'v', long)]
     verbose: bool,
@@ -47,11 +54,58 @@ fn resolve_paths(cli: &Cli) -> Result<Paths> {
         Some(path) => expand_home(path)?,
         None => data.join("config/moonraker.conf"),
     };
-    Ok(Paths { data, config_file })
+    let log_file = match &cli.log_file {
+        _ if cli.no_log_file => None,
+        Some(path) => Some(expand_home(path)?),
+        None => Some(data.join("logs/orrery.log")),
+    };
+    Ok(Paths { data, config_file, log_file })
 }
 
-async fn run(cli: Cli) -> Result<()> {
-    let paths = resolve_paths(&cli)?;
+/// Logs to the terminal and, unless `-n` is given, to the log file. The returned guard flushes
+/// the file when it's dropped. A log file that can't be opened becomes a warning.
+fn init_logging(cli: &Cli, paths: &Paths) -> (Option<tracing_appender::non_blocking::WorkerGuard>, Option<String>) {
+    use tracing_subscriber::prelude::*;
+
+    let level = if cli.verbose { "debug" } else { "info" };
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| level.into());
+    let mut guard = None;
+    let mut warning = None;
+    let file_layer = paths.log_file.as_ref().and_then(|path| {
+        let header = format!(
+            "orrery {}\ndata path: {}\nconfig file: {}\nlog file: {}",
+            env!("CARGO_PKG_VERSION"),
+            paths.data.display(),
+            paths.config_file.display(),
+            path.display()
+        );
+        let opened =
+            path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| logfile::LogFile::open(path, header));
+        match opened {
+            Ok(file) => {
+                let (writer, g) = tracing_appender::non_blocking(file);
+                guard = Some(g);
+                Some(tracing_subscriber::fmt::layer().with_ansi(false).with_writer(writer))
+            }
+            Err(e) => {
+                warning = Some(format!(
+                    "Unable to create log file at '{}': {e}. Make sure orrery can write to the folder '{}'.",
+                    path.display(),
+                    path.parent().unwrap_or(Path::new("")).display()
+                ));
+                None
+            }
+        }
+    });
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(tracing_subscriber::fmt::layer().with_ansi(false))
+        .with(file_layer)
+        .init();
+    (guard, warning)
+}
+
+async fn run(paths: Paths, log_warning: Option<String>) -> Result<()> {
     for dir in [paths.data.clone(), paths.data.join("comms"), paths.logs_dir(), paths.gcodes_dir(), paths.config_dir()]
     {
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
@@ -63,6 +117,10 @@ async fn run(cli: Cli) -> Result<()> {
     drop(section);
     tracing::info!("orrery {} starting, data folder {}", env!("CARGO_PKG_VERSION"), paths.data.display());
     let app = App::new(config, paths)?;
+    if let Some(warning) = log_warning {
+        tracing::warn!("{warning}");
+        app.add_warning(warning);
+    }
     app.start();
     let addr = format!("{host}:{port}");
     let listener = tokio::net::TcpListener::bind(&addr).await.with_context(|| format!("listening on {addr}"))?;
@@ -82,9 +140,14 @@ async fn shutdown_signal() {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    let level = if cli.verbose { "debug" } else { "info" };
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| level.into());
-    tracing_subscriber::fmt().with_env_filter(filter).with_ansi(false).init();
+    let paths = match resolve_paths(&cli) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("orrery can't start: {e:#}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let (_log_guard, log_warning) = init_logging(&cli, &paths);
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(r) => r,
         Err(e) => {
@@ -92,7 +155,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match runtime.block_on(run(cli)) {
+    match runtime.block_on(run(paths, log_warning)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("orrery can't start: {e:#}");

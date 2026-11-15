@@ -224,11 +224,18 @@ impl HttpClient {
     }
 
     /// Downloads a file. Returns the status and body.
-    pub async fn download(&self, path: &str) -> Result<(u16, Vec<u8>)> {
+    /// Returns the status, the `Content-Type` header, and the body.
+    pub async fn download(&self, path: &str) -> Result<(u16, String, Vec<u8>)> {
         let url = format!("{}/server/files/{path}", self.base);
         let resp = self.client.get(url).timeout(CALL_TIMEOUT).send().await?;
         let status = resp.status().as_u16();
-        Ok((status, resp.bytes().await?.to_vec()))
+        let content_type = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|h| h.to_str().ok())
+            .unwrap_or_default()
+            .to_owned();
+        Ok((status, content_type, resp.bytes().await?.to_vec()))
     }
 
     async fn send(&self, req: reqwest::RequestBuilder) -> Result<Outcome> {

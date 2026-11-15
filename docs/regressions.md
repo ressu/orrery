@@ -88,15 +88,26 @@ change how safe or complete orrery is to run.
 - **Why:** these are the slicers most printers use. The others can be ported one at a time.
 - **Cases:** `files/metadata`, `files/metadata_plain`, `files/metascan`.
 
-### missing-file-roots: no `config_examples`, `docs`, or log file links
+### missing-file-roots: no `config_examples` or `docs` roots
 
 - **Area:** files
-- **Moonraker:** adds the `config_examples` and `docs` roots from Klipper's folder, and serves
-  `klippy.log` and `moonraker.log` at `/server/files/<name>`.
-- **orrery:** has the `config`, `logs`, and `gcodes` roots. Logs are still reachable through the
-  `logs` root.
+- **Moonraker:** adds the `config_examples` and `docs` roots from Klipper's folder.
+- **orrery:** has the `config`, `logs`, and `gcodes` roots.
 - **Why:** frontends work without them.
 - **Cases:** none yet.
+
+### log-file: orrery's log is `orrery.log`, with no log rollover endpoint
+
+- **Area:** files, server
+- **Moonraker:** writes `logs/moonraker.log` and serves it at `/server/files/moonraker.log`.
+  It starts a new file at local midnight and keeps two old ones. `server.logs.rollover` starts
+  a new Moonraker or Klipper log on request.
+- **orrery:** writes `logs/orrery.log`, so it doesn't mix with Moonraker's log, and serves it
+  at `/server/files/moonraker.log`. It starts a new file at midnight UTC and keeps two old
+  ones. `-l` sets another file and `-n` turns the file off, as in Moonraker. There's no
+  `server.logs.rollover`, so Fluidd's rollover button fails.
+- **Why:** frontends download the log by its Moonraker address. Rollover can follow.
+- **Cases:** `files/log_downloads`.
 
 ### upload-queue: uploads can't add a print to the job queue
 

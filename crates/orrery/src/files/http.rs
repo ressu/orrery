@@ -191,8 +191,12 @@ async fn finalize_upload(
 }
 
 /// The content type a browser needs for files it shows, like thumbnails and logs.
+/// The type Python's `mimetypes` gives, plus the text types Moonraker adds for `.log`,
+/// `.gcode`, and `.cfg`. Tornado sends any gzip file as `application/gzip`.
 fn content_type(path: &Path) -> &'static str {
     match super::extension(&path.to_string_lossy()).as_str() {
+        ".log" | ".gcode" | ".cfg" => "text/plain",
+        ".gz" => "application/gzip",
         ".png" => "image/png",
         ".jpg" | ".jpeg" => "image/jpeg",
         ".gif" => "image/gif",
@@ -248,6 +252,21 @@ fn parse_range(header: &str, size: u64) -> Option<Result<(u64, u64), ()>> {
 pub async fn file_request(app: &Arc<App>, method: &Method, path: &str, headers: &HeaderMap) -> Option<Response> {
     let rest = path.strip_prefix("/server/files/")?;
     let rest = percent_decode_str(rest).decode_utf8_lossy().into_owned();
+    // Moonraker serves these two log files at fixed addresses, outside the roots.
+    let fixed = match rest.as_str() {
+        "klippy.log" => Some(app.klippy.log_file()),
+        "moonraker.log" => Some(app.paths.log_file.clone().unwrap_or_default()),
+        _ => None,
+    };
+    if let Some(path) = fixed {
+        if method != Method::GET && method != Method::HEAD {
+            return Some(error_response(405, "Method Not Allowed"));
+        }
+        if !path.is_file() {
+            return Some(error_response(404, "Not Found"));
+        }
+        return Some(send_file(&path, headers, method == Method::HEAD).await);
+    }
     let root = rest.split('/').next().unwrap_or_default();
     app.files.root(root)?;
     if method == Method::DELETE {
@@ -273,7 +292,12 @@ async fn download(app: &Arc<App>, request: &str, headers: &HeaderMap, head_only:
     if let Err(e) = app.files.check_reserved(&full, false) {
         return api_error(e);
     }
-    let Ok(mut file) = tokio::fs::File::open(&full).await else {
+    send_file(&full, headers, head_only).await
+}
+
+/// Streams a file, or the single byte range the request asks for.
+async fn send_file(full: &Path, headers: &HeaderMap, head_only: bool) -> Response {
+    let Ok(mut file) = tokio::fs::File::open(full).await else {
         return error_response(404, "Not Found");
     };
     let size = file.metadata().await.map(|m| m.len()).unwrap_or(0);
@@ -291,10 +315,10 @@ async fn download(app: &Arc<App>, request: &str, headers: &HeaderMap, head_only:
     };
     let mut builder = Response::builder()
         .status(status)
-        .header(header::CONTENT_TYPE, content_type(&full))
+        .header(header::CONTENT_TYPE, content_type(full))
         .header(header::CONTENT_LENGTH, end - start)
         .header(header::ACCEPT_RANGES, "bytes")
-        .header(header::CONTENT_DISPOSITION, content_disposition(&full));
+        .header(header::CONTENT_DISPOSITION, content_disposition(full));
     if status == StatusCode::PARTIAL_CONTENT {
         builder = builder.header(header::CONTENT_RANGE, format!("bytes {start}-{}/{size}", end - 1));
     }
@@ -319,6 +343,14 @@ mod tests {
         assert_eq!(parse_range("bytes=-10", 100), Some(Ok((90, 100))));
         assert_eq!(parse_range("bytes=100-", 100), Some(Err(())));
         assert_eq!(parse_range("items=1-2", 100), None);
+    }
+
+    #[test]
+    fn content_types() {
+        assert_eq!(content_type(Path::new("logs/klippy.log")), "text/plain");
+        assert_eq!(content_type(Path::new("a.GCODE")), "text/plain");
+        assert_eq!(content_type(Path::new("crowsnest.log.2026-11-13.gz")), "application/gzip");
+        assert_eq!(content_type(Path::new("a.ufp")), "application/octet-stream");
     }
 
     #[test]

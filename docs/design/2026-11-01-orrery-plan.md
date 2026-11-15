@@ -271,3 +271,11 @@ Tiers, in order:
     the build still has no C code. The aarch64 binary grew from 4.25 MB to 6.5 MB.
   - Moonraker's thumbnail pattern needs a backreference, which Rust's `regex` lacks. orrery finds
     the closing tag by hand and checks the same characters.
+- **2026-11-15: log file.** orrery writes `logs/orrery.log` next to the terminal output and
+  serves it at `/server/files/moonraker.log`, the address frontends use. `klippy.log` is served
+  from the `log_file` that Klippy reports.
+  - The file isn't named `moonraker.log`, so switching back to Moonraker doesn't mix the logs.
+  - A small writer of its own starts a new file at midnight UTC and keeps two, as Moonraker's
+    `TimedRotatingFileHandler` does. `tracing-appender` only moves the writes off the async
+    threads; its own rolling files always carry a date in the name, so the current file
+    wouldn't have a fixed path.

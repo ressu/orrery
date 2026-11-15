@@ -360,17 +360,8 @@ async fn backup_request(app: Arc<App>, req: Request) -> ApiResult {
 /// `YYYYmmdd-HHMMSS` in UTC.
 pub fn timestamp() -> String {
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-    let (days, rem) = (secs / 86400, secs % 86400);
-    // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
-    let z = days as i64 + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + if month <= 2 { 1 } else { 0 };
+    let (year, month, day) = crate::logfile::civil(secs / 86400);
+    let rem = secs % 86400;
     format!("{year:04}{month:02}{day:02}-{:02}{:02}{:02}", rem / 3600, rem % 3600 / 60, rem % 60)
 }
 
@@ -380,12 +371,24 @@ mod tests {
 
     fn open(dir: &Path) -> Database {
         let config = Config::from_str("[server]\n").unwrap();
-        let paths = Paths { data: dir.to_path_buf(), config_file: dir.join("moonraker.conf") };
+        let paths = Paths { data: dir.to_path_buf(), config_file: dir.join("moonraker.conf"), log_file: None };
         Database::open(&config, &paths).unwrap()
     }
 
     fn keys(s: &str) -> Vec<String> {
         parse_key(&json!(s)).unwrap()
+    }
+
+    #[test]
+    fn floats_round_trip() {
+        // Without serde_json's float_roundtrip, about one in eight of these came back changed,
+        // so stored file times stopped matching and the files were parsed again at each start.
+        let dir = tempfile::tempdir().unwrap();
+        let db = open(dir.path());
+        let times: Vec<f64> = (0..1000).map(|i| 1_749_896_612.408_756_3 + f64::from(i) * 0.000_123_456_7).collect();
+        db.local_put("t", "times", &json!(times)).unwrap();
+        let items = db.local_items("t").unwrap();
+        assert_eq!(items[0].1, json!(times));
     }
 
     #[test]

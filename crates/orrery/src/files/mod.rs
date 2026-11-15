@@ -1030,7 +1030,8 @@ mod tests {
     #[test]
     fn request_paths() {
         let dir = tempfile::tempdir().unwrap();
-        let paths = Paths { data: dir.path().to_path_buf(), config_file: dir.path().join("moonraker.conf") };
+        let paths =
+            Paths { data: dir.path().to_path_buf(), config_file: dir.path().join("moonraker.conf"), log_file: None };
         let fm = FileManager::new(&Config::from_str("").unwrap(), &paths).unwrap();
         let (root, p) = fm.convert_request_path("gcodes/sub/a.gcode").unwrap();
         assert_eq!(root, "gcodes");

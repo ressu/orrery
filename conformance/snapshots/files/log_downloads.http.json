@@ -1,0 +1,62 @@
+[
+  {
+    "step": 1,
+    "call": null
+  },
+  {
+    "step": 2,
+    "call": "upload",
+    "result": {
+      "action": "string",
+      "item": {
+        "modified": "number",
+        "size": "number",
+        "permissions": "string",
+        "path": "string",
+        "root": "string"
+      },
+      "print_started": "bool",
+      "print_queued": "bool"
+    }
+  },
+  {
+    "step": 3,
+    "call": null
+  },
+  {
+    "step": 4,
+    "call": "upload",
+    "result": {
+      "action": "string",
+      "item": {
+        "modified": "number",
+        "size": "number",
+        "permissions": "string",
+        "path": "string",
+        "root": "string"
+      }
+    }
+  },
+  {
+    "step": 5,
+    "call": null
+  },
+  {
+    "step": 6,
+    "call": "upload",
+    "result": {
+      "action": "string",
+      "item": {
+        "modified": "number",
+        "size": "number",
+        "permissions": "string",
+        "path": "string",
+        "root": "string"
+      }
+    }
+  },
+  {
+    "step": 7,
+    "call": null
+  }
+]

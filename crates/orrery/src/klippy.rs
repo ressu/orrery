@@ -81,6 +81,8 @@ struct Inner {
     cache: Map<String, Value>,
     /// The `[virtual_sdcard] path` from Klipper's config, once known.
     sdcard_path: Option<String>,
+    /// The `log_file` from Klippy's `info`, once known.
+    log_file: Option<String>,
 }
 
 pub struct Klippy {
@@ -105,6 +107,7 @@ impl Klippy {
                 subscriptions: HashMap::new(),
                 cache: Map::new(),
                 sdcard_path: None,
+                log_file: None,
             }),
             subscription_lock: tokio::sync::Mutex::new(()),
         }
@@ -121,6 +124,11 @@ impl Klippy {
 
     pub fn is_connected(&self) -> bool {
         self.lock().writer.is_some()
+    }
+
+    /// Klipper's log file, as Klippy reported it. Moonraker falls back to `/tmp/klippy.log`.
+    pub fn log_file(&self) -> PathBuf {
+        PathBuf::from(self.lock().log_file.clone().unwrap_or_else(|| "/tmp/klippy.log".into()))
     }
 
     pub fn missing_requirements(&self) -> Vec<String> {
@@ -460,6 +468,9 @@ async fn initialize(app: Arc<App>) {
         let Ok(info) = app.klippy.request("info", params, None).await else { continue };
         if let Some(msg) = info.get("state_message").and_then(Value::as_str) {
             app.klippy.lock().state_message = msg.to_owned();
+        }
+        if let Some(log_file) = info.get("log_file").and_then(Value::as_str) {
+            app.klippy.lock().log_file = Some(log_file.to_owned());
         }
         let Some(state) = info.get("state").and_then(Value::as_str) else { continue };
         if !identified {

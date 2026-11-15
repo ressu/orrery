@@ -22,6 +22,7 @@ serde_json.workspace = true
 sha2 = "0.11.1"
 tokio-util = { version = "0.7.20", features = ["io"] }
 tokio.workspace = true
+tracing-appender = "0.2.5"
 tracing-subscriber.workspace = true
 tracing.workspace = true
 uuid = { version = "1.29.0", features = ["v4"] }

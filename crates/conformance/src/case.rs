@@ -263,6 +263,9 @@ pub struct DownloadStep {
     /// The body must be identical to this file under `conformance/fixtures/files/`.
     #[serde(default)]
     pub expect_fixture: Option<String>,
+    /// The `Content-Type` header to expect.
+    #[serde(default)]
+    pub expect_content_type: Option<String>,
 }
 
 fn default_status() -> u16 {
