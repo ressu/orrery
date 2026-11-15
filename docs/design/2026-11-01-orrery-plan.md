@@ -299,3 +299,21 @@ Tiers, in order:
     remove, and each run is recorded in `imports`.
   - The test database, `conformance/fixtures/import/seed.db`, was built by upstream Moonraker
     with the `import/seed` case. The runner's new `--keep-all` keeps a passing run's data folder.
+- **2026-11-16: plugins are separate programs.** orrery loads no plugin code: no shared
+  libraries, no WebAssembly, no scripting. Plugins are agents on orrery's socket, using
+  Moonraker's agent API plus endpoints under `/agent/<name>/`. Fluidd talks only to Moonraker's
+  built-in names, so an `[agent.<name>]` table in `orrery.toml` maps them to an agent
+  (`"server.spoolman" = "agent.spoolman"`), lists its component in `server.info`, and says
+  which history fields it may set. The owner decides what an agent takes over; the unix
+  socket's process ids stop other programs from using a configured agent's name. The section
+  also says how the agent runs: a `command` orrery starts, a `systemd_unit`, or neither. The
+  unix socket comes first. Agents on the local unix socket don't log in; remote agents on the
+  TCP port need an API key, so they wait for authorization. A trusted local socket comes later.
+  Agents may read orrery's config or their own; orrery's own agents use orrery's.
+- **2026-11-16: orrery's config is TOML.** orrery-only settings go in `orrery.toml`, next to
+  `moonraker.conf`, and win over it. `moonraker.conf` is only read, for convenience, and
+  Moonraker never sees `orrery.toml`, so switching back stays clean. Built-in defaults mean
+  someone moving from Moonraker needs no `orrery.toml` at all. Moonraker's INI format isn't
+  used for anything new. Spoolman is the first agent, in Rust, and moving existing features
+  out waits for its footprint numbers. See
+  [2026-11-15-plugin-interface.md](2026-11-15-plugin-interface.md).
