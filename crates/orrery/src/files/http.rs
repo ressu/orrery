@@ -184,9 +184,15 @@ async fn finalize_upload(
         let rel = fm.relative_path("gcodes", &dest);
         started = crate::klippy::start_print(app, &rel).await.is_ok();
     }
+    let mut queued = false;
+    if start_print && !started && fm.queue_gcodes {
+        let rel = fm.relative_path("gcodes", &dest);
+        crate::job_queue::queue_job(app, vec![rel], false, false).await?;
+        queued = true;
+    }
     let mut result = changed_event(app, "create_file", "gcodes", &dest, None);
     result.insert("print_started".into(), json!(started));
-    result.insert("print_queued".into(), json!(false));
+    result.insert("print_queued".into(), json!(queued));
     Ok(result)
 }
 

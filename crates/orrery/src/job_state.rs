@@ -9,8 +9,9 @@ use tokio::sync::broadcast;
 use crate::server::{App, Event};
 
 /// Moonraker's `JobEvent`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum JobEvent {
+    #[default]
     Standby,
     Started,
     Paused,
@@ -33,17 +34,30 @@ impl JobEvent {
             _ => return None,
         })
     }
+
+    pub fn is_printing(self) -> bool {
+        matches!(self, Self::Started | Self::Resumed)
+    }
+
+    pub fn aborted(self) -> bool {
+        matches!(self, Self::Error | Self::Cancelled)
+    }
 }
 
 #[derive(Default)]
 pub struct JobState {
     last_stats: Mutex<Map<String, Value>>,
+    last_event: Mutex<JobEvent>,
 }
 
 impl JobState {
     /// The latest `print_stats` fields.
     pub fn last_stats(&self) -> Map<String, Value> {
         self.last_stats.lock().expect("job state lock").clone()
+    }
+
+    pub fn last_event(&self) -> JobEvent {
+        *self.last_event.lock().expect("job state lock")
     }
 }
 
@@ -80,6 +94,7 @@ async fn follow_events(app: Arc<App>, mut rx: broadcast::Receiver<Event>) {
                     let mut last = app.job_state.last_stats.lock().expect("job state lock");
                     if matches!(last.get("state").and_then(Value::as_str), Some("printing" | "paused")) {
                         last.insert("state".into(), "error".into());
+                        *app.job_state.last_event.lock().expect("job state lock") = JobEvent::Error;
                     }
                 }
                 crate::history::finish_job(&app, "klippy_disconnect", None).await;
@@ -135,5 +150,7 @@ async fn send_job_event(app: &Arc<App>, state: &str, prev: &Map<String, Value>, 
         tracing::info!("Job Started: {}", new.get("filename").and_then(serde_json::Value::as_str).unwrap_or_default());
     }
     let Some(event) = JobEvent::from_state(state) else { return };
+    *app.job_state.last_event.lock().expect("job state lock") = event;
+    tokio::spawn(crate::job_queue::on_job_event(app.clone(), event));
     crate::history::on_job_event(app, event, prev, new).await;
 }

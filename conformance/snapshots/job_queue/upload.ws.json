@@ -1,0 +1,33 @@
+[
+  {
+    "step": 2,
+    "call": "upload",
+    "result": {
+      "action": "string",
+      "item": {
+        "modified": "number",
+        "size": "number",
+        "permissions": "string",
+        "path": "string",
+        "root": "string"
+      },
+      "print_started": "bool",
+      "print_queued": "bool"
+    }
+  },
+  {
+    "step": 3,
+    "call": "server.job_queue.status",
+    "result": {
+      "queued_jobs": [
+        {
+          "filename": "string",
+          "job_id": "string",
+          "time_added": "number",
+          "time_in_queue": "number"
+        }
+      ],
+      "queue_state": "string"
+    }
+  }
+]

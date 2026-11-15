@@ -5,6 +5,7 @@ mod data_store;
 mod database;
 mod files;
 mod history;
+mod job_queue;
 mod job_state;
 mod klippy;
 mod logfile;
@@ -128,6 +129,7 @@ async fn run(paths: Paths, log_warning: Option<String>) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(&addr).await.with_context(|| format!("listening on {addr}"))?;
     tracing::info!("Listening on {addr}");
     axum::serve(listener, web::router(app.clone())).with_graceful_shutdown(shutdown_signal()).await?;
+    job_queue::on_exit(&app).await;
     history::on_exit(&app).await;
     Ok(())
 }

@@ -253,6 +253,15 @@ impl Section<'_> {
         Ok(v)
     }
 
+    pub fn get_float(&self, key: &str, default: f64) -> Result<f64> {
+        let v = match self.raw(key) {
+            Some(s) => s.parse().map_err(|_| self.error(key, "expected a number"))?,
+            None => default,
+        };
+        self.record(key, json!(v));
+        Ok(v)
+    }
+
     pub fn get_bool(&self, key: &str, default: bool) -> Result<bool> {
         let v = match self.raw(key).map(str::to_ascii_lowercase).as_deref() {
             Some("true" | "yes" | "on" | "1") => true,

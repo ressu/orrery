@@ -79,6 +79,7 @@ pub struct App {
     pub files: FileManager,
     pub data_store: DataStore,
     pub job_state: JobState,
+    pub job_queue: crate::job_queue::JobQueue,
     pub history: crate::history::History,
     pub cors: crate::access::Cors,
     warnings: Mutex<Vec<String>>,
@@ -94,6 +95,7 @@ const COMPONENTS: &[&str] = &[
     "klippy_apis",
     "data_store",
     "job_state",
+    "job_queue",
     "history",
 ];
 
@@ -105,6 +107,7 @@ impl App {
         let database = Database::open(&config, &paths)?;
         let files = FileManager::new(&config, &paths)?;
         let data_store = DataStore::new(&config)?;
+        let job_queue = crate::job_queue::JobQueue::new(&config)?;
         let (cors, warnings) = crate::access::Cors::new(&config);
         // Connection ids look like Moonraker's (Python object ids): large numbers.
         let base = 0x7f00_0000_0000 + (std::process::id() as u64) * 0x1000;
@@ -120,6 +123,7 @@ impl App {
             files,
             data_store,
             job_state: JobState::default(),
+            job_queue,
             history: crate::history::History::default(),
             cors,
             warnings: Mutex::new(warnings),
@@ -130,6 +134,7 @@ impl App {
         crate::data_store::register_endpoints(&app);
         crate::files::register_endpoints(&app);
         crate::access::register_endpoints(&app);
+        crate::job_queue::register_endpoints(&app);
         crate::history::register_endpoints(&app);
         Ok(app)
     }
@@ -142,6 +147,7 @@ impl App {
         crate::files::start(self);
         crate::history::start(self);
         crate::job_state::start(self);
+        crate::job_queue::start(self);
     }
 
     pub fn add_warning(&self, message: impl Into<String>) {

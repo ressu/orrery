@@ -13,8 +13,8 @@ The work starts with a conformance suite that checks Moonraker's API from the ou
 Moonraker serves as the reference implementation.
 
 orrery connects to Klippy and serves the `server.*`, `printer.*`, `server.database.*`,
-`server.files.*`, and `server.history.*` APIs, with file upload and download. The job queue and
-authorization aren't written yet. **orrery has no authorization yet, so every client that can
+`server.files.*`, `server.history.*`, and `server.job_queue.*` APIs, with file upload and
+download. Authorization isn't written yet. **orrery has no authorization yet, so every client that can
 reach it has full access.** See
 [docs/regressions.md](docs/regressions.md).
 For the plan and the decisions made so far, see

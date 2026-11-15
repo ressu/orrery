@@ -1,0 +1,48 @@
+name: automatic transition, Klippy macros, jump, and pausing on a cancelled print
+transports: [ws]
+config: |
+  [job_queue]
+  automatic_transition: True
+files:
+  gcodes/a.gcode: "G28\n"
+  gcodes/b.gcode: "G28\n"
+steps:
+  - call: server.job_queue.post_job
+    params: {filenames: [a.gcode, b.gcode]}
+    expect: {queue_state: paused}
+  # A macro starts the queue with `action_call_remote_method("start_job_queue")`.
+  - klippy: {remote_method: {method: start_job_queue}}
+  - expect_klippy_request: {method: gcode/script, params: {script: 'SDCARD_PRINT_FILE FILENAME="a.gcode"'}}
+  - call: server.job_queue.status
+    retry_ms: 2000
+    expect: {queued_jobs: [{filename: b.gcode}], queue_state: ready}
+  # When the print completes, the next job starts.
+  - klippy: {update: {print_stats: {state: printing, filename: a.gcode, total_duration: 1.0}}}
+  - klippy: {update: {print_stats: {state: complete, total_duration: 2.0}}}
+  - expect_klippy_request: {method: gcode/script, params: {script: 'SDCARD_PRINT_FILE FILENAME="b.gcode"'}}
+  - call: server.job_queue.status
+    retry_ms: 2000
+    expect: {queued_jobs: [], queue_state: paused}
+  # Jobs added while printing make the queue ready.
+  - klippy: {update: {print_stats: {state: printing, filename: b.gcode, total_duration: 0.0}}}
+  - call: server.job_queue.post_job
+    params: {filenames: [a.gcode, b.gcode]}
+    save: {second: queued_jobs.1.job_id}
+  - call: server.job_queue.status
+    retry_ms: 2000
+    expect: {queue_state: ready}
+  - call: server.job_queue.jump
+    params: {job_id: "${second}"}
+    expect: {queued_jobs: [{filename: b.gcode}, {filename: a.gcode}]}
+  - call: server.job_queue.jump
+    params: {job_id: "nope"}
+    expect_error: {code: 400, message: "Invalid job id: nope"}
+  # A cancelled print pauses the queue.
+  - klippy: {update: {print_stats: {state: cancelled}}}
+  - call: server.job_queue.status
+    retry_ms: 2000
+    expect: {queued_jobs: [{filename: b.gcode}, {filename: a.gcode}], queue_state: paused}
+  - klippy: {remote_method: {method: pause_job_queue}}
+  - call: server.job_queue.delete_job
+    params: {all: true}
+    expect: {queued_jobs: [], queue_state: paused}

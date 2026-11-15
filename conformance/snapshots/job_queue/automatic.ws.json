@@ -1,0 +1,115 @@
+[
+  {
+    "step": 1,
+    "call": "server.job_queue.post_job",
+    "result": {
+      "queued_jobs": [
+        {
+          "filename": "string",
+          "job_id": "string",
+          "time_added": "number",
+          "time_in_queue": "number"
+        }
+      ],
+      "queue_state": "string"
+    }
+  },
+  {
+    "step": 4,
+    "call": "server.job_queue.status",
+    "result": {
+      "queued_jobs": [
+        {
+          "filename": "string",
+          "job_id": "string",
+          "time_added": "number",
+          "time_in_queue": "number"
+        }
+      ],
+      "queue_state": "string"
+    }
+  },
+  {
+    "step": 8,
+    "call": "server.job_queue.status",
+    "result": {
+      "queued_jobs": [],
+      "queue_state": "string"
+    }
+  },
+  {
+    "step": 10,
+    "call": "server.job_queue.post_job",
+    "result": {
+      "queued_jobs": [
+        {
+          "filename": "string",
+          "job_id": "string",
+          "time_added": "number",
+          "time_in_queue": "number"
+        }
+      ],
+      "queue_state": "string"
+    }
+  },
+  {
+    "step": 11,
+    "call": "server.job_queue.status",
+    "result": {
+      "queued_jobs": [
+        {
+          "filename": "string",
+          "job_id": "string",
+          "time_added": "number",
+          "time_in_queue": "number"
+        }
+      ],
+      "queue_state": "string"
+    }
+  },
+  {
+    "step": 12,
+    "call": "server.job_queue.jump",
+    "result": {
+      "queued_jobs": [
+        {
+          "filename": "string",
+          "job_id": "string",
+          "time_added": "number",
+          "time_in_queue": "number"
+        }
+      ],
+      "queue_state": "string"
+    }
+  },
+  {
+    "step": 13,
+    "call": "server.job_queue.jump",
+    "error": {
+      "code": 400
+    }
+  },
+  {
+    "step": 15,
+    "call": "server.job_queue.status",
+    "result": {
+      "queued_jobs": [
+        {
+          "filename": "string",
+          "job_id": "string",
+          "time_added": "number",
+          "time_in_queue": "number"
+        }
+      ],
+      "queue_state": "string"
+    }
+  },
+  {
+    "step": 17,
+    "call": "server.job_queue.delete_job",
+    "result": {
+      "queued_jobs": [],
+      "queue_state": "string"
+    }
+  }
+]

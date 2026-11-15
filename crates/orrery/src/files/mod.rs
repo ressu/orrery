@@ -46,6 +46,8 @@ pub struct FileManager {
     /// Metadata is parsed one file at a time.
     parse_lock: tokio::sync::Mutex<()>,
     pub max_upload_size: usize,
+    /// Uploads that ask to print go into the job queue when the print can't start.
+    pub queue_gcodes: bool,
 }
 
 /// The file extension, lowercase and with its dot, as Python's `os.path.splitext` gives it.
@@ -62,7 +64,7 @@ pub fn is_gcode(name: &str) -> bool {
 }
 
 /// Collapses `.` and `..` without touching the disk, as Python's `os.path.normpath` does.
-fn normalize(path: &Path) -> PathBuf {
+pub fn normalize(path: &Path) -> PathBuf {
     let mut out: Vec<Component> = Vec::new();
     for c in path.components() {
         match c {
@@ -111,7 +113,7 @@ impl FileManager {
     pub fn new(config: &Config, paths: &Paths) -> Result<Self> {
         let section = config.section("file_manager");
         let config_write = section.get_bool("enable_config_write_access", true)?;
-        section.get_bool("queue_gcode_uploads", false)?;
+        let queue_gcodes = section.get_bool("queue_gcode_uploads", false)?;
         section.get_bool("check_klipper_config_path", true)?;
         section.get_str("file_system_observer", "none");
         drop(section);
@@ -142,6 +144,7 @@ impl FileManager {
             op_lock: tokio::sync::Mutex::new(()),
             parse_lock: tokio::sync::Mutex::new(()),
             max_upload_size,
+            queue_gcodes,
         })
     }
 

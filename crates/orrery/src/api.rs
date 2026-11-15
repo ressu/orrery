@@ -176,6 +176,24 @@ impl Args {
         if self.0.contains_key(key) { self.float(key).map(Some) } else { Ok(None) }
     }
 
+    /// A list of strings, as `WebRequest.get_list`: a list, or a comma-separated string.
+    pub fn list(&self, key: &str) -> Result<Vec<String>, ApiError> {
+        match self.require(key)? {
+            Value::String(s) => Ok(s.split(',').map(str::trim).filter(|v| !v.is_empty()).map(str::to_owned).collect()),
+            Value::Array(items) => {
+                items.iter().map(|v| v.as_str().map(str::to_owned)).collect::<Option<Vec<_>>>().ok_or_else(|| {
+                    ApiError::bad_request(format!(
+                        "Invalid list format for argument '{key}', expected all values to be of type str."
+                    ))
+                })
+            }
+            other => Err(ApiError::bad_request(format!(
+                "Invalid value received for argument '{key}'.  Expected List type, received {}",
+                python_type(other)
+            ))),
+        }
+    }
+
     pub fn bool(&self, key: &str) -> Result<bool, ApiError> {
         let v = self.require(key)?;
         match v {
@@ -338,5 +356,9 @@ mod tests {
         assert!(a.bool("b").unwrap());
         assert_eq!(a.str("s").unwrap(), "3");
         assert_eq!(a.str("x").unwrap_err().message, "No data for argument: x");
+        let l = Args(json!({"s": "a.gcode, b.gcode,", "l": ["c"], "bad": [1]}).as_object().unwrap().clone());
+        assert_eq!(l.list("s").unwrap(), ["a.gcode", "b.gcode"]);
+        assert_eq!(l.list("l").unwrap(), ["c"]);
+        assert!(l.list("bad").is_err());
     }
 }

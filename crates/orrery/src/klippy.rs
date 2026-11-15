@@ -24,6 +24,8 @@ use orrery_proto::klippy as wire;
 
 const INIT_TIME: Duration = Duration::from_millis(250);
 /// Endpoints Moonraker uses itself and doesn't offer to clients.
+/// Methods Klippy's macros can call with `action_call_remote_method`.
+const REMOTE_METHODS: &[&str] = &["pause_job_queue", "start_job_queue"];
 const RESERVED_ENDPOINTS: &[&str] = &["list_endpoints", "gcode/subscribe_output", "register_remote_method"];
 /// Printer objects Moonraker needs for full function.
 const REQUIRED_OBJECTS: &[&str] = &["virtual_sdcard", "display_status", "pause_resume"];
@@ -127,6 +129,16 @@ impl Klippy {
     }
 
     /// Klipper's log file, as Klippy reported it. Moonraker falls back to `/tmp/klippy.log`.
+    /// Waits up to 20 seconds for a connected Klippy to finish starting, as Moonraker's
+    /// `wait_started`. Returns whether Klippy is connected.
+    pub async fn wait_started(&self) -> bool {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+        while self.is_connected() && self.lock().initializing && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        self.is_connected()
+    }
+
     pub fn log_file(&self) -> PathBuf {
         PathBuf::from(self.lock().log_file.clone().unwrap_or_else(|| "/tmp/klippy.log".into()))
     }
@@ -398,6 +410,12 @@ fn handle_message(app: &Arc<App>, msg: Value) {
                     app.send_event(Event::GcodeResponse(line.to_owned()));
                 }
             }
+            "pause_job_queue" => {
+                tokio::spawn(crate::job_queue::pause_queue(app.clone()));
+            }
+            "start_job_queue" => {
+                tokio::spawn(crate::job_queue::start_queue(app.clone()));
+            }
             other => tracing::info!("Unknown method received: {other}"),
         }
         return;
@@ -495,6 +513,12 @@ async fn initialize(app: Arc<App>) {
         let current = app.klippy.state().0;
         if current == KlippyState::Ready {
             verify_requirements(&app).await;
+            for method in REMOTE_METHODS {
+                let params = json!({"response_template": {"method": method}, "remote_method": method});
+                if let Err(e) = app.klippy.request("register_remote_method", params, None).await {
+                    tracing::warn!("Unable to register method '{method}': {e}");
+                }
+            }
             app.klippy.lock().initializing = false;
             tracing::info!("Klippy ready");
             app.send_event(Event::KlippyReady);

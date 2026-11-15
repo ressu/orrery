@@ -1,0 +1,13 @@
+name: an upload with print goes into the queue while a print runs
+transports: [ws]
+config: |
+  [file_manager]
+  queue_gcode_uploads: True
+steps:
+  - klippy: {update: {print_stats: {state: printing, filename: other.gcode}}}
+  - upload: cube.gcode
+    fixture: plain.gcode
+    form: {print: "true"}
+    expect: {print_started: false, print_queued: true, item: {path: cube.gcode}}
+  - call: server.job_queue.status
+    expect: {queued_jobs: [{filename: cube.gcode}], queue_state: paused}

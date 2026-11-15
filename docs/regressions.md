@@ -125,15 +125,6 @@ change how safe or complete orrery is to run.
 - **Why:** both components are out of scope for now.
 - **Cases:** none.
 
-### upload-queue: uploads can't add a print to the job queue
-
-- **Area:** files
-- **Moonraker:** with `queue_gcode_uploads: True`, an upload with `print=true` goes into the job
-  queue when a print can't start right away.
-- **orrery:** has no job queue yet, so `print_queued` is always false.
-- **Why:** the job queue comes later.
-- **Cases:** `files/upload_print` (the print-now part).
-
 ## Planned entries
 
 These differences are already decided in the plan. Each gets an entry when the code that
