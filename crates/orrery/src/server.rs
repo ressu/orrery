@@ -79,6 +79,7 @@ pub struct App {
     pub files: FileManager,
     pub data_store: DataStore,
     pub job_state: JobState,
+    pub cors: crate::access::Cors,
     warnings: Mutex<Vec<String>>,
 }
 
@@ -102,6 +103,7 @@ impl App {
         let database = Database::open(&config, &paths)?;
         let files = FileManager::new(&config, &paths)?;
         let data_store = DataStore::new(&config)?;
+        let (cors, warnings) = crate::access::Cors::new(&config);
         // Connection ids look like Moonraker's (Python object ids): large numbers.
         let base = 0x7f00_0000_0000 + (std::process::id() as u64) * 0x1000;
         let app = Arc::new(Self {
@@ -116,13 +118,15 @@ impl App {
             files,
             data_store,
             job_state: JobState::default(),
-            warnings: Mutex::new(Vec::new()),
+            cors,
+            warnings: Mutex::new(warnings),
         });
         app.register_endpoints();
         crate::klippy::register_endpoints(&app);
         crate::database::register_endpoints(&app);
         crate::data_store::register_endpoints(&app);
         crate::files::register_endpoints(&app);
+        crate::access::register_endpoints(&app);
         Ok(app)
     }
 

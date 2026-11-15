@@ -1,0 +1,11 @@
+name: trusted client user, info, and oneshot token
+steps:
+  - call: access.get_user
+    expect: {username: _TRUSTED_USER_, source: moonraker, created_on: $type:number}
+  - call: access.info
+    expect: {default_source: moonraker, available_sources: [moonraker], login_required: false, trusted: true}
+  # Frontends add this token to download links.
+  - call: access.oneshot_token
+    expect: "$regex:^[A-Z2-7]{32}$"
+  - call: access.users.list
+    expect: {users: []}

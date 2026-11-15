@@ -1,3 +1,4 @@
+mod access;
 mod api;
 mod config;
 mod data_store;

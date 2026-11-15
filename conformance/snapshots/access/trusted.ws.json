@@ -1,0 +1,35 @@
+[
+  {
+    "step": 1,
+    "call": "access.get_user",
+    "result": {
+      "username": "string",
+      "source": "string",
+      "created_on": "number"
+    }
+  },
+  {
+    "step": 2,
+    "call": "access.info",
+    "result": {
+      "default_source": "string",
+      "available_sources": [
+        "string"
+      ],
+      "login_required": "bool",
+      "trusted": "bool"
+    }
+  },
+  {
+    "step": 3,
+    "call": "access.oneshot_token",
+    "result": "string"
+  },
+  {
+    "step": 4,
+    "call": "access.users.list",
+    "result": {
+      "users": []
+    }
+  }
+]

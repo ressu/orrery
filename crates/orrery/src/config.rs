@@ -230,6 +230,20 @@ impl Section<'_> {
         v
     }
 
+    /// One item per line, as Moonraker's `getlist`. Blank lines are skipped.
+    pub fn get_list(&self, key: &str) -> Vec<String> {
+        let v: Vec<String> = self
+            .raw(key)
+            .unwrap_or_default()
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(str::to_owned)
+            .collect();
+        self.record(key, json!(v));
+        v
+    }
+
     pub fn get_int(&self, key: &str, default: i64) -> Result<i64> {
         let v = match self.raw(key) {
             Some(s) => s.parse().map_err(|_| self.error(key, "expected a whole number"))?,

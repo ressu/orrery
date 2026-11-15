@@ -24,7 +24,34 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/websocket", get(websocket))
         .route("/server/files/upload", post(crate::files::http::upload).layer(DefaultBodyLimit::max(upload_limit)))
         .fallback(http_request)
+        .layer(axum::middleware::from_fn_with_state(app.clone(), cors))
         .with_state(app)
+}
+
+/// Adds CORS headers for allowed origins and answers their preflight requests, as Moonraker's
+/// `_set_cors_headers` does.
+async fn cors(State(app): State<Arc<App>>, req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    let origin = req.headers().get(header::ORIGIN).cloned().filter(|o| o.to_str().is_ok_and(|o| app.cors.allows(o)));
+    let Some(origin) = origin else { return next.run(req).await };
+    let preflight = req.method() == Method::OPTIONS;
+    let private_network =
+        req.headers().get("Access-Control-Request-Private-Network").is_some_and(|v| v.as_bytes() == b"true");
+    let mut resp = if preflight { StatusCode::NO_CONTENT.into_response() } else { next.run(req).await };
+    let headers = resp.headers_mut();
+    headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);
+    if preflight {
+        headers.insert(header::ACCESS_CONTROL_ALLOW_METHODS, "GET, POST, PUT, DELETE, OPTIONS".parse().expect("valid"));
+        headers.insert(
+            header::ACCESS_CONTROL_ALLOW_HEADERS,
+            "Origin, Accept, Content-Type, X-Requested-With, X-CRSF-Token, Authorization, X-Access-Token, X-Api-Key"
+                .parse()
+                .expect("valid"),
+        );
+        if private_network {
+            headers.insert("Access-Control-Allow-Private-Network", "true".parse().expect("valid"));
+        }
+    }
+    resp
 }
 
 async fn websocket(State(app): State<Arc<App>>, ws: WebSocketUpgrade) -> Response {
