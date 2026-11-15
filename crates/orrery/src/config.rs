@@ -31,7 +31,7 @@ impl Config {
     }
 
     #[cfg(test)]
-    pub fn from_str(text: &str) -> Result<Self> {
+    pub fn parse(text: &str) -> Result<Self> {
         let mut config = Config::default();
         config.parse_text(text, Path::new("moonraker.conf"), &mut BTreeSet::new())?;
         Ok(config)
@@ -285,7 +285,7 @@ mod tests {
 
     #[test]
     fn options_comments_and_multiline() {
-        let c = Config::from_str(
+        let c = Config::parse(
             "# comment\n[server]\nhost: 0.0.0.0  # inline\nPort = 7125\n\n[authorization]\ntrusted_clients:\n  10.0.0.0/8\n  127.0.0.1\n",
         )
         .unwrap();
@@ -299,7 +299,7 @@ mod tests {
 
     #[test]
     fn missing_section_gives_defaults() {
-        let c = Config::from_str("[server]\n").unwrap();
+        let c = Config::parse("[server]\n").unwrap();
         assert!(!c.section("history").get_bool("x", false).unwrap());
         assert_eq!(c.parsed()["history"]["x"], json!(false));
     }

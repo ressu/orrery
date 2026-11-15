@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build orrery for a printer's CPU and copy the binary there.
+# Build orrery and orrery-import for a printer's CPU and copy them there.
 #
 # Usage:
 #   scripts/copy-to-printer.sh <ssh host>
@@ -8,7 +8,7 @@
 # Options:
 #   --disconnect  close the SSH connection. Without it, the connection closes 10 minutes after the last copy.
 #
-# The binary goes to ~/orrery-test/bin/orrery on the printer. It's copied only when it changed.
+# The binaries go to ~/orrery-test/bin on the printer. Each is copied only when it changed.
 # The script doesn't start orrery, and it doesn't touch Moonraker, Klipper, or printer_data.
 # Remove everything with: ssh <ssh host> 'rm -rf ~/orrery-test'
 #
@@ -61,11 +61,11 @@ if [ "$disconnect" = 1 ]; then
   exit 0
 fi
 
-# One call gets the CPU and the checksum of the binary that's on the printer now.
+# One call gets the CPU and the checksums of the binaries that are on the printer now.
+binaries=(orrery orrery-import)
 # shellcheck disable=SC2029 # The variables are meant to expand here, on this computer.
-info=$(ssh "$host" "mkdir -p $test_dir/bin && uname -m && { sha256sum $test_dir/bin/orrery 2>/dev/null || true; }")
+info=$(ssh "$host" "mkdir -p $test_dir/bin && uname -m && cd $test_dir/bin && { sha256sum ${binaries[*]} 2>/dev/null || true; }")
 arch=$(sed -n 1p <<<"$info")
-remote_sum=$(sed -n '2s/ .*//p' <<<"$info")
 case "$arch" in
   aarch64 | arm64) target=aarch64-unknown-linux-musl ;;
   armv7*) target=armv7-unknown-linux-musleabihf ;;
@@ -79,15 +79,18 @@ esac
 
 # cargo builds again only if the source changed.
 echo "==> Building for $arch ($target)"
-cargo build --quiet --release -p orrery --target "$target"
-binary="target/$target/release/orrery"
+cargo build --quiet --release -p orrery --bins --target "$target"
 
-if [ "$(sha256sum "$binary" | sed 's/ .*//')" = "$remote_sum" ]; then
-  echo "==> orrery on $host is up to date"
-else
-  echo "==> Copying orrery to $host:$test_dir/bin/"
-  # Copy to a temporary name, then rename, so a running orrery isn't overwritten mid-copy.
-  scp -q "$binary" "$host:orrery-test/bin/orrery.new"
-  ssh "$host" "chmod +x $test_dir/bin/orrery.new && mv $test_dir/bin/orrery.new $test_dir/bin/orrery"
-fi
+for name in "${binaries[@]}"; do
+  binary="target/$target/release/$name"
+  remote_sum=$(awk -v n="$name" '$2 == n { print $1 }' <<<"$info")
+  if [ "$(sha256sum "$binary" | sed 's/ .*//')" = "$remote_sum" ]; then
+    echo "==> $name on $host is up to date"
+  else
+    echo "==> Copying $name to $host:$test_dir/bin/"
+    # Copy to a temporary name, then rename, so a running orrery isn't overwritten mid-copy.
+    scp -q "$binary" "$host:orrery-test/bin/$name.new"
+    ssh "$host" "chmod +x $test_dir/bin/$name.new && mv $test_dir/bin/$name.new $test_dir/bin/$name"
+  fi
+done
 echo "    Run it with: ssh $host '$test_dir/bin/orrery'"

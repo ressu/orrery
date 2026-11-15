@@ -32,6 +32,9 @@ struct Cli {
     /// Keep the data directories of failed runs under conformance/.work/runs.
     #[arg(long)]
     keep: bool,
+    /// Keep the data directories of every run, for example to copy a database a case built.
+    #[arg(long)]
+    keep_all: bool,
     /// Run the `real-klippy` cases against real Klipper instead of the fake. Their response
     /// shapes are also checked against the snapshots, which were recorded with the fake.
     #[arg(long)]
@@ -79,6 +82,7 @@ async fn run(cli: Cli) -> Result<bool> {
         paths: paths.clone(),
         routes,
         keep_failed: cli.keep,
+        keep_all: cli.keep_all,
         real_klipper: cli.real_klipper,
     });
     let jobs = Arc::new(Semaphore::new(cli.jobs.max(1)));
@@ -140,7 +144,12 @@ fn report(cli: &Cli, cases: &[Case], results: &[RunResult]) -> bool {
             cell.0 += 1;
         }
         let status = match (&case.known_regression, r.passed()) {
-            (None, true) => continue,
+            (None, true) => {
+                if let Some(kept) = &r.kept {
+                    println!("pass: {} [{}]\n    data dir kept: {kept}", r.case_id, r.transport.as_str());
+                }
+                continue;
+            }
             (Some(id), true) => format!("PASS (known regression {id} no longer fails; remove the mark)"),
             (Some(id), false) => format!("known regression {id}"),
             (None, false) => {

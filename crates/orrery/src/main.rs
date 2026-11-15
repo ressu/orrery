@@ -1,28 +1,12 @@
-mod access;
-mod api;
-mod config;
-mod data_store;
-mod database;
-mod files;
-mod history;
-mod job_queue;
-mod job_state;
-mod klippy;
-mod logfile;
-mod machine;
-mod proc_stats;
-mod server;
-mod web;
-mod webcam;
-
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use clap::Parser;
 
-use crate::config::Config;
-use crate::server::{App, Paths};
+use orrery::config::Config;
+use orrery::server::{App, Paths};
+use orrery::{expand_home, history, job_queue, logfile, web};
 
 #[derive(Parser)]
 #[command(version, about = "Experimental Moonraker-compatible API server for Klipper")]
@@ -42,16 +26,6 @@ struct Cli {
     /// Log more detail.
     #[arg(short = 'v', long)]
     verbose: bool,
-}
-
-fn expand_home(path: &Path) -> Result<PathBuf> {
-    match path.strip_prefix("~") {
-        Ok(rest) => {
-            let home = std::env::var_os("HOME").context("can't expand ~: HOME isn't set")?;
-            Ok(PathBuf::from(home).join(rest))
-        }
-        Err(_) => Ok(path.to_path_buf()),
-    }
 }
 
 fn resolve_paths(cli: &Cli) -> Result<Paths> {

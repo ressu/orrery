@@ -18,13 +18,13 @@ use crate::config::Config;
 use crate::server::{App, Paths};
 
 /// `(namespace, key) -> JSON`.
-const NAMESPACES: TableDefinition<(&str, &str), &[u8]> = TableDefinition::new("namespaces");
+pub(crate) const NAMESPACES: TableDefinition<(&str, &str), &[u8]> = TableDefinition::new("namespaces");
 /// orrery's own data, like gcode metadata, which the API doesn't reach. `(namespace, key) -> JSON`.
-const LOCAL: TableDefinition<(&str, &str), &[u8]> = TableDefinition::new("local");
+pub(crate) const LOCAL: TableDefinition<(&str, &str), &[u8]> = TableDefinition::new("local");
 /// Moonraker's `job_history` table: `(instance_id, job_id) -> JSON` of the other columns.
-const JOB_HISTORY: TableDefinition<(&str, u64), &[u8]> = TableDefinition::new("job_history");
+pub(crate) const JOB_HISTORY: TableDefinition<(&str, u64), &[u8]> = TableDefinition::new("job_history");
 /// Moonraker's `job_totals` table: `(provider, field, instance_id) -> JSON [maximum, total]`.
-const JOB_TOTALS: TableDefinition<(&str, &str, &str), &[u8]> = TableDefinition::new("job_totals");
+pub(crate) const JOB_TOTALS: TableDefinition<(&str, &str, &str), &[u8]> = TableDefinition::new("job_totals");
 
 /// The `instance_id` orrery writes. Rows imported from other printers keep their own.
 pub const INSTANCE: &str = "default";
@@ -81,6 +81,16 @@ impl Database {
             this.put_record("moonraker", "instance_id", &json!("default"))?;
         }
         Ok(this)
+    }
+
+    /// The store's file.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// The redb database, for the import, which writes several tables in one transaction.
+    pub(crate) fn raw(&self) -> &redb::Database {
+        &self.db
     }
 
     fn get_record(&self, namespace: &str, key: &str) -> Result<Option<Value>> {
@@ -499,7 +509,7 @@ mod tests {
     use super::*;
 
     fn open(dir: &Path) -> Database {
-        let config = Config::from_str("[server]\n").unwrap();
+        let config = Config::parse("[server]\n").unwrap();
         let paths = Paths { data: dir.to_path_buf(), config_file: dir.join("moonraker.conf"), log_file: None };
         Database::open(&config, &paths).unwrap()
     }

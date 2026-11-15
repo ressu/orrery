@@ -146,6 +146,21 @@ change how safe or complete orrery is to run.
 - **Why:** service control comes later.
 - **Cases:** none.
 
+### import-gaps: what `orrery-import` doesn't bring over
+
+- **Area:** datastore import
+- **Moonraker:** keeps users, its own state, and the gcode metadata cache in `moonraker-sql.db`.
+- **orrery:** `orrery-import` skips these:
+  - Users and their API key, because orrery has no authorization yet. The import reports how
+    many users it skipped.
+  - The `moonraker` and `database` namespaces: Moonraker's own state, such as its instance id
+    and the update manager's data. orrery keeps its own.
+  - `gcode_metadata`: orrery reads the files again instead. It still copies each file's link to
+    its last print (`job_id` and `print_start_time`) when the file hasn't changed.
+  - The legacy LMDB database (`moonraker.db/`), from Moonraker before v0.9.
+- **Why:** users come with authorization. The rest belongs to Moonraker, or orrery rebuilds it.
+- **Cases:** none; the import's unit tests read `conformance/fixtures/import/seed.db`.
+
 ### webcam-test-no-tls: `server.webcams.test` can't reach `https` snapshots
 
 - **Area:** API

@@ -288,3 +288,14 @@ Tiers, in order:
     and `(provider, field, instance_id)`. The import can then upsert rows by the same keys.
   - New ids are one past the highest, as SQLite's rowid gives them, so deleting the newest job
     frees its id.
+- **2026-11-15: database import.** `orrery-import` is a second binary in the `orrery` crate,
+  which is now a library with two binaries. It reads `moonraker-sql.db` with the spike's SQLite
+  reader and writes the store in one redb transaction, so `--dry-run` rolls it back.
+  - Moonraker writes `instance_id = "default"` on every history row, the same as orrery, so the
+    plan's idea that instance ids keep printers apart doesn't hold. A job orrery recorded itself
+    moves to a new id when an imported job has its id, instead of being overwritten. Imported
+    jobs keep Moonraker's ids, so frontends' links to them still work.
+  - Every imported row is listed in an `imported_rows` table, so `--replace` knows what to
+    remove, and each run is recorded in `imports`.
+  - The test database, `conformance/fixtures/import/seed.db`, was built by upstream Moonraker
+    with the `import/seed` case. The runner's new `--keep-all` keeps a passing run's data folder.

@@ -21,11 +21,39 @@ reach it has full access.** See
 For the plan and the decisions made so far, see
 [docs/design/2026-11-01-orrery-plan.md](docs/design/2026-11-01-orrery-plan.md).
 
+## Moving from Moonraker
+
+`orrery-import` copies Moonraker's settings, webcams, and print history into orrery's store. It
+only reads Moonraker's database, so Moonraker keeps working as before.
+
+1. Stop Moonraker and orrery.
+2. Copy the database, so the import never reads the file Moonraker uses:
+
+   ```
+   cp ~/printer_data/database/moonraker-sql.db ~/moonraker-sql.copy.db
+   ```
+
+3. See what the import would change:
+
+   ```
+   orrery-import --dry-run ~/moonraker-sql.copy.db
+   ```
+
+4. Import, then start orrery:
+
+   ```
+   orrery-import ~/moonraker-sql.copy.db
+   ```
+
+Running the import again changes nothing, and print jobs orrery recorded itself are kept. To
+start over from the copy, add `--replace`: it first removes everything earlier imports wrote.
+Users aren't imported yet. See [docs/regressions.md](docs/regressions.md), `import-gaps`.
+
 ## Layout
 
 | Path | Contents |
 |---|---|
-| `crates/orrery` | The server |
+| `crates/orrery` | The server, `orrery`, and the database import, `orrery-import` |
 | `crates/orrery-proto` | Shared wire formats: Klippy socket framing and JSON-RPC envelopes |
 | `crates/fake-klippy` | A scriptable stand-in for Klipper's API socket |
 | `crates/conformance` | The conformance test runner |

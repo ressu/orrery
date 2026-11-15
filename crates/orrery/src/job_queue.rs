@@ -401,9 +401,9 @@ mod tests {
 
     #[test]
     fn rejects_zero_delay() {
-        let c = Config::from_str("[job_queue]\njob_transition_delay: 0\n").unwrap();
+        let c = Config::parse("[job_queue]\njob_transition_delay: 0\n").unwrap();
         assert!(JobQueue::new(&c).is_err());
-        let c = Config::from_str("[job_queue]\nautomatic_transition: true\n").unwrap();
+        let c = Config::parse("[job_queue]\nautomatic_transition: true\n").unwrap();
         let q = JobQueue::new(&c).unwrap();
         assert!(q.automatic);
         assert_eq!(q.job_delay, 0.01);

@@ -165,7 +165,7 @@ mod tests {
     use super::*;
 
     fn cors(text: &str) -> Cors {
-        let (cors, warnings) = Cors::new(&Config::from_str(text).unwrap());
+        let (cors, warnings) = Cors::new(&Config::parse(text).unwrap());
         assert!(warnings.is_empty(), "{warnings:?}");
         cors
     }
@@ -187,7 +187,7 @@ mod tests {
         // Without cors_domains, Moonraker sends no CORS headers at all.
         assert!(!cors("[authorization]\ntrusted_clients:\n  192.168.1.0/24\n").allows("http://192.168.1.50"));
         let (_, warnings) =
-            Cors::new(&Config::from_str("[authorization]\ncors_domains:\n  http://a.*\n  http://b.lan/\n").unwrap());
+            Cors::new(&Config::parse("[authorization]\ncors_domains:\n  http://a.*\n  http://b.lan/\n").unwrap());
         assert_eq!(warnings.len(), 2);
     }
 

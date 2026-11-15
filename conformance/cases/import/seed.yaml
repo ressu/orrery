@@ -1,0 +1,37 @@
+name: builds the database the import tests read
+description: |
+  Run against the reference with `--keep-all` to rebuild conformance/fixtures/import/seed.db; see
+  conformance/fixtures/import/README.md.
+transports: [ws]
+files:
+  gcodes/a.gcode: "G28\n"
+  gcodes/b.gcode: "G28\n"
+steps:
+  - call: server.database.post_item
+    params: {namespace: fluidd, key: uiSettings, value: {general: {printerName: seed, darkMode: true}, theme: {color: "#2196F3"}}}
+  - call: server.database.post_item
+    params: {namespace: seed, key: int, value: 42}
+  - call: server.database.post_item
+    params: {namespace: seed, key: negative, value: -7}
+  - call: server.database.post_item
+    params: {namespace: seed, key: float, value: 1.5}
+  - call: server.database.post_item
+    params: {namespace: seed, key: bool, value: true}
+  - call: server.database.post_item
+    params: {namespace: seed, key: string, value: "hello, wörld"}
+  - call: server.database.post_item
+    params: {namespace: seed, key: list, value: [1, "a", null, {b: 2}]}
+  - call: server.database.post_item
+    params: {namespace: seed, key: nested.deeper.leaf, value: "x"}
+  - call: server.webcams.post_item
+    params: {name: front, stream_url: /webcam/?action=stream, snapshot_url: /webcam/?action=snapshot, rotation: 180}
+  - klippy: {update: {print_stats: {state: printing, filename: a.gcode, total_duration: 1.0}}}
+  - klippy: {update: {print_stats: {state: complete, total_duration: 120.5, print_duration: 100.25, filament_used: 512.75}}}
+  - expect_notification: notify_history_changed
+    match: [{action: finished, job: {filename: a.gcode, status: completed}}]
+  - klippy: {update: {print_stats: {state: printing, filename: b.gcode, total_duration: 0.0, print_duration: 0.0, filament_used: 0.0}}}
+  - klippy: {update: {print_stats: {state: cancelled, total_duration: 30.0, print_duration: 20.0, filament_used: 10.0}}}
+  - expect_notification: notify_history_changed
+    match: [{action: finished, job: {filename: b.gcode, status: cancelled}}]
+  - call: server.history.list
+    expect: {count: 2}

@@ -21,6 +21,8 @@ pub struct Settings {
     pub routes: HashMap<String, Route>,
     /// Keep data directories of failed runs for debugging.
     pub keep_failed: bool,
+    /// Keep data directories of every run.
+    pub keep_all: bool,
     /// Use real Klipper instead of the fake. Only `real-klippy` cases are run this way.
     pub real_klipper: bool,
 }
@@ -32,7 +34,7 @@ pub struct RunResult {
     pub failures: Vec<String>,
     /// Call outcomes in step order, for snapshots: `{"step", "call", "result" | "error"}`.
     pub transcript: Vec<Value>,
-    /// Data directory left behind for a failed run, when `keep_failed` is set.
+    /// Data directory left behind, when `keep_failed` or `keep_all` is set.
     pub kept: Option<String>,
 }
 
@@ -55,7 +57,7 @@ pub async fn run_case(settings: &Settings, case: &Case, transport: Transport) ->
     if let Err(e) = run_steps(settings, case, transport, &data, &mut result).await {
         result.failures.push(format!("{e:#}"));
     }
-    if !result.passed() && settings.keep_failed {
+    if settings.keep_all || (!result.passed() && settings.keep_failed) {
         let path = data.dir.keep();
         result.kept = Some(path.display().to_string());
     }

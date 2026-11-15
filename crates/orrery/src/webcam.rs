@@ -503,7 +503,7 @@ mod tests {
 
     #[test]
     fn config_webcam_uid_matches_moonraker() {
-        let config = Config::from_str("[webcam front]\nstream_url: /webcam/?action=stream\n").unwrap();
+        let config = Config::parse("[webcam front]\nstream_url: /webcam/?action=stream\n").unwrap();
         let instance = uuid::Uuid::parse_str("8d3c9b1f6a2e4f0b9c7d5e3a1b2c4d6e").unwrap();
         let cam = WebCam::from_config(&config, "webcam front", &instance).unwrap();
         assert_eq!(cam.name, "front");
