@@ -28,6 +28,7 @@ tracing-subscriber.workspace = true
 tracing.workspace = true
 uuid = { version = "1.29.0", features = ["v4", "v5"] }
 zip = { version = "9.2.1", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+toml = { version = "1.2.1", default-features = false, features = ["parse", "preserve_order", "serde"] }
 
 [dev-dependencies]
 tempfile.workspace = true

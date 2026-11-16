@@ -52,6 +52,27 @@ Running the import again changes nothing, and print jobs orrery recorded itself 
 start over from the copy, add `--replace`: it first removes everything earlier imports wrote.
 Users aren't imported yet. See [docs/regressions.md](docs/regressions.md), `import-gaps`.
 
+## Configuration
+
+orrery reads `moonraker.conf`, so a Moonraker setup works as it is. orrery's own settings go in
+`orrery.toml`, next to `moonraker.conf` in the config folder. The file is optional, and when
+both files set an option, `orrery.toml` wins. Moonraker never reads `orrery.toml`, so switching
+back to Moonraker stays clean. `--orrery-config <path>` reads it from somewhere else.
+
+`orrery.toml` uses Moonraker's section and option names. A section with a name, such as
+`[webcam front]`, is a table inside a table:
+
+```toml
+[server]
+port = 7125
+
+[webcam.front]
+service = "mjpegstreamer"
+stream_url = "/webcam/?action=stream"
+```
+
+Values have TOML types, so `port = "7125"` is an error: orrery expects a number there.
+
 ## Layout
 
 | Path | Contents |

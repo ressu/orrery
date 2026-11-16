@@ -17,6 +17,10 @@ struct Cli {
     /// The config file. The default is config/moonraker.conf in the data folder.
     #[arg(short = 'c', long = "configfile", env = "MOONRAKER_CONFIG_PATH", value_name = "config file")]
     config_file: Option<PathBuf>,
+    /// orrery's own config, which wins over the config file. The default is orrery.toml next to
+    /// the config file. It's optional, unless this option names it.
+    #[arg(long = "orrery-config", env = "ORRERY_CONFIG", value_name = "orrery.toml")]
+    orrery_config: Option<PathBuf>,
     /// The log file. The default is logs/orrery.log in the data folder.
     #[arg(short = 'l', long = "logfile", value_name = "log file")]
     log_file: Option<PathBuf>,
@@ -89,12 +93,25 @@ fn init_logging(cli: &Cli, paths: &Paths) -> (Option<tracing_appender::non_block
     (guard, warning)
 }
 
-async fn run(paths: Paths, socket_path: PathBuf, log_warning: Option<String>) -> Result<()> {
+/// Where `orrery.toml` is, and whether it must exist.
+fn orrery_config_path(cli: &Cli, paths: &Paths) -> Result<(PathBuf, bool)> {
+    match &cli.orrery_config {
+        Some(path) => Ok((expand_home(path)?, true)),
+        None => Ok((paths.config_file.with_file_name("orrery.toml"), false)),
+    }
+}
+
+async fn run(paths: Paths, socket_path: PathBuf, toml: (PathBuf, bool), log_warning: Option<String>) -> Result<()> {
     for dir in [paths.data.clone(), paths.data.join("comms"), paths.logs_dir(), paths.gcodes_dir(), paths.config_dir()]
     {
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     }
-    let config = Config::load(&paths.config_file)?;
+    let mut config = Config::load(&paths.config_file)?;
+    let (toml_path, required) = toml;
+    if required || toml_path.exists() {
+        config.load_toml(&toml_path)?;
+        tracing::info!("Read orrery's config from {}", toml_path.display());
+    }
     let section = config.section("server");
     let host = section.get_str("host", "0.0.0.0");
     let port = section.get_int("port", 7125)?;
@@ -140,6 +157,13 @@ fn main() -> ExitCode {
         Some(path) => expand_home(path),
         None => Ok(paths.data.join("comms/moonraker.sock")),
     };
+    let toml = match orrery_config_path(&cli, &paths) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("orrery can't start: {e:#}");
+            return ExitCode::FAILURE;
+        }
+    };
     let socket_path = match socket_path {
         Ok(p) => p,
         Err(e) => {
@@ -155,7 +179,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match runtime.block_on(run(paths, socket_path, log_warning)) {
+    match runtime.block_on(run(paths, socket_path, toml, log_warning)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("orrery can't start: {e:#}");

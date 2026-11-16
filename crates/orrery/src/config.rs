@@ -1,9 +1,19 @@
-//! `moonraker.conf` parsing, following Moonraker's rules (`confighelper.py`): `key: value` or
+//! orrery's config: `moonraker.conf`, read for convenience, and orrery's own `orrery.toml`.
+//!
+//! `moonraker.conf` follows Moonraker's rules (`confighelper.py`): `key: value` or
 //! `key = value`, full-line and inline (` #`, ` ;`) comments, indented continuation lines, and
 //! `[include <glob>]`.
 //!
+//! `orrery.toml` uses the same section and option names, as TOML tables. A table inside a table
+//! is a named section: `[webcam.front]` is `[webcam front]` in `moonraker.conf`, and
+//! `[agent.spoolman]` is the agent `spoolman`. Inside a named section, a further table is one
+//! option with a table as its value, such as an agent's `maps`. When both files set an option,
+//! `orrery.toml` wins.
+//!
 //! Components read options through [`Section`] getters with defaults. Every read is recorded, so
-//! `server.config` can report the parsed values the way Moonraker does.
+//! `server.config` can report the parsed values the way Moonraker does. `server.config`'s `orig`
+//! stays Moonraker's: the text of `moonraker.conf`, so clients written for Moonraker find what
+//! they expect.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -16,6 +26,10 @@ use serde_json::{Map, Value, json};
 pub struct Config {
     /// Sections in file order, with options in file order. Option names are lowercase.
     sections: Vec<(String, Vec<(String, String)>)>,
+    /// `orrery.toml`'s sections, with typed values.
+    typed: Vec<(String, Vec<(String, Value)>)>,
+    /// `orrery.toml`, when it was read.
+    toml_file: Option<PathBuf>,
     /// Each file read, with the sections it defines.
     files: Vec<(PathBuf, Vec<String>)>,
     /// Values read by components, as `server.config` reports them under `config`.
@@ -28,6 +42,42 @@ impl Config {
         let mut visited = BTreeSet::new();
         config.parse_file(path, &mut visited)?;
         Ok(config)
+    }
+
+    /// Reads `orrery.toml` over the `moonraker.conf` already loaded.
+    pub fn load_toml(&mut self, path: &Path) -> Result<()> {
+        let text = std::fs::read_to_string(path).with_context(|| format!("can't read {}", path.display()))?;
+        self.parse_toml(&text, path)
+    }
+
+    fn parse_toml(&mut self, text: &str, path: &Path) -> Result<()> {
+        let table: toml::Table =
+            toml::from_str(text).with_context(|| format!("{} isn't valid TOML", path.display()))?;
+        let mut names = Vec::new();
+        for (name, value) in table {
+            let toml::Value::Table(options) = value else {
+                bail!("{}: `{name}` must be inside a table, such as [server]", path.display());
+            };
+            let mut plain = Vec::new();
+            for (key, value) in options {
+                match value {
+                    toml::Value::Table(named) => {
+                        let section = format!("{name} {key}");
+                        let named = named.into_iter().map(|(k, v)| (k.to_ascii_lowercase(), json_value(v))).collect();
+                        self.typed.push((section.clone(), named));
+                        names.push(section);
+                    }
+                    other => plain.push((key.to_ascii_lowercase(), json_value(other))),
+                }
+            }
+            if !plain.is_empty() || !names.iter().any(|n| n.starts_with(&format!("{name} "))) {
+                self.typed.push((name.clone(), plain));
+                names.push(name);
+            }
+        }
+        self.files.push((path.to_path_buf(), names));
+        self.toml_file = Some(path.to_path_buf());
+        Ok(())
     }
 
     #[cfg(test)]
@@ -134,14 +184,23 @@ impl Config {
 
     pub fn section(&self, name: &str) -> Section<'_> {
         let options = self.sections.iter().find(|(n, _)| n == name).map(|(_, o)| o.as_slice()).unwrap_or(&[]);
+        let typed = self.typed.iter().find(|(n, _)| n == name).map(|(_, o)| o.as_slice()).unwrap_or(&[]);
         let mut parsed = self.parsed.lock().expect("config lock");
         parsed.entry(name.to_owned()).or_insert_with(|| Value::Object(Map::new()));
-        Section { config: self, name: name.to_owned(), options }
+        Section { config: self, name: name.to_owned(), options, typed }
     }
 
-    /// The names of sections that start with `prefix`, such as every `[webcam <name>]`.
+    /// The names of sections that start with `prefix`, such as every `[webcam <name>]`, from
+    /// both files.
     pub fn section_names(&self, prefix: &str) -> Vec<String> {
-        self.sections.iter().map(|(n, _)| n).filter(|n| n.starts_with(prefix)).cloned().collect()
+        let mut names: Vec<String> =
+            self.sections.iter().map(|(n, _)| n).filter(|n| n.starts_with(prefix)).cloned().collect();
+        for (n, _) in &self.typed {
+            if n.starts_with(prefix) && !names.contains(n) {
+                names.push(n.clone());
+            }
+        }
+        names
     }
 
     /// `server.config`'s `orig`: every section's raw options, after a `DEFAULT` entry.
@@ -171,6 +230,19 @@ impl Config {
             })
             .collect();
         Value::Array(list)
+    }
+}
+
+/// A TOML value as JSON. Dates and times become their TOML text.
+fn json_value(v: toml::Value) -> Value {
+    match v {
+        toml::Value::String(s) => Value::String(s),
+        toml::Value::Integer(i) => json!(i),
+        toml::Value::Float(f) => json!(f),
+        toml::Value::Boolean(b) => json!(b),
+        toml::Value::Datetime(d) => json!(d.to_string()),
+        toml::Value::Array(a) => Value::Array(a.into_iter().map(json_value).collect()),
+        toml::Value::Table(t) => Value::Object(t.into_iter().map(|(k, v)| (k, json_value(v))).collect()),
     }
 }
 
@@ -205,11 +277,30 @@ pub struct Section<'c> {
     config: &'c Config,
     name: String,
     options: &'c [(String, String)],
+    /// The same section in `orrery.toml`, which wins over `moonraker.conf`.
+    typed: &'c [(String, Value)],
 }
 
 impl Section<'_> {
     fn raw(&self, key: &str) -> Option<&str> {
         self.options.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+    }
+
+    fn typed(&self, key: &str) -> Option<&Value> {
+        self.typed.iter().find(|(k, _)| k == key).map(|(_, v)| v)
+    }
+
+    fn typed_error(&self, key: &str, what: &str, got: &Value) -> anyhow::Error {
+        let file = self.config.toml_file.as_deref().unwrap_or(Path::new("orrery.toml"));
+        anyhow::anyhow!("{}: [{}] {key}: {what}, got {got}", file.display(), self.name)
+    }
+
+    /// An option's value as JSON: from `orrery.toml` as it's typed there, or the text from
+    /// `moonraker.conf`. For options that hold a table or a list, such as an agent's `maps`.
+    pub fn get_value(&self, key: &str) -> Option<Value> {
+        let v = self.typed(key).cloned().or_else(|| self.raw(key).map(|s| json!(s)));
+        self.record(key, v.clone().unwrap_or_default());
+        v
     }
 
     fn record(&self, key: &str, value: Value) {
@@ -223,60 +314,77 @@ impl Section<'_> {
         anyhow::anyhow!("[{}] {key}: {what}, got {:?}", self.name, self.raw(key).unwrap_or_default())
     }
 
+    /// A string. From `orrery.toml`, a number or a boolean is taken as its text.
     pub fn get_str(&self, key: &str, default: &str) -> String {
-        let v = self.raw(key).unwrap_or(default).to_owned();
+        let v = self.get_opt_str_unrecorded(key).unwrap_or_else(|| default.to_owned());
         self.record(key, json!(v));
         v
     }
 
     pub fn get_opt_str(&self, key: &str) -> Option<String> {
-        let v = self.raw(key).map(str::to_owned);
+        let v = self.get_opt_str_unrecorded(key);
         self.record(key, json!(v));
         v
     }
 
-    /// One item per line, as Moonraker's `getlist`. Blank lines are skipped.
+    fn get_opt_str_unrecorded(&self, key: &str) -> Option<String> {
+        match self.typed(key) {
+            Some(Value::String(s)) => Some(s.clone()),
+            Some(other) => Some(other.to_string()),
+            None => self.raw(key).map(str::to_owned),
+        }
+    }
+
+    /// A list: a TOML array, or one item per line, as Moonraker's `getlist`. Blank lines are
+    /// skipped.
     pub fn get_list(&self, key: &str) -> Vec<String> {
-        let v: Vec<String> = self
-            .raw(key)
-            .unwrap_or_default()
-            .lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty())
-            .map(str::to_owned)
-            .collect();
+        let v: Vec<String> = match self.typed(key) {
+            Some(Value::Array(items)) => {
+                items.iter().map(|i| i.as_str().map_or_else(|| i.to_string(), str::to_owned)).collect()
+            }
+            Some(Value::String(s)) => lines(s),
+            Some(other) => vec![other.to_string()],
+            None => lines(self.raw(key).unwrap_or_default()),
+        };
         self.record(key, json!(v));
         v
     }
 
     pub fn get_int(&self, key: &str, default: i64) -> Result<i64> {
-        let v = match self.raw(key) {
-            Some(s) => s.parse().map_err(|_| self.error(key, "expected a whole number"))?,
-            None => default,
+        let v = match (self.typed(key), self.raw(key)) {
+            (Some(t), _) => t.as_i64().ok_or_else(|| self.typed_error(key, "expected a whole number", t))?,
+            (None, Some(s)) => s.parse().map_err(|_| self.error(key, "expected a whole number"))?,
+            (None, None) => default,
         };
         self.record(key, json!(v));
         Ok(v)
     }
 
     pub fn get_float(&self, key: &str, default: f64) -> Result<f64> {
-        let v = match self.raw(key) {
-            Some(s) => s.parse().map_err(|_| self.error(key, "expected a number"))?,
-            None => default,
+        let v = match (self.typed(key), self.raw(key)) {
+            (Some(t), _) => t.as_f64().ok_or_else(|| self.typed_error(key, "expected a number", t))?,
+            (None, Some(s)) => s.parse().map_err(|_| self.error(key, "expected a number"))?,
+            (None, None) => default,
         };
         self.record(key, json!(v));
         Ok(v)
     }
 
     pub fn get_bool(&self, key: &str, default: bool) -> Result<bool> {
-        let v = match self.raw(key).map(str::to_ascii_lowercase).as_deref() {
-            Some("true" | "yes" | "on" | "1") => true,
-            Some("false" | "no" | "off" | "0") => false,
-            Some(_) => return Err(self.error(key, "expected true or false")),
-            None => default,
+        let v = match (self.typed(key), self.raw(key).map(str::to_ascii_lowercase).as_deref()) {
+            (Some(t), _) => t.as_bool().ok_or_else(|| self.typed_error(key, "expected true or false", t))?,
+            (None, Some("true" | "yes" | "on" | "1")) => true,
+            (None, Some("false" | "no" | "off" | "0")) => false,
+            (None, Some(_)) => return Err(self.error(key, "expected true or false")),
+            (None, None) => default,
         };
         self.record(key, json!(v));
         Ok(v)
     }
+}
+
+fn lines(s: &str) -> Vec<String> {
+    s.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_owned).collect()
 }
 
 #[cfg(test)]
@@ -302,6 +410,66 @@ mod tests {
         let c = Config::parse("[server]\n").unwrap();
         assert!(!c.section("history").get_bool("x", false).unwrap());
         assert_eq!(c.parsed()["history"]["x"], json!(false));
+    }
+
+    #[test]
+    fn toml_wins_and_keeps_types() {
+        let mut c =
+            Config::parse("[server]\nhost: 0.0.0.0\nport: 7125\n[webcam front]\nservice: mjpegstreamer\n").unwrap();
+        c.parse_toml(
+            r#"
+[server]
+port = 7126
+
+[file_manager]
+queue_gcode_uploads = true
+
+[webcam.front]
+service = "webrtc-camerastreamer"
+
+[webcam.back]
+location = "door"
+
+[agent.spoolman]
+command = "~/orrery/agents/orrery-spoolman"
+history_fields = ["spool_ids"]
+
+[agent.spoolman.maps]
+"server.spoolman" = "agent.spoolman"
+"#,
+            Path::new("orrery.toml"),
+        )
+        .unwrap();
+        let server = c.section("server");
+        assert_eq!(server.get_int("port", 0).unwrap(), 7126);
+        assert_eq!(server.get_str("host", ""), "0.0.0.0");
+        drop(server);
+        assert!(c.section("file_manager").get_bool("queue_gcode_uploads", false).unwrap());
+        assert_eq!(c.section("webcam front").get_str("service", ""), "webrtc-camerastreamer");
+        assert_eq!(c.section_names("webcam "), vec!["webcam front", "webcam back"]);
+        let agent = c.section("agent spoolman");
+        assert_eq!(agent.get_list("history_fields"), vec!["spool_ids"]);
+        assert_eq!(agent.get_value("maps"), Some(json!({"server.spoolman": "agent.spoolman"})));
+        drop(agent);
+        // `orig` stays moonraker.conf's text; the parsed values are the ones in effect.
+        assert_eq!(c.orig()["server"]["port"], json!("7125"));
+        assert_eq!(c.parsed()["server"]["port"], json!(7126));
+        assert_eq!(
+            c.files()[1],
+            json!({"filename": "orrery.toml", "sections":
+            ["server", "file_manager", "webcam front", "webcam back", "agent spoolman"]})
+        );
+    }
+
+    #[test]
+    fn toml_type_errors_name_the_file() {
+        let mut c = Config::parse("[server]\n").unwrap();
+        c.parse_toml("[server]\nport = \"7126\"\n", Path::new("/cfg/orrery.toml")).unwrap();
+        let err = c.section("server").get_int("port", 0).unwrap_err().to_string();
+        assert_eq!(err, "/cfg/orrery.toml: [server] port: expected a whole number, got \"7126\"");
+        let mut c = Config::parse("[server]\n").unwrap();
+        assert!(c.parse_toml("port = 1\n", Path::new("orrery.toml")).is_err());
+        assert!(c.parse_toml("[server\n", Path::new("orrery.toml")).is_err());
     }
 
     #[test]
