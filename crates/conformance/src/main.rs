@@ -88,7 +88,7 @@ async fn run(cli: Cli) -> Result<bool> {
     });
     let jobs = Arc::new(Semaphore::new(cli.jobs.max(1)));
     let mut handles = Vec::new();
-    for case in &cases {
+    for case in cases.iter().filter(|c| c.targets.as_ref().is_none_or(|t| t.contains(&cli.target))) {
         for &transport in &case.transports {
             if let Some(only) = cli.transport {
                 let wanted = match only {

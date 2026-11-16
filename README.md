@@ -73,6 +73,24 @@ stream_url = "/webcam/?action=stream"
 
 Values have TOML types, so `port = "7125"` is an error: orrery expects a number there.
 
+An `[agent.<name>]` table lets an agent answer under Moonraker's built-in names. For example,
+this gives a Spoolman agent Fluidd's Spoolman methods and notifications, lists `spoolman` in
+`server.info`, and lets it add the spools used to each job's history:
+
+```toml
+[agent.spoolman]
+component = "spoolman"
+history_fields = ["spool_ids"]
+
+[agent.spoolman.maps]
+"server.spoolman" = "agent.spoolman"
+"notify_active_spool_set" = "agent.spoolman.active_spool_set"
+```
+
+A configured agent can connect only over the unix socket. `user = "printer"` also limits it to
+one Unix user. See [docs/design/2026-11-15-plugin-interface.md](docs/design/2026-11-15-plugin-interface.md)
+for how agents work.
+
 ## Layout
 
 | Path | Contents |

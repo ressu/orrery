@@ -65,6 +65,16 @@ pub enum Event {
 struct Client {
     tx: mpsc::UnboundedSender<String>,
     identity: Option<Value>,
+    peer: Peer,
+}
+
+/// What orrery knows about the other end of a connection.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Peer {
+    /// Connected over the unix socket.
+    pub unix: bool,
+    /// The connecting process's user id, from the unix socket.
+    pub uid: Option<u32>,
 }
 
 pub struct App {
@@ -86,6 +96,7 @@ pub struct App {
     pub history: crate::history::History,
     pub cors: crate::access::Cors,
     pub extensions: crate::extensions::Extensions,
+    pub agents: crate::agents::Agents,
     warnings: Mutex<Vec<String>>,
 }
 
@@ -119,6 +130,7 @@ impl App {
         let webcams = crate::webcam::Webcams::new(&config, &paths)?;
         let job_queue = crate::job_queue::JobQueue::new(&config)?;
         let (cors, warnings) = crate::access::Cors::new(&config);
+        let agents = crate::agents::Agents::new(&config)?;
         // Connection ids look like Moonraker's (Python object ids): large numbers.
         let base = 0x7f00_0000_0000 + (std::process::id() as u64) * 0x1000;
         let app = Arc::new(Self {
@@ -140,6 +152,7 @@ impl App {
             history: crate::history::History::default(),
             cors,
             extensions: crate::extensions::Extensions::default(),
+            agents,
             warnings: Mutex::new(warnings),
         });
         app.register_endpoints();
@@ -153,7 +166,10 @@ impl App {
         crate::job_queue::register_endpoints(&app);
         crate::webcam::register_endpoints(&app);
         crate::extensions::register_endpoints(&app);
+        crate::agents::register_endpoints(&app);
         crate::history::register_endpoints(&app);
+        // Last, so it sees every built-in method when it checks the maps.
+        crate::agents::start(&app);
         Ok(app)
     }
 
@@ -184,10 +200,14 @@ impl App {
 
     // *** Websocket clients ***
 
-    pub fn add_client(&self, tx: mpsc::UnboundedSender<String>) -> ConnId {
+    pub fn add_client(&self, tx: mpsc::UnboundedSender<String>, peer: Peer) -> ConnId {
         let id = self.next_conn.fetch_add(1, Ordering::Relaxed);
-        self.clients.lock().expect("clients lock").insert(id, Client { tx, identity: None });
+        self.clients.lock().expect("clients lock").insert(id, Client { tx, identity: None, peer });
         id
+    }
+
+    pub fn client_peer(&self, id: ConnId) -> Peer {
+        self.clients.lock().expect("clients lock").get(&id).map(|c| c.peer).unwrap_or_default()
     }
 
     pub fn remove_client(&self, id: ConnId) {
@@ -234,7 +254,11 @@ impl App {
     /// Sends `notify_<name>` to every client except `except`, as Moonraker does for agent
     /// events.
     pub fn notify_except(&self, name: &str, params: Vec<Value>, except: ConnId) {
-        let text = json!({"jsonrpc": "2.0", "method": format!("notify_{name}"), "params": params}).to_string();
+        let mut msg = json!({"jsonrpc": "2.0", "method": format!("notify_{name}")});
+        if !params.is_empty() {
+            msg["params"] = Value::Array(params);
+        }
+        let text = msg.to_string();
         for (id, c) in self.clients.lock().expect("clients lock").iter() {
             if *id != except {
                 let _ = c.tx.send(text.clone());
@@ -370,7 +394,7 @@ async fn server_info(app: Arc<App>, req: Request) -> ApiResult {
     Ok(json!({
         "klippy_connected": app.klippy.is_connected(),
         "klippy_state": state.0.as_str(),
-        "components": COMPONENTS,
+        "components": COMPONENTS.iter().copied().chain(app.agents.components()).collect::<Vec<_>>(),
         "failed_components": [],
         "registered_directories": app.files.root_names(),
         "warnings": warnings,

@@ -9,7 +9,8 @@ use serde_json::{Map, Value};
 use tokio::process::{Child, Command};
 
 /// Which server to test.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum TargetKind {
     /// Upstream Moonraker from `conformance/.work/ref-venv` (see `just ref-setup`).
     Reference,

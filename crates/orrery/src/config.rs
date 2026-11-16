@@ -50,7 +50,7 @@ impl Config {
         self.parse_toml(&text, path)
     }
 
-    fn parse_toml(&mut self, text: &str, path: &Path) -> Result<()> {
+    pub(crate) fn parse_toml(&mut self, text: &str, path: &Path) -> Result<()> {
         let table: toml::Table =
             toml::from_str(text).with_context(|| format!("{} isn't valid TOML", path.display()))?;
         let mut names = Vec::new();

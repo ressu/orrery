@@ -2,8 +2,9 @@
 //! the job events [`crate::job_state`] sends, and each change is announced with
 //! `notify_history_changed`.
 //!
-//! Moonraker's auxiliary fields come from the sensor and spoolman components, which orrery
-//! doesn't have, so `auxiliary_data` and `auxiliary_totals` stay empty.
+//! Moonraker's auxiliary fields come from its sensor and spoolman components. In orrery, agents
+//! set them instead, with `orrery.agent.history_field`, while a job is recorded. Agent fields
+//! have no totals, so `auxiliary_totals` stays empty.
 
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -67,6 +68,8 @@ struct PrinterJob {
     start_time: f64,
     total_duration: f64,
     user: String,
+    /// Fields agents set while the job runs.
+    auxiliary_data: Vec<Value>,
 }
 
 impl PrinterJob {
@@ -81,6 +84,7 @@ impl PrinterJob {
             start_time: now(),
             total_duration: 0.0,
             user: NO_USER.into(),
+            auxiliary_data: Vec::new(),
         };
         job.update_from_ps(ps);
         job
@@ -119,7 +123,7 @@ impl PrinterJob {
             "status": self.status,
             "start_time": self.start_time,
             "total_duration": self.total_duration,
-            "auxiliary_data": [],
+            "auxiliary_data": self.auxiliary_data,
             "user": self.user,
         });
         v.as_object().cloned().unwrap_or_default()
@@ -137,7 +141,7 @@ impl PrinterJob {
             "total_duration": self.total_duration,
             "filament_used": self.filament_used,
             "metadata": self.metadata,
-            "auxiliary_data": [],
+            "auxiliary_data": self.auxiliary_data,
         })
     }
 }
@@ -260,6 +264,28 @@ pub async fn finish_job(app: &Arc<App>, status: &str, stats: Option<&Map<String,
     tracing::debug!("History Job Finished - Id: {}, File: {}, Status: {status}", job_uid(id), job.filename);
     send_history_event(app, "finished", &job, id);
     reset(&mut cur);
+}
+
+/// Sets an agent's field on the job being recorded, as Moonraker's `auxiliary_data` entry. The
+/// field is saved with the job.
+pub async fn set_field(
+    app: &Arc<App>,
+    provider: &str,
+    name: &str,
+    value: Value,
+    description: Option<String>,
+    units: Option<String>,
+) -> Result<(), ApiError> {
+    let mut cur = app.history.state.lock().await;
+    let Some(job) = cur.job.as_mut() else {
+        return Err(ApiError::bad_request("No print job is being recorded"));
+    };
+    let field = json!({"provider": provider, "name": name, "value": value, "description": description, "units": units});
+    match job.auxiliary_data.iter_mut().find(|f| f["provider"] == provider && f["name"] == name) {
+        Some(existing) => *existing = field,
+        None => job.auxiliary_data.push(field),
+    }
+    Ok(())
 }
 
 /// Finishes a job still in progress when orrery stops.

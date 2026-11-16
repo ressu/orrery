@@ -338,8 +338,8 @@ async fn run_step(ctx: &mut Ctx, step: &Step, index: usize, result: &mut RunResu
             Ok(())
         }
         Step::Agent(a) => match &a.agent {
-            AgentAction::Connect { name, replies } => {
-                let agent = match ctx.transport {
+            AgentAction::Connect { name, replies, via } => {
+                let agent = match via.unwrap_or(ctx.transport) {
                     Transport::Unix => RpcClient::connect_unix(&ctx.unix_path).await?,
                     _ => RpcClient::connect(&ctx.ws_url).await?,
                 };

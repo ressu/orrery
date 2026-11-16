@@ -1,0 +1,19 @@
+name: only the unix socket, and the configured user, can claim a configured agent's name
+targets: [orrery]
+transports: [ws, unix]
+klippy: none
+files:
+  config/orrery.toml: |
+    [agent.spoolman]
+    user = 0
+steps:
+  - call: server.connection.identify
+    only: [ws]
+    params: {client_name: spoolman, version: "0.1", type: agent, url: "https://example.invalid"}
+    expect_error: {code: 400, message: "Agent 'spoolman' is configured in orrery.toml, so it must connect over the unix socket"}
+  - call: server.connection.identify
+    only: [unix]
+    params: {client_name: spoolman, version: "0.1", type: agent, url: "https://example.invalid"}
+    expect_error: {code: 400, message: Agent 'spoolman' must connect as user 0}
+  - call: server.extensions.list
+    expect: {agents: []}

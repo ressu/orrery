@@ -1,0 +1,63 @@
+name: orrery.toml gives an agent Moonraker's built-in names
+description: >
+  orrery only. With the maps below, Fluidd's Spoolman calls (server.spoolman.*, and
+  /server/spoolman/* over HTTP) reach the agent, and the agent's events go out as Moonraker's
+  Spoolman notifications.
+targets: [orrery]
+transports: [ws, http, unix]
+klippy: none
+files:
+  config/orrery.toml: |
+    [agent.spoolman]
+    component = "spoolman"
+
+    [agent.spoolman.maps]
+    "server.spoolman" = "agent.spoolman"
+    "notify_active_spool_set" = "agent.spoolman.active_spool_set"
+steps:
+  - call: server.info
+    expect: {components: {$contains: [spoolman, extensions]}}
+  # Mapped names answer before the agent connects.
+  - call: server.spoolman.get_spool_id
+    http: {verb: GET, path: /server/spoolman/spool_id}
+    expect_error: {code: 400, message: Agent spoolman not connected}
+  - agent:
+      connect:
+        name: spoolman
+        via: unix
+        replies:
+          get_spool_id: {result: {spool_id: 3}}
+          proxy: {result: {name: PLA}}
+  - call: orrery.agent.register_endpoint
+    as_agent: true
+    params: {path: spool_id, request_methods: [GET, POST]}
+  - call: orrery.agent.register_endpoint
+    as_agent: true
+    params: {path: proxy, request_methods: [POST]}
+  - call: server.spoolman.get_spool_id
+    http: {verb: GET, path: /server/spoolman/spool_id}
+    expect: {spool_id: 3}
+  - call: server.spoolman.proxy
+    params: {request_method: GET, path: /v1/spool/3}
+    http: {verb: POST, path: /server/spoolman/proxy, body: {request_method: GET, path: /v1/spool/3}}
+    expect: {name: PLA}
+  - expect_agent_received: {method: proxy, params: {request_method: GET, path: /v1/spool/3}}
+  # A mapped name the agent didn't register is simply missing.
+  - call: server.spoolman.status
+    only: [ws, unix]
+    expect_error: {code: -32601}
+  - call: server.spoolman.status
+    only: [http]
+    http: {verb: GET, path: /server/spoolman/status}
+    expect_error: {code: 404}
+  - call: connection.send_event
+    as_agent: true
+    params: {event: active_spool_set, data: {spool_id: 3}}
+    expect: ok
+  - expect_notification: notify_active_spool_set
+    match: [{spool_id: 3}]
+  - call: connection.send_event
+    as_agent: true
+    params: {event: something_else}
+  - expect_notification: notify_agent_event
+    match: [{agent: spoolman, event: something_else}]

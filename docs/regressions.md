@@ -107,15 +107,18 @@ change how safe or complete orrery is to run.
 - **Why:** frontends download the log by its Moonraker address. Rollover can follow.
 - **Cases:** `files/log_downloads`.
 
-### history-aux-fields: history has no auxiliary fields
+### history-aux-fields: history's auxiliary fields come from agents, without totals
 
 - **Area:** history
 - **Moonraker:** the `[sensor]` and `[spoolman]` components add auxiliary fields to each job,
-  such as energy used or the spool, and their totals.
-- **orrery:** has neither component, so `auxiliary_data` and `auxiliary_totals` are always empty.
-  Jobs and totals are otherwise the same.
-- **Why:** both components are out of scope for now.
-- **Cases:** none.
+  such as energy used or the spool, and their totals. Each field has a tracking strategy, such
+  as collecting values or adding them up.
+- **orrery:** has neither component. Agents set fields instead, with `orrery.agent.history_field`
+  while a job is recorded, and only the fields their `[agent.<name>]` table lists in
+  `history_fields`. An agent sends the field's whole value; orrery doesn't track it.
+  `auxiliary_totals` is always empty.
+- **Why:** an agent knows its own values, so orrery doesn't need Moonraker's trackers.
+- **Cases:** `agents/history_field` (orrery only).
 
 ### no-python-info: `machine.system_info` has no `python` field
 

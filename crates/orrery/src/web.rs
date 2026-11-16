@@ -85,7 +85,7 @@ fn describe_peer(peer: SocketAddr, headers: &HeaderMap) -> String {
 async fn serve_socket(app: Arc<App>, socket: WebSocket, from: String) {
     let (mut sink, mut stream) = socket.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-    let conn = app.add_client(tx.clone());
+    let conn = app.add_client(tx.clone(), crate::server::Peer::default());
     let opened = Instant::now();
     tracing::info!("Websocket Opened: ID: {conn}, From: {from}");
     let writer = tokio::spawn(async move {

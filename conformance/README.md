@@ -59,6 +59,8 @@ Other case fields:
 - `wait_ready: false` starts the steps before Klippy is ready.
 - `config:` holds extra `moonraker.conf` text. A section here replaces the base section of the
   same name.
+- `targets: [orrery]` runs the case against orrery only, for orrery's own features that
+  Moonraker doesn't have. Such cases have no recorded snapshots.
 - `tags: [real-klippy]` also runs the case against real Klipper. Only tag cases that don't drive
   the fake.
 - `known_regression: <id>` marks a known difference listed in `docs/regressions.md`. The case is
@@ -80,7 +82,7 @@ Other case fields:
 | `raw_ws: <text>` | Sends a raw websocket frame and checks the reply with `expect`. It runs on the `ws` and `unix` transports, and is skipped on `http`. |
 | `upload: <file name>` | Uploads `content` (text) or `fixture` (a file in `fixtures/files/`) to `/server/files/upload`. `form` adds fields such as `root`, `path`, `print`, or `checksum`. Checks the result with `expect` or `expect_error`. |
 | `download: <root>/<path>` | Downloads a file. Checks `expect_status` (default 200) and the body with `expect_body` or `expect_fixture`. |
-| `agent: {connect: {name, replies}}` | Opens the test agent: a second connection that identifies as an agent. It answers calls relayed to it with `replies`, by method name, such as `status: {result: {ok: true}}` or `broken: {error: {code: -32000, message: nope}}`. Other methods get a -32601 error. It connects over the unix socket on the `unix` transport, and over the websocket otherwise. |
+| `agent: {connect: {name, replies}}` | Opens the test agent: a second connection that identifies as an agent. It answers calls relayed to it with `replies`, by method name, such as `status: {result: {ok: true}}` or `broken: {error: {code: -32000, message: nope}}`. Other methods get a -32601 error. It connects over the unix socket on the `unix` transport, and over the websocket otherwise; `via: unix` or `via: ws` picks one. |
 | `agent: disconnect` | Closes the test agent's connection. |
 | `expect_agent_received: {method, params}` | Waits up to `within_ms` (default 3000) until the test agent receives a matching relayed call or notification. |
 | `sleep_ms: <n>` | Waits. |

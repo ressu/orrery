@@ -70,6 +70,7 @@ pub fn register_endpoints(app: &Arc<App>) {
 
 /// Registers a connection that identified as an agent, and tells the other clients.
 pub fn register_agent(app: &App, conn: ConnId, name: &str, identity: &Value) -> Result<(), ApiError> {
+    crate::agents::check_claim(app, name, conn)?;
     {
         let mut inner = app.extensions.lock();
         if inner.agents.iter().any(|(n, _)| n == name) {
@@ -98,6 +99,7 @@ pub fn remove_connection(app: &App, conn: ConnId) {
         let _ = tx.send(Err(ApiError::new(500, "Client Socket Disconnected")));
     }
     if let Some(name) = name {
+        crate::agents::remove_agent(app, &name);
         tracing::info!("Agent {name} disconnected");
         app.notify_except("agent_event", vec![json!({"agent": name, "event": "disconnected"})], conn);
     }
@@ -179,9 +181,15 @@ async fn send_event(app: Arc<App>, req: Request) -> ApiResult {
     if RESERVED_EVENTS.contains(&event.as_str()) {
         return Err(ApiError::bad_request(format!("Event '{event}' is reserved")));
     }
+    let data = req.args.get("data").filter(|d| !d.is_null()).cloned();
+    // orrery.toml can give an event a public name, such as `notify_active_spool_set`.
+    if let Some(public) = app.agents.notification(&name, &event) {
+        app.notify_except(public, data.into_iter().collect(), conn);
+        return Ok(json!("ok"));
+    }
     let mut evt = json!({"agent": name, "event": event});
-    if let Some(data) = req.args.get("data").filter(|d| !d.is_null()) {
-        evt["data"] = data.clone();
+    if let Some(data) = data {
+        evt["data"] = data;
     }
     app.notify_except("agent_event", vec![evt], conn);
     Ok(json!("ok"))
@@ -200,6 +208,15 @@ async fn call_agent(app: Arc<App>, req: Request) -> ApiResult {
     if !matches!(arguments, Value::Null | Value::Array(_) | Value::Object(_)) {
         return Err(ApiError::bad_request("The 'arguments' field must contain an object or a list"));
     }
+    call(&app, &agent, &method, arguments).await
+}
+
+pub fn is_connected(app: &App, agent: &str) -> bool {
+    app.extensions.lock().agents.iter().any(|(n, _)| n == agent)
+}
+
+/// Calls a method on an agent and waits for its reply.
+pub async fn call(app: &App, agent: &str, method: &str, arguments: Value) -> ApiResult {
     let (tx, rx) = oneshot::channel();
     // The lookup and the pending entry share one lock, so an agent that disconnects in between
     // can't leave the call waiting forever.

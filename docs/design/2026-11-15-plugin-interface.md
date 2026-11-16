@@ -91,12 +91,17 @@ history_fields = ["spool_ids"]
 ```
 
 **Methods.** An agent registers endpoints under its own prefix, `/agent/<name>/…`, with their
-request types, as orrery's own components do. Any agent can do this, configured or not, so ad
+request types, as orrery's own components do: `orrery.agent.register_endpoint {path:
+"spool_id", request_methods: ["GET", "POST"]}`. orrery passes each call on to the agent like a
+`server.extensions.request` call, with the method name after the agent's prefix, such as
+`get_spool_id`, and the request's arguments as `params`. Any agent can do this, configured or not, so ad
 hoc agents can still expose whatever they like. orrery names JSON-RPC methods after HTTP paths
 (`/agent/spoolman/spool_id` with GET and POST gives `agent.spoolman.get_spool_id` and
 `post_spool_id`). That's why one map line covers both: `server.spoolman = agent.spoolman`
 rewrites the prefix, so `server.spoolman.proxy` and `POST /server/spoolman/proxy` both reach the
-agent's `proxy` endpoint. orrery returns the agent's answer, or its error.
+agent's `proxy` endpoint. orrery returns the agent's answer, or its error. A mapped name the agent hasn't registered
+returns "not found" while the agent is connected, and "Agent <name> not connected" while it
+isn't.
 
 **Notifications.** An agent sends events with `connection.send_event`. Unmapped, they go out as
 Moonraker's `notify_agent_event`, so ad hoc agents stay compatible with Moonraker clients. A map

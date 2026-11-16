@@ -1,0 +1,48 @@
+name: an agent registers endpoints under its own prefix
+description: orrery only. Any agent can do this, configured in orrery.toml or not.
+targets: [orrery]
+transports: [ws, http, unix]
+klippy: none
+steps:
+  - agent:
+      connect:
+        name: test-agent
+        replies:
+          get_spool_id: {result: {spool_id: 3}}
+          post_spool_id: {result: {spool_id: 5}}
+  - call: orrery.agent.register_endpoint
+    as_agent: true
+    params: {path: spool_id, request_methods: [GET, POST]}
+    expect: ok
+  - call: agent.test-agent.get_spool_id
+    http: {verb: GET, path: /agent/test-agent/spool_id}
+    expect: {spool_id: 3}
+  - expect_agent_received: {method: get_spool_id, params: null}
+  - call: agent.test-agent.post_spool_id
+    params: {spool_id: 5}
+    http: {verb: POST, path: /agent/test-agent/spool_id, body: {spool_id: 5}}
+    expect: {spool_id: 5}
+  - expect_agent_received: {method: post_spool_id, params: {spool_id: 5}}
+  - call: orrery.agent.register_endpoint
+    as_agent: true
+    params: {path: spool_id, request_methods: [GET]}
+    expect_error: {code: 400, message: Endpoint /agent/test-agent/spool_id already registered}
+  - call: orrery.agent.register_endpoint
+    as_agent: true
+    params: {path: "../server", request_methods: [GET]}
+    expect_error: {code: 400, message: "$regex:^Invalid endpoint path"}
+  - call: orrery.agent.register_endpoint
+    only: [ws, unix]
+    params: {path: other, request_methods: [GET]}
+    expect_error: {code: 400, message: Only connections of the 'agent' type can use orrery.agent methods}
+  # The endpoints go away with the agent.
+  - agent: disconnect
+  - call: agent.test-agent.get_spool_id
+    only: [ws, unix]
+    retry_ms: 2000
+    expect_error: {code: -32601}
+  - call: agent.test-agent.get_spool_id
+    only: [http]
+    retry_ms: 2000
+    http: {verb: GET, path: /agent/test-agent/spool_id}
+    expect_error: {code: 404}

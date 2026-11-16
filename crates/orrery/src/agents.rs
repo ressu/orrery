@@ -1,0 +1,307 @@
+//! orrery's additions to Moonraker's agent API (see docs/design/2026-11-15-plugin-interface.md).
+//!
+//! - Any agent can register endpoints under its own prefix with
+//!   `orrery.agent.register_endpoint`: `/agent/<name>/<path>` over HTTP, and
+//!   `agent.<name>.<path>` over JSON-RPC. orrery passes each call on to the agent.
+//! - An `[agent.<name>]` table in `orrery.toml` lets the printer's owner give an agent
+//!   Moonraker's built-in names. `maps` points method prefixes and notifications at the agent,
+//!   `component` lists a name in `server.info`, and `history_fields` lists the fields the agent
+//!   may add to history jobs with `orrery.agent.history_field`.
+//! - A configured agent's name can only be claimed over the unix socket, optionally by one Unix
+//!   user, so another program can't connect under it and receive its calls.
+
+use std::sync::Arc;
+
+use anyhow::{Result, bail};
+use serde_json::{Value, json};
+
+use crate::api::{Alias, ApiError, ApiResult, ConnId, Request, RequestType, Transports, handler};
+use crate::config::Config;
+use crate::server::App;
+
+/// One `[agent.<name>]` table.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgentConfig {
+    pub name: String,
+    /// The name listed in `server.info` components, such as `spoolman`.
+    pub component: Option<String>,
+    /// Method prefixes: `(public, agent)`, such as `("server.spoolman", "agent.spoolman")`.
+    pub methods: Vec<(String, String)>,
+    /// Notifications: `(public name without notify_, agent event)`.
+    pub notifications: Vec<(String, String)>,
+    pub history_fields: Vec<String>,
+    /// The only Unix user that may connect as this agent.
+    pub user: Option<u32>,
+}
+
+#[derive(Debug, Default)]
+pub struct Agents {
+    configs: Vec<AgentConfig>,
+}
+
+impl Agents {
+    pub fn new(config: &Config) -> Result<Self> {
+        let mut configs = Vec::new();
+        for section in config.section_names("agent ") {
+            let name = section["agent ".len()..].to_owned();
+            configs.push(parse_section(config, &section, &name)?);
+        }
+        Ok(Self { configs })
+    }
+
+    fn get(&self, name: &str) -> Option<&AgentConfig> {
+        self.configs.iter().find(|c| c.name == name)
+    }
+
+    /// Component names configured agents add to `server.info`.
+    pub fn components(&self) -> impl Iterator<Item = &str> {
+        self.configs.iter().filter_map(|c| c.component.as_deref())
+    }
+
+    /// The registry aliases for every configured method map.
+    pub fn aliases(&self) -> Vec<Alias> {
+        let mut out = Vec::new();
+        for c in &self.configs {
+            for (public, target) in &c.methods {
+                out.push(Alias::new(public, target, &c.name));
+            }
+        }
+        out
+    }
+
+    /// The public notification an agent's event is mapped to, without `notify_`.
+    pub fn notification(&self, agent: &str, event: &str) -> Option<&str> {
+        let c = self.get(agent)?;
+        c.notifications.iter().find(|(_, e)| e == event).map(|(public, _)| public.as_str())
+    }
+}
+
+fn parse_section(config: &Config, section: &str, name: &str) -> Result<AgentConfig> {
+    if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+        bail!("[{section}]: an agent name may use letters, digits, '_' and '-'");
+    }
+    let s = config.section(section);
+    let component = s.get_opt_str("component");
+    let history_fields = s.get_list("history_fields");
+    let user = match s.get_value("user") {
+        None => None,
+        Some(Value::Number(n)) => Some(n.as_u64().and_then(|n| u32::try_from(n).ok()).unwrap_or(u32::MAX)),
+        Some(Value::String(u)) => Some(user_id(&u).ok_or_else(|| anyhow::anyhow!("[{section}] user: no user {u:?}"))?),
+        Some(other) => bail!("[{section}] user: expected a user name or id, got {other}"),
+    };
+    let mut methods = Vec::new();
+    let mut notifications = Vec::new();
+    let own = format!("agent.{name}");
+    match s.get_value("maps") {
+        None => {}
+        Some(Value::Object(maps)) => {
+            for (public, target) in maps {
+                let Some(target) = target.as_str() else {
+                    bail!("[{section}] maps: {public:?} must map to a string, got {target}");
+                };
+                if let Some(notify) = public.strip_prefix("notify_") {
+                    let Some(event) = target.strip_prefix(&format!("{own}.")).filter(|e| !e.contains('.')) else {
+                        bail!(
+                            "[{section}] maps: {public} must map to one of this agent's events, such as {own}.<event>"
+                        );
+                    };
+                    notifications.push((notify.to_owned(), event.to_owned()));
+                    continue;
+                }
+                if target != own && !target.starts_with(&format!("{own}.")) {
+                    bail!("[{section}] maps: {public} must map to this agent's methods, {own} or {own}.<prefix>");
+                }
+                if public.is_empty() || public.starts_with("agent.") || public.starts_with("orrery.") {
+                    bail!("[{section}] maps: {public:?} can't be mapped; agent.* and orrery.* names are orrery's own");
+                }
+                methods.push((public, target.to_owned()));
+            }
+        }
+        Some(other) => bail!("[{section}] maps: expected a table, got {other}"),
+    }
+    Ok(AgentConfig { name: name.to_owned(), component, methods, notifications, history_fields, user })
+}
+
+/// Looks up a user's id in `/etc/passwd`. A number is taken as the id itself.
+fn user_id(user: &str) -> Option<u32> {
+    if let Ok(id) = user.parse() {
+        return Some(id);
+    }
+    let passwd = std::fs::read_to_string("/etc/passwd").ok()?;
+    passwd.lines().map(|l| l.split(':').collect::<Vec<_>>()).find(|f| f.first() == Some(&user))?.get(2)?.parse().ok()
+}
+
+pub fn register_endpoints(app: &Arc<App>) {
+    let mut r = app.registry.write().expect("registry lock");
+    r.register(
+        "/orrery/agent/register_endpoint",
+        &[RequestType::Post],
+        Transports::WebsocketOnly,
+        handler(register_endpoint),
+    );
+    r.register("/orrery/agent/history_field", &[RequestType::Post], Transports::WebsocketOnly, handler(history_field));
+}
+
+/// Installs the configured maps, after every built-in endpoint is registered, and warns about
+/// maps that replace orrery's own methods.
+pub fn start(app: &Arc<App>) {
+    let aliases = app.agents.aliases();
+    let mut warnings = Vec::new();
+    {
+        let mut r = app.registry.write().expect("registry lock");
+        for alias in &aliases {
+            if r.has_prefix(&alias.public_method) {
+                warnings.push(format!(
+                    "orrery.toml maps {} to the agent {}, so the agent answers orrery's own {}.* methods.",
+                    alias.public_method, alias.agent, alias.public_method
+                ));
+            }
+        }
+        r.set_aliases(aliases);
+    }
+    for w in warnings {
+        app.add_warning(w);
+    }
+}
+
+/// Checks that a connection may use an agent name. Configured names need the unix socket, and
+/// the configured user when there is one.
+pub fn check_claim(app: &App, name: &str, conn: ConnId) -> Result<(), ApiError> {
+    let Some(config) = app.agents.get(name) else { return Ok(()) };
+    let peer = app.client_peer(conn);
+    if !peer.unix {
+        return Err(ApiError::bad_request(format!(
+            "Agent '{name}' is configured in orrery.toml, so it must connect over the unix socket"
+        )));
+    }
+    if let Some(user) = config.user
+        && peer.uid != Some(user)
+    {
+        return Err(ApiError::bad_request(format!("Agent '{name}' must connect as user {user}")));
+    }
+    Ok(())
+}
+
+/// Removes an agent's endpoints when it disconnects.
+pub fn remove_agent(app: &App, name: &str) {
+    app.registry.write().expect("registry lock").unregister_prefix(&format!("/agent/{name}/"));
+}
+
+/// The agent behind a request, or an error for a connection that isn't one.
+fn require_agent(app: &App, req: &Request) -> Result<String, ApiError> {
+    let conn = req.conn.ok_or_else(|| ApiError::bad_request("No connection detected"))?;
+    let identity = app.client_identity(conn).unwrap_or_default();
+    if identity["type"].as_str() != Some("agent") {
+        return Err(ApiError::bad_request("Only connections of the 'agent' type can use orrery.agent methods"));
+    }
+    Ok(identity["name"].as_str().unwrap_or_default().to_owned())
+}
+
+async fn register_endpoint(app: Arc<App>, req: Request) -> ApiResult {
+    let agent = require_agent(&app, &req)?;
+    let path = req.args.str("path")?;
+    let path = path.trim_matches('/');
+    let valid = |p: &str| !p.is_empty() && p.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+    if !path.split('/').all(valid) {
+        return Err(ApiError::bad_request(format!(
+            "Invalid endpoint path {path:?}: use lowercase letters, digits, '_' and '/'"
+        )));
+    }
+    let names = req.args.list("request_methods")?;
+    let mut types = Vec::new();
+    for n in &names {
+        let t = RequestType::from_http(&n.to_ascii_uppercase())
+            .ok_or_else(|| ApiError::bad_request(format!("Invalid request method {n:?}")))?;
+        if !types.contains(&t) {
+            types.push(t);
+        }
+    }
+    if types.is_empty() {
+        return Err(ApiError::bad_request("request_methods must list GET, POST, or DELETE"));
+    }
+    let full = format!("/agent/{agent}/{path}");
+    let prefix = format!("agent.{agent}.");
+    let mut r = app.registry.write().expect("registry lock");
+    if r.by_path(&full).is_some() {
+        return Err(ApiError::bad_request(format!("Endpoint {full} already registered")));
+    }
+    let name = agent.clone();
+    let forward = handler(move |app: Arc<App>, req: Request| {
+        let (agent, prefix) = (name.clone(), prefix.clone());
+        async move {
+            let method = app.registry.read().expect("registry lock").method_name(&req.endpoint, req.kind);
+            let local = method.strip_prefix(&prefix).unwrap_or(&method).to_owned();
+            crate::extensions::call(&app, &agent, &local, Value::Object(req.args.0)).await
+        }
+    });
+    r.register(&full, &types, Transports::All, forward);
+    tracing::info!("Agent {agent} registered endpoint {full}");
+    Ok(json!("ok"))
+}
+
+async fn history_field(app: Arc<App>, req: Request) -> ApiResult {
+    let agent = require_agent(&app, &req)?;
+    let name = req.args.str("name")?;
+    let allowed = app.agents.get(&agent).is_some_and(|c| c.history_fields.contains(&name));
+    if !allowed {
+        return Err(ApiError::bad_request(format!(
+            "Agent {agent} may not set the history field {name}; list it in history_fields in orrery.toml"
+        )));
+    }
+    let value = req.args.require("value")?.clone();
+    let description = req.args.opt_str("description")?;
+    let units = req.args.opt_str("units")?;
+    crate::history::set_field(&app, &agent, &name, value, description, units).await?;
+    Ok(json!("ok"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    fn agents(toml: &str) -> Result<Agents> {
+        let mut c = Config::parse("[server]\n").unwrap();
+        c.parse_toml(toml, Path::new("orrery.toml"))?;
+        Agents::new(&c)
+    }
+
+    #[test]
+    fn parses_tables() {
+        let a = agents(
+            r#"
+[agent.spoolman]
+component = "spoolman"
+history_fields = ["spool_ids"]
+user = 1000
+
+[agent.spoolman.maps]
+"server.spoolman" = "agent.spoolman"
+"notify_active_spool_set" = "agent.spoolman.active_spool_set"
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            a.get("spoolman"),
+            Some(&AgentConfig {
+                name: "spoolman".into(),
+                component: Some("spoolman".into()),
+                methods: vec![("server.spoolman".into(), "agent.spoolman".into())],
+                notifications: vec![("active_spool_set".into(), "active_spool_set".into())],
+                history_fields: vec!["spool_ids".into()],
+                user: Some(1000),
+            })
+        );
+        assert_eq!(a.notification("spoolman", "active_spool_set"), Some("active_spool_set"));
+        assert_eq!(a.components().collect::<Vec<_>>(), vec!["spoolman"]);
+    }
+
+    #[test]
+    fn rejects_maps_outside_the_agent() {
+        let err = |t: &str| agents(t).unwrap_err().to_string();
+        assert!(err("[agent.a.maps]\n\"server.x\" = \"agent.b\"\n").contains("this agent's methods"));
+        assert!(err("[agent.a.maps]\n\"notify_x\" = \"agent.b.x\"\n").contains("this agent's events"));
+        assert!(err("[agent.a.maps]\n\"orrery.x\" = \"agent.a\"\n").contains("orrery's own"));
+        assert!(err("[agent.a]\nmaps = \"x\"\n").contains("expected a table"));
+    }
+}

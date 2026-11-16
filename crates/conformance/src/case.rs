@@ -56,6 +56,10 @@ pub struct Case {
     /// Tags select tiers: `real-klippy` cases also run against real Klipper.
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Run only against these targets. orrery's own features, which Moonraker doesn't have, use
+    /// `[orrery]`; they have no reference snapshots.
+    #[serde(default)]
+    pub targets: Option<Vec<crate::target::TargetKind>>,
     /// Known difference from Moonraker (an id in docs/regressions.md). Failures are reported but
     /// don't fail the run; a pass is reported so the entry can be removed.
     #[serde(default)]
@@ -211,6 +215,9 @@ pub enum AgentAction {
         name: String,
         #[serde(default)]
         replies: Map<String, Value>,
+        /// `unix` or `ws`, instead of the case's transport.
+        #[serde(default)]
+        via: Option<Transport>,
     },
     Disconnect,
 }

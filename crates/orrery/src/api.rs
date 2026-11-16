@@ -260,6 +260,61 @@ pub struct Registry {
     by_path: HashMap<String, Endpoint>,
     /// JSON-RPC method -> (HTTP path, request type).
     methods: HashMap<String, (String, RequestType)>,
+    /// Method prefixes `orrery.toml` maps to agents. They're checked before everything else.
+    aliases: Vec<Alias>,
+}
+
+/// A method prefix mapped to an agent's prefix, such as `server.spoolman` to
+/// `agent.spoolman`, with the matching HTTP paths.
+#[derive(Debug, Clone)]
+pub struct Alias {
+    pub public_method: String,
+    pub agent_method: String,
+    pub public_path: String,
+    pub agent_path: String,
+    /// The agent the prefix belongs to.
+    pub agent: String,
+}
+
+impl Alias {
+    pub fn new(public: &str, target: &str, agent: &str) -> Self {
+        Self {
+            public_method: public.to_owned(),
+            agent_method: target.to_owned(),
+            public_path: format!("/{}", public.replace('.', "/")),
+            agent_path: format!("/{}", target.replace('.', "/")),
+            agent: agent.to_owned(),
+        }
+    }
+}
+
+/// `name` with `prefix` replaced by `with`, when `name` is `prefix` or starts with `prefix` and
+/// then `sep`.
+fn swap_prefix(name: &str, prefix: &str, with: &str, sep: char) -> Option<String> {
+    let rest = name.strip_prefix(prefix)?;
+    (rest.is_empty() || rest.starts_with(sep)).then(|| format!("{with}{rest}"))
+}
+
+/// What a mapped name answers when the agent hasn't registered it: "not connected" while the
+/// agent is away, "not found" otherwise.
+fn agent_stub(path: &str, agent: &str) -> Endpoint {
+    let agent = agent.to_owned();
+    Endpoint {
+        endpoint: path.to_owned(),
+        types: vec![RequestType::Get, RequestType::Post, RequestType::Delete],
+        http: true,
+        object_parser: false,
+        handler: handler(move |app: Arc<App>, _req| {
+            let agent = agent.clone();
+            async move {
+                if crate::extensions::is_connected(&app, &agent) {
+                    Err(ApiError::not_found("Not Found"))
+                } else {
+                    Err(ApiError::bad_request(format!("Agent {agent} not connected")))
+                }
+            }
+        }),
+    }
 }
 
 /// Which transports an endpoint is served on.
@@ -318,12 +373,53 @@ impl Registry {
     }
 
     pub fn by_method(&self, method: &str) -> Option<(Endpoint, RequestType)> {
+        for alias in &self.aliases {
+            if let Some(target) = swap_prefix(method, &alias.public_method, &alias.agent_method, '.') {
+                return Some(
+                    self.direct_method(&target)
+                        .unwrap_or_else(|| (agent_stub(&alias.agent_path, &alias.agent), RequestType::Post)),
+                );
+            }
+        }
+        self.direct_method(method)
+    }
+
+    fn direct_method(&self, method: &str) -> Option<(Endpoint, RequestType)> {
         let (path, t) = self.methods.get(method)?;
         Some((self.by_path.get(path)?.clone(), *t))
     }
 
     pub fn by_path(&self, path: &str) -> Option<Endpoint> {
+        for alias in &self.aliases {
+            if let Some(target) = swap_prefix(path, &alias.public_path, &alias.agent_path, '/') {
+                return Some(self.by_path.get(&target).cloned().unwrap_or_else(|| agent_stub(&target, &alias.agent)));
+            }
+        }
         self.by_path.get(path).cloned()
+    }
+
+    /// The JSON-RPC method name of an endpoint for one request type.
+    pub fn method_name(&self, path: &str, kind: RequestType) -> String {
+        self.methods
+            .iter()
+            .find(|(_, (p, t))| p == path && *t == kind)
+            .map(|(m, _)| m.clone())
+            .unwrap_or_else(|| path.trim_start_matches('/').replace('/', "."))
+    }
+
+    /// True if any registered method is `prefix` or starts with `prefix.`.
+    pub fn has_prefix(&self, prefix: &str) -> bool {
+        self.methods.keys().any(|m| swap_prefix(m, prefix, "", '.').is_some())
+    }
+
+    pub fn set_aliases(&mut self, aliases: Vec<Alias>) {
+        self.aliases = aliases;
+    }
+
+    /// Removes every endpoint whose path starts with `prefix`.
+    pub fn unregister_prefix(&mut self, prefix: &str) {
+        self.by_path.retain(|p, _| !p.starts_with(prefix));
+        self.methods.retain(|_, (p, _)| !p.starts_with(prefix));
     }
 }
 
@@ -354,6 +450,27 @@ mod tests {
         assert_eq!(ep.endpoint, "objects/query");
         assert!(ep.object_parser);
         assert!(r.by_path("/printer/objects/query").is_some());
+    }
+
+    #[test]
+    fn aliases() {
+        let mut r = Registry::default();
+        r.register("/server/info", &[RequestType::Get], Transports::All, noop());
+        r.register("/agent/spoolman/spool_id", &[RequestType::Get, RequestType::Post], Transports::All, noop());
+        r.set_aliases(vec![Alias::new("server.spoolman", "agent.spoolman", "spoolman")]);
+        let (ep, t) = r.by_method("server.spoolman.post_spool_id").unwrap();
+        assert_eq!((ep.endpoint.as_str(), t), ("/agent/spoolman/spool_id", RequestType::Post));
+        assert_eq!(r.by_path("/server/spoolman/spool_id").unwrap().endpoint, "/agent/spoolman/spool_id");
+        assert_eq!(r.method_name("/agent/spoolman/spool_id", RequestType::Get), "agent.spoolman.get_spool_id");
+        // A mapped name the agent hasn't registered still answers, with the stub.
+        assert_eq!(r.by_method("server.spoolman.proxy").unwrap().0.endpoint, "/agent/spoolman");
+        assert_eq!(r.by_path("/server/spoolman/proxy").unwrap().endpoint, "/agent/spoolman/proxy");
+        // Only whole prefixes match.
+        assert!(r.by_method("server.spoolmanx.proxy").is_none());
+        assert!(r.has_prefix("server"));
+        assert!(!r.has_prefix("serv"));
+        r.unregister_prefix("/agent/spoolman/");
+        assert!(r.direct_method("agent.spoolman.get_spool_id").is_none());
     }
 
     #[test]

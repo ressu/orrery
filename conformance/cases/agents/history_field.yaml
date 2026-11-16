@@ -1,0 +1,38 @@
+name: an agent adds a field to the job history records
+targets: [orrery]
+transports: [ws]
+files:
+  gcodes/cube.gcode: "G28\n"
+  config/orrery.toml: |
+    [agent.spoolman]
+    history_fields = ["spool_ids"]
+steps:
+  - agent: {connect: {name: spoolman, via: unix}}
+  - call: orrery.agent.history_field
+    as_agent: true
+    params: {name: spool_ids, value: [3]}
+    expect_error: {code: 400, message: No print job is being recorded}
+  - klippy: {update: {print_stats: {state: printing, filename: cube.gcode}}}
+  - expect_notification: notify_history_changed
+    match: [{action: added}]
+  - call: orrery.agent.history_field
+    as_agent: true
+    params: {name: spool_ids, value: [3], description: Spool IDs used}
+    expect: ok
+  - call: orrery.agent.history_field
+    as_agent: true
+    params: {name: weight, value: 12}
+    expect_error: {code: 400, message: "$regex:may not set the history field weight"}
+  - call: printer.print.cancel
+  - expect_notification: notify_history_changed
+    match:
+      - action: finished
+        job:
+          status: cancelled
+          auxiliary_data:
+            - {provider: spoolman, name: spool_ids, value: [3], description: Spool IDs used, units: null}
+  - call: server.history.list
+    expect:
+      jobs:
+        - auxiliary_data:
+            - {provider: spoolman, name: spool_ids, value: [3], description: Spool IDs used, units: null}
