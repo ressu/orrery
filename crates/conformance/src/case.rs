@@ -16,12 +16,14 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
-/// Transport used for `call` steps. Notifications always arrive over the websocket.
+/// Transport used for `call` and `raw_ws` steps. Notifications always arrive over the websocket.
+/// `unix` is the unix socket, `comms/moonraker.sock`; cases opt in to it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Transport {
     Ws,
     Http,
+    Unix,
 }
 
 impl Transport {
@@ -29,6 +31,7 @@ impl Transport {
         match self {
             Self::Ws => "ws",
             Self::Http => "http",
+            Self::Unix => "unix",
         }
     }
 }

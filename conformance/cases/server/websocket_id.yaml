@@ -1,5 +1,5 @@
 name: server.websocket.id returns this connection's id
-transports: [ws]
+transports: [ws, unix]
 steps:
   - call: server.websocket.id
     expect: {websocket_id: $type:number}

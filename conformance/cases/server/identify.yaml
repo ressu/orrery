@@ -1,5 +1,5 @@
 name: websocket identify and id
-transports: [ws]
+transports: [ws, unix]
 steps:
   - call: server.connection.identify
     params: {client_name: conformance, version: "0.1", type: web, url: "https://example.invalid"}

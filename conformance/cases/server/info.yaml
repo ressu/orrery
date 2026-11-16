@@ -1,4 +1,5 @@
 name: server.info with Klippy ready
+transports: [ws, http, unix]
 tags: [real-klippy]
 steps:
   - call: server.info

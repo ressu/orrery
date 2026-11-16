@@ -1,0 +1,50 @@
+[
+  {
+    "step": 1,
+    "call": "server.database.post_item",
+    "result": {
+      "namespace": "string",
+      "key": "string",
+      "value": {
+        "dark": "bool",
+        "accent": "string"
+      }
+    }
+  },
+  {
+    "step": 2,
+    "call": "server.database.get_item",
+    "result": {
+      "namespace": "string",
+      "key": "string",
+      "value": {
+        "theme": {
+          "dark": "bool",
+          "accent": "string"
+        }
+      }
+    }
+  },
+  {
+    "step": 3,
+    "call": "server.database.list",
+    "result": {
+      "namespaces": [
+        "string"
+      ],
+      "backups": []
+    }
+  },
+  {
+    "step": 4,
+    "call": "server.database.delete_item",
+    "result": {
+      "namespace": "string",
+      "key": "string",
+      "value": {
+        "dark": "bool",
+        "accent": "string"
+      }
+    }
+  }
+]

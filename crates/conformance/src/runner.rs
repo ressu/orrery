@@ -9,7 +9,7 @@ use fake_klippy::{FakeKlippy, Script};
 use serde_json::{Map, Value, json};
 
 use crate::case::{Case, KlippyAction, Step, Transport};
-use crate::client::{HttpClient, Outcome, Route, WsClient};
+use crate::client::{HttpClient, Outcome, Route, RpcClient};
 use crate::matcher::{mismatches, short};
 use crate::target::{DataDir, Paths, RealKlippy, Server, TargetKind, free_port};
 
@@ -66,7 +66,9 @@ pub async fn run_case(settings: &Settings, case: &Case, transport: Transport) ->
 
 struct Ctx {
     transport: Transport,
-    ws: WsClient,
+    ws: RpcClient,
+    /// The unix socket connection, for the `unix` transport.
+    unix: Option<RpcClient>,
     http: HttpClient,
     fake: Option<FakeKlippy>,
     real: Option<RealKlippy>,
@@ -99,10 +101,14 @@ async fn run_steps(
         None
     };
     let server = Server::start(settings.target, &settings.paths, data, port).await?;
-    let ws = WsClient::connect(&server.ws_url()).await?;
+    let ws = RpcClient::connect(&server.ws_url()).await?;
+    let unix = match transport {
+        Transport::Unix => Some(RpcClient::connect_unix(&data.path().join("comms/moonraker.sock")).await?),
+        _ => None,
+    };
     let http = HttpClient::new(server.base_url(), settings.routes.clone());
     let fixtures = settings.paths.conformance().join("fixtures/files");
-    let mut ctx = Ctx { transport, ws, http, fake, real, vars: Map::new(), fixtures };
+    let mut ctx = Ctx { transport, ws, unix, http, fake, real, vars: Map::new(), fixtures };
 
     if case.waits_ready() {
         wait_klippy_ready(&ctx).await?;
@@ -248,10 +254,12 @@ async fn run_step(ctx: &mut Ctx, step: &Step, index: usize, result: &mut RunResu
             }
         }
         Step::Raw(r) => {
-            if ctx.transport != Transport::Ws {
-                return Ok(());
-            }
-            let reply = ctx.ws.raw(&r.raw_ws, Duration::from_secs(5)).await?;
+            let client = match ctx.transport {
+                Transport::Ws => &ctx.ws,
+                Transport::Unix => ctx.unix.as_ref().expect("unix client"),
+                Transport::Http => return Ok(()),
+            };
+            let reply = client.raw(&r.raw_ws, Duration::from_secs(5)).await?;
             if let Some(expect) = &r.expect {
                 let problems = mismatches(expect, &reply);
                 if !problems.is_empty() {
@@ -334,6 +342,7 @@ async fn call(
 ) -> Result<Outcome> {
     match (ctx.transport, http) {
         (Transport::Ws, _) => ctx.ws.call(method, params.cloned()).await,
+        (Transport::Unix, _) => ctx.unix.as_ref().expect("unix client").call(method, params.cloned()).await,
         (Transport::Http, Some(h)) => {
             let body = h.body.as_ref().map(|b| substitute(b, &ctx.vars));
             ctx.http.request(&h.verb, &h.path, h.query.as_deref(), body.as_ref()).await

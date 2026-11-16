@@ -1,0 +1,18 @@
+name: an agent identifies over the unix socket
+description: >
+  Local agents connect to comms/moonraker.sock without logging in. The connection counts as a
+  websocket client, as in Moonraker, so server.info includes it in websocket_count.
+transports: [unix]
+klippy: none
+steps:
+  - call: server.connection.identify
+    params: {client_name: conformance-agent, version: "0.1", type: agent, url: "https://example.invalid"}
+    expect: {connection_id: $type:number}
+    save: {conn: connection_id}
+  - call: server.websocket.id
+    expect: {websocket_id: "${conn}"}
+  - call: server.connection.identify
+    params: {client_name: conformance-agent, version: "0.1", type: agent, url: "https://example.invalid"}
+    expect_error: {message: "$regex:already identified"}
+  - call: server.info
+    expect: {websocket_count: 2}

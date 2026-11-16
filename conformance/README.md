@@ -17,7 +17,7 @@ just record                   # re-record snapshots from the reference
 Runner flags go after the target, for example `just conformance reference --filter printer/ --keep`:
 
 - `--filter <text>` runs only cases whose id contains the text.
-- `--transport ws` or `--transport http` runs only one transport.
+- `--transport ws`, `--transport http`, or `--transport unix` runs only one transport.
 - `--keep` keeps the data directories of failed runs under `.work/runs/` for debugging. Each one
   holds the server's logs and config.
 - `--jobs <n>` sets how many cases run at once (default 4).
@@ -31,7 +31,8 @@ Runner flags go after the target, for example `just conformance reference --filt
 5. It runs the steps in order. The first failing step ends the case.
 
 Cases run once per transport. On the `http` run, `call` steps go over HTTP, using the routes in
-`http_routes.json`. Notifications always come over the websocket. Uploads and downloads always go
+`http_routes.json`. On the `unix` run, `call` and `raw_ws` steps go over the unix socket,
+`comms/moonraker.sock`. Cases opt in to `unix` by listing it in `transports`. Notifications always come over the websocket. Uploads and downloads always go
 over HTTP, as they do in frontends.
 
 The suite's coverage of the methods Fluidd uses is tracked in [coverage.md](coverage.md).
@@ -76,7 +77,7 @@ Other case fields:
 | `expect_no_notification: <method>` | Fails if a matching notification arrives within `within_ms` (default 500). |
 | `klippy: <action>` | Drives the fake Klippy (see below). |
 | `expect_klippy_request: {method, params}` | Checks that Klippy received a matching request. It's skipped with real Klipper. |
-| `raw_ws: <text>` | Sends a raw websocket frame and checks the reply with `expect`. It runs on the `ws` transport only. |
+| `raw_ws: <text>` | Sends a raw websocket frame and checks the reply with `expect`. It runs on the `ws` and `unix` transports, and is skipped on `http`. |
 | `upload: <file name>` | Uploads `content` (text) or `fixture` (a file in `fixtures/files/`) to `/server/files/upload`. `form` adds fields such as `root`, `path`, `print`, or `checksum`. Checks the result with `expect` or `expect_error`. |
 | `download: <root>/<path>` | Downloads a file. Checks `expect_status` (default 200) and the body with `expect_body` or `expect_fixture`. |
 | `sleep_ms: <n>` | Waits. |

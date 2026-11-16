@@ -18,6 +18,7 @@ pub mod logfile;
 mod machine;
 mod proc_stats;
 pub mod server;
+pub mod unix_socket;
 pub mod web;
 mod webcam;
 

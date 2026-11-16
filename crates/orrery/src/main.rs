@@ -6,7 +6,7 @@ use clap::Parser;
 
 use orrery::config::Config;
 use orrery::server::{App, Paths};
-use orrery::{expand_home, history, job_queue, logfile, web};
+use orrery::{expand_home, history, job_queue, logfile, unix_socket, web};
 
 #[derive(Parser)]
 #[command(version, about = "Experimental Moonraker-compatible API server for Klipper")]
@@ -20,6 +20,10 @@ struct Cli {
     /// The log file. The default is logs/orrery.log in the data folder.
     #[arg(short = 'l', long = "logfile", value_name = "log file")]
     log_file: Option<PathBuf>,
+    /// The unix socket for local clients and agents. The default is comms/moonraker.sock in the
+    /// data folder.
+    #[arg(short = 'u', long = "unixsocket", env = "MOONRAKER_UDS_PATH", value_name = "unix socket")]
+    unix_socket: Option<PathBuf>,
     /// Log only to the terminal.
     #[arg(short = 'n', long = "nologfile", conflicts_with = "log_file")]
     no_log_file: bool,
@@ -85,7 +89,7 @@ fn init_logging(cli: &Cli, paths: &Paths) -> (Option<tracing_appender::non_block
     (guard, warning)
 }
 
-async fn run(paths: Paths, log_warning: Option<String>) -> Result<()> {
+async fn run(paths: Paths, socket_path: PathBuf, log_warning: Option<String>) -> Result<()> {
     for dir in [paths.data.clone(), paths.data.join("comms"), paths.logs_dir(), paths.gcodes_dir(), paths.config_dir()]
     {
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
@@ -102,6 +106,8 @@ async fn run(paths: Paths, log_warning: Option<String>) -> Result<()> {
         app.add_warning(warning);
     }
     app.start();
+    // Kept until orrery exits, which removes the socket file.
+    let _socket = unix_socket::start(&app, &socket_path).await?;
     let addr = format!("{host}:{port}");
     let listener = tokio::net::TcpListener::bind(&addr).await.with_context(|| format!("listening on {addr}"))?;
     tracing::info!("Listening on {addr}");
@@ -129,6 +135,17 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let socket_path = match &cli.unix_socket {
+        Some(path) => expand_home(path),
+        None => Ok(paths.data.join("comms/moonraker.sock")),
+    };
+    let socket_path = match socket_path {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("orrery can't start: {e:#}");
+            return ExitCode::FAILURE;
+        }
+    };
     let (_log_guard, log_warning) = init_logging(&cli, &paths);
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(r) => r,
@@ -137,7 +154,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match runtime.block_on(run(paths, log_warning)) {
+    match runtime.block_on(run(paths, socket_path, log_warning)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("orrery can't start: {e:#}");

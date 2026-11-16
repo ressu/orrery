@@ -45,6 +45,7 @@ struct Cli {
 enum TransportArg {
     Ws,
     Http,
+    Unix,
 }
 
 #[tokio::main]
@@ -93,6 +94,7 @@ async fn run(cli: Cli) -> Result<bool> {
                 let wanted = match only {
                     TransportArg::Ws => Transport::Ws,
                     TransportArg::Http => Transport::Http,
+                    TransportArg::Unix => Transport::Unix,
                 };
                 if transport != wanted {
                     continue;
@@ -168,10 +170,10 @@ fn report(cli: &Cli, cases: &[Case], results: &[RunResult]) -> bool {
     let klippy = if cli.real_klipper { "real Klipper" } else { "fake Klippy" };
     let mode = if cli.record { ", recording snapshots" } else { "" };
     println!("\n{} target, {klippy}{mode}", cli.target.as_str());
-    println!("{:<20} {:>9} {:>9}", "area", "ws", "http");
+    println!("{:<20} {:>9} {:>9} {:>9}", "area", "ws", "http", "unix");
     for (area, cells) in &matrix {
         let cell = |t| cells.get(&t).map(|(p, n)| format!("{p}/{n}")).unwrap_or_else(|| "-".into());
-        println!("{:<20} {:>9} {:>9}", area, cell(Transport::Ws), cell(Transport::Http));
+        println!("{:<20} {:>9} {:>9} {:>9}", area, cell(Transport::Ws), cell(Transport::Http), cell(Transport::Unix));
     }
     let passed = results.iter().filter(|r| r.passed()).count();
     println!("{passed}/{} runs passed", results.len());

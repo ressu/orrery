@@ -1,4 +1,5 @@
 name: database post, get, list and delete
+transports: [ws, http, unix]
 tags: [real-klippy]
 steps:
   - call: server.database.post_item

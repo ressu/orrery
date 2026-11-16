@@ -39,14 +39,6 @@ change how safe or complete orrery is to run.
 - **Cases:** `server/config` (it expects an `authorization` section), and the authorization
   cases when they're written. `access/trusted` covers the trusted-client replies.
 
-### no-unix-socket: no unix socket API
-
-- **Area:** API
-- **Moonraker:** also serves its API on `comms/moonraker.sock`, for local agents and tools.
-- **orrery:** serves only HTTP and the websocket.
-- **Why:** no frontend uses the unix socket.
-- **Cases:** none yet.
-
 ### partial-server-config: `server.config` lists only orrery's options
 
 - **Area:** config

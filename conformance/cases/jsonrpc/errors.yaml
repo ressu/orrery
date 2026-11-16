@@ -1,5 +1,5 @@
 name: JSON-RPC error responses
-transports: [ws]
+transports: [ws, unix]
 klippy: none
 steps:
   - raw_ws: '{"jsonrpc": "2.0", "method": "no.such.method", "id": 7}'

@@ -1,0 +1,16 @@
+[
+  {
+    "step": 1,
+    "call": "server.connection.identify",
+    "result": {
+      "connection_id": "number"
+    }
+  },
+  {
+    "step": 2,
+    "call": "server.websocket.id",
+    "result": {
+      "websocket_id": "number"
+    }
+  }
+]

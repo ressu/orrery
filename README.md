@@ -14,7 +14,8 @@ Moonraker serves as the reference implementation.
 
 orrery connects to Klippy and serves the `server.*`, `printer.*`, `server.database.*`,
 `server.files.*`, `server.history.*`, `server.job_queue.*`, `server.webcams.*`,
-`machine.system_info`, and `machine.proc_stats` APIs, with file upload and download.
+`machine.system_info`, and `machine.proc_stats` APIs, with file upload and download. The same
+JSON-RPC API is also on a unix socket, `comms/moonraker.sock`, for local tools and agents.
 Authorization isn't written yet. **orrery has no authorization yet, so every client that can
 reach it has full access.** See
 [docs/regressions.md](docs/regressions.md).

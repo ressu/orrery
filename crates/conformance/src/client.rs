@@ -1,4 +1,4 @@
-//! Websocket JSON-RPC and HTTP clients for the server under test.
+//! JSON-RPC clients (websocket and unix socket) and an HTTP client for the server under test.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -9,6 +9,8 @@ use futures_util::{SinkExt, StreamExt};
 use orrery_proto::jsonrpc::{ErrorObject, Incoming, Request};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::UnixStream;
 use tokio::sync::{Notify, mpsc, oneshot};
 use tokio_tungstenite::tungstenite::Message;
 
@@ -32,54 +34,79 @@ struct Inbox {
     notifications: Vec<Received>,
 }
 
-/// A websocket connection to `/websocket`.
-pub struct WsClient {
-    out: mpsc::UnboundedSender<Message>,
+/// A JSON-RPC connection: the websocket at `/websocket`, or the unix socket.
+pub struct RpcClient {
+    out: mpsc::UnboundedSender<String>,
     inbox: Arc<Mutex<Inbox>>,
     arrived: Arc<Notify>,
     next_id: Mutex<u64>,
 }
 
-impl WsClient {
+impl RpcClient {
     pub async fn connect(url: &str) -> Result<Self> {
         let (stream, _) =
             tokio_tungstenite::connect_async(url).await.with_context(|| format!("connecting to {url}"))?;
         let (mut sink, mut source) = stream.split();
-        let (out, mut out_rx) = mpsc::unbounded_channel::<Message>();
+        let (out, mut out_rx) = mpsc::unbounded_channel::<String>();
         tokio::spawn(async move {
-            while let Some(msg) = out_rx.recv().await {
-                if sink.send(msg).await.is_err() {
+            while let Some(text) = out_rx.recv().await {
+                if sink.send(Message::text(text)).await.is_err() {
                     break;
                 }
             }
         });
-        let inbox = Arc::new(Mutex::new(Inbox::default()));
-        let arrived = Arc::new(Notify::new());
-        let (inbox_r, arrived_r) = (inbox.clone(), arrived.clone());
+        let client = Self::new(out);
+        let (inbox, arrived) = (client.inbox.clone(), client.arrived.clone());
         tokio::spawn(async move {
             while let Some(Ok(msg)) = source.next().await {
                 let Message::Text(text) = msg else { continue };
-                let Ok(value) = serde_json::from_str::<Value>(&text) else { continue };
-                let mut inbox = inbox_r.lock().unwrap();
-                match Incoming::from_value(value.clone()) {
-                    Some(Incoming::Notification { method, params }) => {
-                        inbox.notifications.push(Received { method, params });
-                    }
-                    Some(Incoming::Response { id, outcome }) => {
-                        match id.as_u64().and_then(|id| inbox.pending.remove(&id)) {
-                            Some(tx) => {
-                                let _ = tx.send(outcome);
-                            }
-                            None => inbox.raw.push(value),
-                        }
-                    }
-                    None => inbox.raw.push(value),
-                }
-                drop(inbox);
-                arrived_r.notify_waiters();
+                receive(&inbox, &arrived, &text);
             }
         });
-        Ok(Self { out, inbox, arrived, next_id: Mutex::new(0) })
+        Ok(client)
+    }
+
+    /// Connects to the unix socket. Messages end with ETX (`0x03`) in both directions.
+    pub async fn connect_unix(path: &std::path::Path) -> Result<Self> {
+        let stream = UnixStream::connect(path).await.with_context(|| format!("connecting to {}", path.display()))?;
+        let (reader, mut writer) = stream.into_split();
+        let (out, mut out_rx) = mpsc::unbounded_channel::<String>();
+        tokio::spawn(async move {
+            while let Some(text) = out_rx.recv().await {
+                let mut data = text.into_bytes();
+                data.push(0x03);
+                if writer.write_all(&data).await.is_err() {
+                    break;
+                }
+            }
+        });
+        let client = Self::new(out);
+        let (inbox, arrived) = (client.inbox.clone(), client.arrived.clone());
+        tokio::spawn(async move {
+            let mut reader = BufReader::new(reader);
+            let mut buf = Vec::new();
+            loop {
+                buf.clear();
+                match reader.read_until(0x03, &mut buf).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
+                if buf.pop() != Some(0x03) {
+                    break;
+                }
+                receive(&inbox, &arrived, &String::from_utf8_lossy(&buf));
+            }
+        });
+        Ok(client)
+    }
+
+    fn new(out: mpsc::UnboundedSender<String>) -> Self {
+        Self {
+            out,
+            inbox: Arc::new(Mutex::new(Inbox::default())),
+            arrived: Arc::new(Notify::new()),
+            next_id: Mutex::new(0),
+        }
     }
 
     pub async fn call(&self, method: &str, params: Option<Value>) -> Result<Outcome> {
@@ -91,10 +118,10 @@ impl WsClient {
         let (tx, rx) = oneshot::channel();
         self.inbox.lock().unwrap().pending.insert(id, tx);
         let req = Request::new(method, params, Some(json!(id)));
-        self.out.send(Message::text(serde_json::to_string(&req)?)).context("websocket closed")?;
+        self.out.send(serde_json::to_string(&req)?).context("connection closed")?;
         match tokio::time::timeout(CALL_TIMEOUT, rx).await {
             Ok(Ok(outcome)) => Ok(outcome),
-            Ok(Err(_)) => bail!("websocket closed before {method} returned"),
+            Ok(Err(_)) => bail!("connection closed before {method} returned"),
             Err(_) => bail!("{method}: no response within {CALL_TIMEOUT:?}"),
         }
     }
@@ -103,7 +130,7 @@ impl WsClient {
     /// to another call.
     pub async fn raw(&self, text: &str, timeout: Duration) -> Result<Value> {
         self.inbox.lock().unwrap().raw.clear();
-        self.out.send(Message::text(text.to_owned())).context("websocket closed")?;
+        self.out.send(text.to_owned()).context("connection closed")?;
         let deadline = Instant::now() + timeout;
         loop {
             let notified = self.arrived.notified();
@@ -144,6 +171,26 @@ impl WsClient {
     pub fn drain(&self) {
         self.inbox.lock().unwrap().notifications.clear();
     }
+}
+
+/// Files an incoming message: a reply to a pending call, a notification, or a raw message.
+fn receive(inbox: &Mutex<Inbox>, arrived: &Notify, text: &str) {
+    let Ok(value) = serde_json::from_str::<Value>(text) else { return };
+    let mut inbox = inbox.lock().unwrap();
+    match Incoming::from_value(value.clone()) {
+        Some(Incoming::Notification { method, params }) => {
+            inbox.notifications.push(Received { method, params });
+        }
+        Some(Incoming::Response { id, outcome }) => match id.as_u64().and_then(|id| inbox.pending.remove(&id)) {
+            Some(tx) => {
+                let _ = tx.send(outcome);
+            }
+            None => inbox.raw.push(value),
+        },
+        None => inbox.raw.push(value),
+    }
+    drop(inbox);
+    arrived.notify_waiters();
 }
 
 #[derive(Debug, Clone, Deserialize)]

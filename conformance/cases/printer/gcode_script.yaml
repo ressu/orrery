@@ -1,4 +1,5 @@
 name: printer.gcode.script runs gcode and reports its output
+transports: [ws, http, unix]
 steps:
   - call: printer.gcode.script
     params: {script: ECHO_hello}

@@ -1,0 +1,23 @@
+[
+  {
+    "step": 1,
+    "call": "printer.objects.query",
+    "result": {
+      "eventtime": "number",
+      "status": {
+        "print_stats": {
+          "state": "string",
+          "filename": "string"
+        },
+        "webhooks": {
+          "state": "string",
+          "state_message": "string"
+        },
+        "extruder": {
+          "no_such_field": "null"
+        },
+        "no_such_object": {}
+      }
+    }
+  }
+]
