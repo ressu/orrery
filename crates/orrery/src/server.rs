@@ -191,6 +191,13 @@ impl App {
         self.klippy.remove_subscription(crate::klippy::Subscriber::Conn(id));
     }
 
+    /// The name a client gave in `server.connection.identify`.
+    pub fn client_name(&self, id: ConnId) -> Option<String> {
+        let clients = self.clients.lock().expect("clients lock");
+        let identity = clients.get(&id)?.identity.as_ref()?;
+        identity["name"].as_str().map(str::to_owned)
+    }
+
     pub fn client_count(&self) -> usize {
         self.clients.lock().expect("clients lock").len()
     }
@@ -288,6 +295,17 @@ impl App {
         );
         r.register("/server/websocket/id", &[RequestType::Get], Transports::WebsocketOnly, handler(websocket_id));
     }
+}
+
+/// The end of a "Closed" log line: who the client was and how long it stayed.
+pub fn describe_close(name: Option<String>, opened: std::time::Instant) -> String {
+    let secs = opened.elapsed().as_secs();
+    let open_for = match secs {
+        0..60 => format!("{secs}s"),
+        60..3600 => format!("{}m {}s", secs / 60, secs % 60),
+        _ => format!("{}h {}m", secs / 3600, secs % 3600 / 60),
+    };
+    format!("Name: {}, Open For: {open_for}", name.as_deref().unwrap_or("(not identified)"))
 }
 
 fn rpc_error(code: i64, message: &str, id: Value) -> Value {

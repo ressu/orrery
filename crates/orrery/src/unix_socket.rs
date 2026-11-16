@@ -67,6 +67,7 @@ async fn serve(app: Arc<App>, stream: UnixStream) {
     let (reader, mut writer) = stream.into_split();
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
     let conn = app.add_client(tx.clone());
+    let opened = std::time::Instant::now();
     tracing::info!(
         "Unix Socket Opened - Client ID: {conn}, Process ID: {}, User ID: {}, Group ID: {}",
         cred.and_then(|c| c.pid()).map_or("unknown".into(), |p| p.to_string()),
@@ -84,9 +85,13 @@ async fn serve(app: Arc<App>, stream: UnixStream) {
     });
 
     let reason = read_messages(&app, conn, BufReader::new(reader), tx).await;
+    let name = app.client_name(conn);
     app.remove_client(conn);
     write_task.abort();
-    tracing::info!("Unix Socket Closed: ID: {conn}, Close Reason: {reason}");
+    tracing::info!(
+        "Unix Socket Closed: ID: {conn}, Close Reason: {reason}, {}",
+        crate::server::describe_close(name, opened)
+    );
 }
 
 /// Reads messages until the client disconnects, and returns why the connection ended.

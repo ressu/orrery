@@ -1,13 +1,15 @@
 //! HTTP and websocket transport. Every registered endpoint is served at its HTTP path, and the
 //! websocket at `/websocket` speaks JSON-RPC 2.0.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Instant;
 
 use axum::Router;
 use axum::body::Bytes;
 use axum::extract::DefaultBodyLimit;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{RawQuery, State};
+use axum::extract::{ConnectInfo, RawQuery, State};
 use axum::http::{HeaderMap, Method, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -54,15 +56,38 @@ async fn cors(State(app): State<Arc<App>>, req: axum::extract::Request, next: ax
     resp
 }
 
-async fn websocket(State(app): State<Arc<App>>, ws: WebSocketUpgrade) -> Response {
-    ws.on_upgrade(move |socket| serve_socket(app, socket))
+async fn websocket(
+    State(app): State<Arc<App>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+) -> Response {
+    let from = describe_peer(peer, &headers);
+    ws.on_upgrade(move |socket| serve_socket(app, socket, from))
 }
 
-async fn serve_socket(app: Arc<App>, socket: WebSocket) {
+/// Where a connection comes from, for the log: the client's address, the proxy's address when a
+/// reverse proxy such as nginx or caddy forwarded it, and the client's `User-Agent`. This helps
+/// tell apart clients that never call `server.connection.identify`.
+fn describe_peer(peer: SocketAddr, headers: &HeaderMap) -> String {
+    let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok()).map(str::trim).filter(|v| !v.is_empty());
+    let forwarded = header("x-forwarded-for").and_then(|v| v.split(',').next()).map(str::trim).or(header("x-real-ip"));
+    let mut from = match forwarded {
+        Some(client) => format!("{client} (via {peer})"),
+        None => peer.to_string(),
+    };
+    if let Some(agent) = header("user-agent") {
+        from.push_str(&format!(", User Agent: {agent}"));
+    }
+    from
+}
+
+async fn serve_socket(app: Arc<App>, socket: WebSocket, from: String) {
     let (mut sink, mut stream) = socket.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
     let conn = app.add_client(tx.clone());
-    tracing::info!("Websocket Opened: ID: {conn}");
+    let opened = Instant::now();
+    tracing::info!("Websocket Opened: ID: {conn}, From: {from}");
     let writer = tokio::spawn(async move {
         while let Some(text) = rx.recv().await {
             if sink.send(Message::Text(text.into())).await.is_err() {
@@ -86,9 +111,10 @@ async fn serve_socket(app: Arc<App>, socket: WebSocket) {
             }
         });
     }
+    let name = app.client_name(conn);
     app.remove_client(conn);
     writer.abort();
-    tracing::info!("Websocket Closed: ID: {conn}");
+    tracing::info!("Websocket Closed: ID: {conn}, {}", crate::server::describe_close(name, opened));
 }
 
 pub fn error_response(status: u16, message: &str) -> Response {
@@ -196,5 +222,18 @@ mod tests {
         let pairs =
             vec![("print_stats".to_owned(), "state,filename".to_owned()), ("webhooks".to_owned(), String::new())];
         assert_eq!(object_args(&pairs)["objects"], json!({"print_stats": ["state", "filename"], "webhooks": null}));
+    }
+
+    #[test]
+    fn peers() {
+        let peer: SocketAddr = "127.0.0.1:59894".parse().unwrap();
+        let mut headers = HeaderMap::new();
+        assert_eq!(describe_peer(peer, &headers), "127.0.0.1:59894");
+        headers.insert("x-forwarded-for", "192.168.1.199, 10.0.0.1".parse().unwrap());
+        headers.insert("user-agent", "HomeAssistant/2026.11 aiohttp/3.12".parse().unwrap());
+        assert_eq!(
+            describe_peer(peer, &headers),
+            "192.168.1.199 (via 127.0.0.1:59894), User Agent: HomeAssistant/2026.11 aiohttp/3.12"
+        );
     }
 }

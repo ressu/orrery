@@ -111,7 +111,8 @@ async fn run(paths: Paths, socket_path: PathBuf, log_warning: Option<String>) ->
     let addr = format!("{host}:{port}");
     let listener = tokio::net::TcpListener::bind(&addr).await.with_context(|| format!("listening on {addr}"))?;
     tracing::info!("Listening on {addr}");
-    axum::serve(listener, web::router(app.clone())).with_graceful_shutdown(shutdown_signal()).await?;
+    let service = web::router(app.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>();
+    axum::serve(listener, service).with_graceful_shutdown(shutdown_signal()).await?;
     job_queue::on_exit(&app).await;
     history::on_exit(&app).await;
     Ok(())
