@@ -85,11 +85,30 @@ history_fields = ["spool_ids"]
 [agent.spoolman.maps]
 "server.spoolman" = "agent.spoolman"
 "notify_active_spool_set" = "agent.spoolman.active_spool_set"
+"notify_spoolman_status_changed" = "agent.spoolman.spoolman_status_changed"
 ```
 
 A configured agent can connect only over the unix socket. `user = "printer"` also limits it to
 one Unix user. See [docs/design/2026-11-15-plugin-interface.md](docs/design/2026-11-15-plugin-interface.md)
 for how agents work. To write an agent in Rust, use the `orrery-agent` crate.
+
+### Spoolman
+
+Moonraker's Spoolman integration is a separate program in orrery, `orrery-spoolman`. It reads
+the same `[spoolman]` section, from `moonraker.conf` or `orrery.toml`. To use it:
+
+1. Add the `[agent.spoolman]` table above to `orrery.toml`.
+2. Start the agent after orrery, as the same user:
+
+   ```
+   orrery-spoolman ~/printer_data/comms/moonraker.sock
+   ```
+
+   Without the path, it uses `$ORRERY_SOCKET`, then `~/printer_data/comms/moonraker.sock`. It
+   connects again by itself when orrery restarts.
+
+The agent takes the active spool from Moonraker's database on its first run. orrery can't start
+agents yet, so for now run it in tmux or as a systemd service.
 
 ## Layout
 
@@ -97,6 +116,7 @@ for how agents work. To write an agent in Rust, use the `orrery-agent` crate.
 |---|---|
 | `crates/orrery` | The server, `orrery`, and the database import, `orrery-import` |
 | `crates/orrery-agent` | A client for writing agents in Rust; see its `examples/hello.rs` |
+| `crates/orrery-spoolman` | Moonraker's Spoolman integration, as an agent |
 | `crates/orrery-proto` | Shared wire formats: Klippy socket framing and JSON-RPC envelopes |
 | `crates/fake-klippy` | A scriptable stand-in for Klipper's API socket |
 | `crates/conformance` | The conformance test runner |

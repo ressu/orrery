@@ -20,7 +20,15 @@ use crate::server::App;
 /// Events the server sends itself when an agent connects or disconnects.
 const RESERVED_EVENTS: &[&str] = &["connected", "disconnected"];
 
-type Reply = Result<Value, ApiError>;
+type Reply = Result<Value, CallError>;
+
+/// Why a call to an agent failed.
+pub enum CallError {
+    /// The agent replied with this JSON-RPC error.
+    Agent(Value),
+    /// The agent never replied, such as when it disconnected.
+    Server(ApiError),
+}
 
 #[derive(Default)]
 pub struct Extensions {
@@ -96,7 +104,7 @@ pub fn remove_connection(app: &App, conn: ConnId) {
         (pending, name)
     };
     for tx in pending {
-        let _ = tx.send(Err(ApiError::new(500, "Client Socket Disconnected")));
+        let _ = tx.send(Err(CallError::Server(ApiError::new(500, "Client Socket Disconnected"))));
     }
     if let Some(name) = name {
         crate::agents::remove_agent(app, &name);
@@ -128,10 +136,7 @@ pub fn resolve_response(app: &App, conn: ConnId, obj: &Value) {
     };
     let reply = match (obj.get("error"), obj.get("result")) {
         (None, Some(result)) => Ok(result.clone()),
-        (error, _) => {
-            let name = app.client_name(conn).unwrap_or_default();
-            Err(ApiError::new(424, format!("Agent {name} RPC error")).with_data(error.cloned().unwrap_or_default()))
-        }
+        (error, _) => Err(CallError::Agent(error.cloned().unwrap_or_default())),
     };
     let _ = tx.send(reply);
 }
@@ -215,15 +220,25 @@ pub fn is_connected(app: &App, agent: &str) -> bool {
     app.extensions.lock().agents.iter().any(|(n, _)| n == agent)
 }
 
-/// Calls a method on an agent and waits for its reply.
+/// Calls a method on an agent and waits for its reply, as `server.extensions.request` does: an
+/// error from the agent becomes Moonraker's 424, with the agent's error as `data`.
 pub async fn call(app: &App, agent: &str, method: &str, arguments: Value) -> ApiResult {
+    send_call(app, agent, method, arguments).await.map_err(|e| match e {
+        CallError::Agent(error) => ApiError::new(424, format!("Agent {agent} RPC error")).with_data(error),
+        CallError::Server(e) => e,
+    })
+}
+
+/// Calls a method on an agent and waits for its reply.
+pub async fn send_call(app: &App, agent: &str, method: &str, arguments: Value) -> Result<Value, CallError> {
     let (tx, rx) = oneshot::channel();
     // The lookup and the pending entry share one lock, so an agent that disconnects in between
     // can't leave the call waiting forever.
     let (conn, id) = {
         let mut inner = app.extensions.lock();
         let conn = inner.agents.iter().find(|(n, _)| *n == agent).map(|&(_, c)| c);
-        let conn = conn.ok_or_else(|| ApiError::bad_request(format!("Agent {agent} not connected")))?;
+        let conn =
+            conn.ok_or_else(|| CallError::Server(ApiError::bad_request(format!("Agent {agent} not connected"))))?;
         inner.next_id += 1;
         let id = inner.next_id;
         inner.pending.insert((conn, id), tx);
@@ -237,7 +252,7 @@ pub async fn call(app: &App, agent: &str, method: &str, arguments: Value) -> Api
     // Moonraker waits without a time limit; a call ends when the agent replies or disconnects.
     match rx.await {
         Ok(reply) => reply,
-        Err(_) => Err(ApiError::new(500, "Client Socket Disconnected")),
+        Err(_) => Err(CallError::Server(ApiError::new(500, "Client Socket Disconnected"))),
     }
 }
 

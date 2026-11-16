@@ -149,6 +149,12 @@ are left out until a real agent needs one.
 
 ## Footprint
 
+Measured on 2026-11-16, on a desktop (x86_64, glibc), with the agent connected to a real
+Spoolman over TLS: `orrery-spoolman` uses 8.9 MB of memory, next to orrery's 14 MB. Its static
+aarch64 build is 5.3 MB, against Moonraker's component, which shares Moonraker's Python process.
+The numbers on bluev2 are still to measure. TLS uses rustls with the pure-Rust
+`rustls-rustcrypto` provider, so the agent has no C dependencies; that provider is a pre-release.
+
 What to measure with the Spoolman agent, on the printer:
 
 - **The agent's memory.** A Rust agent on tokio's single-threaded runtime, built for static

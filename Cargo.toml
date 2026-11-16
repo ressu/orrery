@@ -10,18 +10,24 @@ publish = false
 
 [workspace.dependencies]
 orrery-proto = { path = "crates/orrery-proto" }
+orrery-agent = { path = "crates/orrery-agent" }
 fake-klippy = { path = "crates/fake-klippy" }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 regex = "1"
 reqwest = { version = "0.13", default-features = false, features = ["json", "multipart", "query"] }
+# TLS for agents that reach https servers, with a pure-Rust crypto provider: no ring, no aws-lc.
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
+rustls-platform-verifier = "0.7"
+rustls-rustcrypto = "0.1.0-pre.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }
 serde_yaml_ng = "0.10"
 tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["tls12"] }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -120,6 +120,24 @@ change how safe or complete orrery is to run.
 - **Why:** an agent knows its own values, so orrery doesn't need Moonraker's trackers.
 - **Cases:** `agents/history_field` (orrery only).
 
+### spoolman-agent: Spoolman is a separate program, set up in `orrery.toml`
+
+- **Area:** Spoolman
+- **Moonraker:** a `[spoolman]` section turns on the built-in component.
+- **orrery:** the `orrery-spoolman` agent does the same work, from the same section. You start it
+  yourself, and add its `[agent.spoolman]` table to `orrery.toml`. Without the table, Fluidd
+  shows no Spoolman panel. Other differences:
+  - The agent keeps the active spool in the `spoolman` database namespace, not in `moonraker`.
+    On its first run, it takes the spool Moonraker had.
+  - A job gets its `spool_ids` field only while the agent is connected. Moonraker adds the field
+    to every job.
+  - When Spoolman sends no reply at all, a `proxy` request with `use_v2_response` gets
+    `status_code` 500 and the error's text.
+- **Why:** plugins are separate programs (docs/design/2026-11-15-plugin-interface.md). A built-in
+  table for migrated printers, so the `[spoolman]` section is enough, is planned.
+- **Cases:** none against Moonraker yet. `crates/orrery-spoolman/tests/agent.rs` checks the
+  agent against stand-ins for orrery and Spoolman.
+
 ### no-python-info: `machine.system_info` has no `python` field
 
 - **Area:** API
@@ -186,5 +204,5 @@ introduces it lands:
 - `moonraker.conf` support is best effort: `[secrets]`, Jinja templating, and full option
   validation come later.
 - Legacy LMDB databases from before Moonraker v0.9 can't be imported.
-- Out-of-scope components (update manager, power, sensors, MQTT, Spoolman, and others) are
-  missing or stubbed.
+- Out-of-scope components (update manager, power, sensors, MQTT, and others) are missing or
+  stubbed.

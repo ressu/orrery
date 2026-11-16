@@ -54,7 +54,9 @@ pub enum Error {
     Rpc { method: String, code: i64, message: String, data: Option<Value> },
 }
 
-/// An error a method handler returns. orrery passes it to the client unchanged.
+/// An error a method handler returns. Through `server.extensions.request`, the client gets it as
+/// the `data` of Moonraker's 424 error. Through one of the agent's endpoints, `code` is the HTTP
+/// status, such as 503; a code outside 400 to 599 becomes a 500.
 #[derive(Debug, Clone)]
 pub struct MethodError {
     pub code: i64,

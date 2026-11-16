@@ -10,6 +10,8 @@ steps:
         replies:
           get_spool_id: {result: {spool_id: 3}}
           post_spool_id: {result: {spool_id: 5}}
+          proxy: {error: {code: 503, message: Spoolman server not available}}
+          status: {error: {code: -32602, message: bad params}}
   - call: orrery.agent.register_endpoint
     as_agent: true
     params: {path: spool_id, request_methods: [GET, POST]}
@@ -23,6 +25,26 @@ steps:
     http: {verb: POST, path: /agent/test-agent/spool_id, body: {spool_id: 5}}
     expect: {spool_id: 5}
   - expect_agent_received: {method: post_spool_id, params: {spool_id: 5}}
+  # The agent's error code is the endpoint's status, as a built-in endpoint's would be. A code
+  # that isn't an HTTP status becomes a 500, with the agent's error as data.
+  - call: orrery.agent.register_endpoint
+    as_agent: true
+    params: {path: proxy, request_methods: [POST]}
+    expect: ok
+  - call: agent.test-agent.proxy
+    http: {verb: POST, path: /agent/test-agent/proxy}
+    expect_error: {code: 503, message: Spoolman server not available}
+  - call: orrery.agent.register_endpoint
+    as_agent: true
+    params: {path: status, request_methods: [GET]}
+    expect: ok
+  - call: agent.test-agent.status
+    only: [ws, unix]
+    expect_error: {code: 500, message: bad params, data: {code: -32602, message: bad params}}
+  - call: agent.test-agent.status
+    only: [http]
+    http: {verb: GET, path: /agent/test-agent/status}
+    expect_error: {code: 500, message: bad params}
   - call: orrery.agent.register_endpoint
     as_agent: true
     params: {path: spool_id, request_methods: [GET]}

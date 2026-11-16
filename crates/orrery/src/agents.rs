@@ -232,12 +232,34 @@ async fn register_endpoint(app: Arc<App>, req: Request) -> ApiResult {
         async move {
             let method = app.registry.read().expect("registry lock").method_name(&req.endpoint, req.kind);
             let local = method.strip_prefix(&prefix).unwrap_or(&method).to_owned();
-            crate::extensions::call(&app, &agent, &local, Value::Object(req.args.0)).await
+            crate::extensions::send_call(&app, &agent, &local, Value::Object(req.args.0)).await.map_err(endpoint_error)
         }
     });
     r.register(&full, &types, Transports::All, forward);
     tracing::info!("Agent {agent} registered endpoint {full}");
     Ok(json!("ok"))
+}
+
+/// An agent's error, answered from one of its endpoints. The agent's code is the HTTP status, as
+/// a built-in endpoint's would be, so an agent that stands in for one, such as Spoolman's
+/// `server.spoolman.proxy`, can answer with Moonraker's errors. A code that isn't an HTTP status,
+/// such as JSON-RPC's -32602, becomes a 500 that keeps the agent's error as `data`.
+fn endpoint_error(e: crate::extensions::CallError) -> ApiError {
+    let error = match e {
+        crate::extensions::CallError::Agent(error) => error,
+        crate::extensions::CallError::Server(e) => return e,
+    };
+    let message = error["message"].as_str().unwrap_or("Agent error").to_owned();
+    match error["code"].as_u64().and_then(|c| u16::try_from(c).ok()).filter(|c| (400..600).contains(c)) {
+        Some(status) => {
+            let e = ApiError::new(status, message);
+            match error.get("data") {
+                Some(data) => e.with_data(data.clone()),
+                None => e,
+            }
+        }
+        None => ApiError::new(500, message).with_data(error),
+    }
 }
 
 async fn history_field(app: Arc<App>, req: Request) -> ApiResult {
