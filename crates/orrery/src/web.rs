@@ -159,7 +159,7 @@ async fn http_request(
             let body = json!({"result": result});
             ([(header::CONTENT_TYPE, "application/json; charset=UTF-8")], body.to_string()).into_response()
         }
-        Err(ApiError { status, message }) => error_response(status, &message),
+        Err(ApiError { status, message, .. }) => error_response(status, &message),
     }
 }
 

@@ -1,0 +1,42 @@
+name: server.extensions.request relays a call to an agent and returns its reply
+transports: [ws, http, unix]
+klippy: none
+steps:
+  - agent:
+      connect:
+        name: test-agent
+        replies:
+          status: {result: {api_version: 1}}
+          update: {result: {started: true}}
+          broken: {error: {code: -32000, message: "the agent failed"}}
+  - call: server.extensions.request
+    params: {agent: test-agent, method: status}
+    expect: {api_version: 1}
+  - expect_agent_received: {method: status, params: null}
+  # Empty arguments are left out, as Python leaves out a falsy value.
+  - call: server.extensions.request
+    params: {agent: test-agent, method: status, arguments: {}}
+    expect: {api_version: 1}
+  - expect_agent_received: {method: status, params: null}
+  - call: server.extensions.request
+    params: {agent: test-agent, method: update, arguments: {mcus: [mcu, can]}}
+    expect: {started: true}
+  - expect_agent_received: {method: update, params: {mcus: [mcu, can]}}
+  - call: server.extensions.request
+    params: {agent: test-agent, method: update, arguments: [1, 2]}
+    expect: {started: true}
+  - expect_agent_received: {method: update, params: [1, 2]}
+  # The agent's error becomes a 424, with the agent's own error as `data` over JSON-RPC.
+  - call: server.extensions.request
+    params: {agent: test-agent, method: broken}
+    expect_error: {code: 424, message: Agent test-agent RPC error}
+  - call: server.extensions.request
+    params: {agent: test-agent, method: broken}
+    only: [ws, unix]
+    expect_error: {data: {code: -32000, message: "the agent failed"}}
+  - call: server.extensions.request
+    params: {agent: nobody, method: status}
+    expect_error: {code: 400, message: Agent nobody not connected}
+  - call: server.extensions.request
+    params: {agent: test-agent, method: status, arguments: "text"}
+    expect_error: {code: 400, message: The 'arguments' field must contain an object or a list}

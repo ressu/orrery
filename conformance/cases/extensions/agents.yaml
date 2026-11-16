@@ -1,0 +1,24 @@
+name: agents are listed while connected, and clients hear them come and go
+transports: [ws, http, unix]
+klippy: none
+steps:
+  - call: server.extensions.list
+    expect: {agents: []}
+  - call: server.info
+    expect: {components: {$contains: [extensions]}}
+  - agent: {connect: {name: test-agent}}
+  - expect_notification: notify_agent_event
+    match:
+      - agent: test-agent
+        event: connected
+        data: {name: test-agent, version: "0.1", type: agent, url: "https://example.invalid"}
+  - call: server.extensions.list
+    expect:
+      agents:
+        - {name: test-agent, version: "0.1", type: agent, url: "https://example.invalid"}
+  - agent: disconnect
+  - expect_notification: notify_agent_event
+    match: [{agent: test-agent, event: disconnected, data: $absent}]
+  - call: server.extensions.list
+    retry_ms: 2000
+    expect: {agents: []}

@@ -25,7 +25,7 @@ use orrery_proto::klippy as wire;
 const INIT_TIME: Duration = Duration::from_millis(250);
 /// Endpoints Moonraker uses itself and doesn't offer to clients.
 /// Methods Klippy's macros can call with `action_call_remote_method`.
-const REMOTE_METHODS: &[&str] = &["pause_job_queue", "start_job_queue"];
+pub const REMOTE_METHODS: &[&str] = &["pause_job_queue", "start_job_queue"];
 const RESERVED_ENDPOINTS: &[&str] = &["list_endpoints", "gcode/subscribe_output", "register_remote_method"];
 /// Printer objects Moonraker needs for full function.
 const REQUIRED_OBJECTS: &[&str] = &["virtual_sdcard", "display_status", "pause_resume"];
@@ -117,6 +117,11 @@ impl Klippy {
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
         self.inner.lock().expect("klippy lock")
+    }
+
+    /// True while orrery sets up a new Klippy connection, before it reports ready.
+    pub fn is_initializing(&self) -> bool {
+        self.lock().initializing
     }
 
     pub fn state(&self) -> (KlippyState, String) {
@@ -396,6 +401,14 @@ async fn read_loop(app: &Arc<App>, read: tokio::net::unix::OwnedReadHalf) {
     }
 }
 
+/// Asks Klippy to send calls to `method` (from `action_call_remote_method`) to orrery.
+pub async fn register_remote_method(app: &Arc<App>, method: &str) {
+    let params = json!({"response_template": {"method": method}, "remote_method": method});
+    if let Err(e) = app.klippy.request("register_remote_method", params, None).await {
+        tracing::warn!("Unable to register method '{method}': {e}");
+    }
+}
+
 fn handle_message(app: &Arc<App>, msg: Value) {
     if let Some(method) = msg.get("method").and_then(Value::as_str) {
         let params = msg.get("params").cloned().unwrap_or_default();
@@ -416,7 +429,10 @@ fn handle_message(app: &Arc<App>, msg: Value) {
             "start_job_queue" => {
                 tokio::spawn(crate::job_queue::start_queue(app.clone()));
             }
-            other => tracing::info!("Unknown method received: {other}"),
+            other => match app.extensions.method_conn(other) {
+                Some(conn) => crate::extensions::forward_remote_method(app, conn, other, &params),
+                None => tracing::info!("Unknown method received: {other}"),
+            },
         }
         return;
     }
@@ -513,11 +529,9 @@ async fn initialize(app: Arc<App>) {
         let current = app.klippy.state().0;
         if current == KlippyState::Ready {
             verify_requirements(&app).await;
-            for method in REMOTE_METHODS {
-                let params = json!({"response_template": {"method": method}, "remote_method": method});
-                if let Err(e) = app.klippy.request("register_remote_method", params, None).await {
-                    tracing::warn!("Unable to register method '{method}': {e}");
-                }
+            let agent_methods = app.extensions.remote_methods();
+            for method in REMOTE_METHODS.iter().copied().chain(agent_methods.iter().map(String::as_str)) {
+                register_remote_method(&app, method).await;
             }
             app.klippy.lock().initializing = false;
             tracing::info!("Klippy ready");

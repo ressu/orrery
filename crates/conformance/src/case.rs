@@ -106,6 +106,8 @@ pub enum Step {
     Upload(Box<UploadStep>),
     Download(DownloadStep),
     Sleep(SleepStep),
+    Agent(AgentStep),
+    AgentReceived(AgentReceivedStep),
 }
 
 /// Calls a method. With neither `expect` nor `expect_error`, any successful reply passes.
@@ -135,6 +137,9 @@ pub struct CallStep {
     /// aren't plain scalars).
     #[serde(default)]
     pub http: Option<HttpOverride>,
+    /// Send the call from the test agent's connection instead (see [`AgentStep`]).
+    #[serde(default)]
+    pub as_agent: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -177,6 +182,47 @@ fn default_within() -> u64 {
 
 fn default_quiet() -> u64 {
     500
+}
+
+/// Opens or closes the test agent: a second connection that identifies with `type: agent`.
+/// It goes over the unix socket on the `unix` transport, and over the websocket otherwise.
+///
+/// ```yaml
+/// - agent:
+///     connect:
+///       name: test-agent
+///       replies:                       # how it answers calls relayed to it
+///         status: {result: {ok: true}}
+///         broken: {error: {code: -32000, message: nope}}
+/// - agent: disconnect
+/// ```
+///
+/// A call to a method with no reply listed gets a -32601 error.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentStep {
+    pub agent: AgentAction,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum AgentAction {
+    Connect {
+        name: String,
+        #[serde(default)]
+        replies: Map<String, Value>,
+    },
+    Disconnect,
+}
+
+/// Waits until the test agent receives a message (a relayed call or a notification) whose
+/// `{method, params}` match.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentReceivedStep {
+    pub expect_agent_received: Value,
+    #[serde(default = "default_within")]
+    pub within_ms: u64,
 }
 
 /// Drives the fake Klippy.

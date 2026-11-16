@@ -1,0 +1,28 @@
+[
+  {
+    "step": 2,
+    "call": "connection.register_remote_method",
+    "result": "string"
+  },
+  {
+    "step": 6,
+    "call": "connection.register_remote_method",
+    "error": {
+      "code": 400
+    }
+  },
+  {
+    "step": 7,
+    "call": "connection.register_remote_method",
+    "error": {
+      "code": 400
+    }
+  },
+  {
+    "step": 8,
+    "call": "connection.register_remote_method",
+    "error": {
+      "code": 400
+    }
+  }
+]

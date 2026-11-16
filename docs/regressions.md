@@ -153,6 +153,18 @@ change how safe or complete orrery is to run.
 - **Why:** users come with authorization. The rest belongs to Moonraker, or orrery rebuilds it.
 - **Cases:** none; the import's unit tests read `conformance/fixtures/import/seed.db`.
 
+### agent-null-result: an agent's `null` result is a result
+
+- **Area:** API
+- **Moonraker:** when a client calls an agent with `server.extensions.request` and the agent
+  replies `"result": null`, Moonraker returns an agent error (424, "Agent <name> RPC error").
+  Its check reads a missing `result` and a `null` one the same way.
+- **orrery:** returns the `null` as the result. JSON-RPC allows a `null` result, and a reply is
+  an error only when it has an `error` member. A reply with neither is an agent error in both.
+- **Why:** Moonraker's behaviour looks accidental: its docs don't mention it, and agents such as
+  aldis work around it. Agents written for Moonraker never reply `null`, so none of them change.
+- **Cases:** `extensions/null_result`.
+
 ### webcam-test-no-tls: `server.webcams.test` can't reach `https` snapshots
 
 - **Area:** API

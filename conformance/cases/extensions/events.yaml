@@ -1,0 +1,33 @@
+name: agents send events to the other clients
+transports: [ws, unix]
+klippy: none
+steps:
+  - agent: {connect: {name: test-agent}}
+  - expect_notification: notify_agent_event
+    match: [{agent: test-agent, event: connected}]
+  - call: connection.send_event
+    as_agent: true
+    params: {event: update_response, data: {phase: flash, complete: false}}
+    expect: ok
+  - expect_notification: notify_agent_event
+    match: [{agent: test-agent, event: update_response, data: {phase: flash, complete: false}}]
+  - call: connection.send_event
+    as_agent: true
+    params: {event: ping}
+    expect: ok
+  - expect_notification: notify_agent_event
+    match: [{agent: test-agent, event: ping, data: $absent}]
+  - call: connection.send_event
+    as_agent: true
+    params: {event: connected}
+    expect_error: {code: 400, message: Event 'connected' is reserved}
+  # Only agents send events, and a second agent can't take a name that's in use.
+  - call: connection.send_event
+    params: {event: ping}
+    expect_error: {code: 400, message: Only connections of the 'agent' type can send events}
+  - call: server.connection.identify
+    params: {client_name: test-agent, version: "0.1", type: agent, url: "https://example.invalid"}
+    expect_error: {code: 400, message: "$regex:^Agent 'test-agent' already registered and connected"}
+  - call: server.connection.identify
+    params: {client_name: other, version: "0.1", type: web, url: "https://example.invalid"}
+    expect_error: {message: "$regex:already identified"}

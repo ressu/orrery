@@ -8,6 +8,7 @@ mod api;
 pub mod config;
 mod data_store;
 pub mod database;
+mod extensions;
 mod files;
 pub mod history;
 pub mod import;

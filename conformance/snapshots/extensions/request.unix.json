@@ -1,0 +1,58 @@
+[
+  {
+    "step": 2,
+    "call": "server.extensions.request",
+    "result": {
+      "api_version": "number"
+    }
+  },
+  {
+    "step": 4,
+    "call": "server.extensions.request",
+    "result": {
+      "api_version": "number"
+    }
+  },
+  {
+    "step": 6,
+    "call": "server.extensions.request",
+    "result": {
+      "started": "bool"
+    }
+  },
+  {
+    "step": 8,
+    "call": "server.extensions.request",
+    "result": {
+      "started": "bool"
+    }
+  },
+  {
+    "step": 10,
+    "call": "server.extensions.request",
+    "error": {
+      "code": 424
+    }
+  },
+  {
+    "step": 11,
+    "call": "server.extensions.request",
+    "error": {
+      "code": 424
+    }
+  },
+  {
+    "step": 12,
+    "call": "server.extensions.request",
+    "error": {
+      "code": 400
+    }
+  },
+  {
+    "step": 13,
+    "call": "server.extensions.request",
+    "error": {
+      "code": 400
+    }
+  }
+]

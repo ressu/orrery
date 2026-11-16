@@ -8,7 +8,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use fake_klippy::{FakeKlippy, Script};
 use serde_json::{Map, Value, json};
 
-use crate::case::{Case, KlippyAction, Step, Transport};
+use crate::case::{AgentAction, Case, KlippyAction, Step, Transport};
 use crate::client::{HttpClient, Outcome, Route, RpcClient};
 use crate::matcher::{mismatches, short};
 use crate::target::{DataDir, Paths, RealKlippy, Server, TargetKind, free_port};
@@ -69,6 +69,11 @@ struct Ctx {
     ws: RpcClient,
     /// The unix socket connection, for the `unix` transport.
     unix: Option<RpcClient>,
+    /// The test agent's connection, once an `agent: connect` step opens it.
+    agent: Option<RpcClient>,
+    /// Where the test agent connects.
+    ws_url: String,
+    unix_path: PathBuf,
     http: HttpClient,
     fake: Option<FakeKlippy>,
     real: Option<RealKlippy>,
@@ -108,7 +113,19 @@ async fn run_steps(
     };
     let http = HttpClient::new(server.base_url(), settings.routes.clone());
     let fixtures = settings.paths.conformance().join("fixtures/files");
-    let mut ctx = Ctx { transport, ws, unix, http, fake, real, vars: Map::new(), fixtures };
+    let mut ctx = Ctx {
+        transport,
+        ws,
+        unix,
+        agent: None,
+        ws_url: server.ws_url(),
+        unix_path: data.path().join("comms/moonraker.sock"),
+        http,
+        fake,
+        real,
+        vars: Map::new(),
+        fixtures,
+    };
 
     if case.waits_ready() {
         wait_klippy_ready(&ctx).await?;
@@ -161,7 +178,12 @@ async fn run_step(ctx: &mut Ctx, step: &Step, index: usize, result: &mut RunResu
             let params = c.params.as_ref().map(|p| substitute(p, &ctx.vars));
             let deadline = c.retry_ms.map(|ms| Instant::now() + Duration::from_millis(ms));
             loop {
-                let outcome = call(ctx, &c.call, params.as_ref(), c.http.as_ref()).await?;
+                let outcome = if c.as_agent {
+                    let agent = ctx.agent.as_ref().context("as_agent needs an `agent: connect` step first")?;
+                    agent.call(&c.call, params.clone()).await?
+                } else {
+                    call(ctx, &c.call, params.as_ref(), c.http.as_ref()).await?
+                };
                 let problems = check_outcome(&outcome, c.expect.as_ref(), c.expect_error.as_ref(), &ctx.vars);
                 if problems.is_empty() || deadline.is_none_or(|d| Instant::now() > d) {
                     result.transcript.push(transcript_entry(index, &c.call, &outcome));
@@ -315,6 +337,40 @@ async fn run_step(ctx: &mut Ctx, step: &Step, index: usize, result: &mut RunResu
             }
             Ok(())
         }
+        Step::Agent(a) => match &a.agent {
+            AgentAction::Connect { name, replies } => {
+                let agent = match ctx.transport {
+                    Transport::Unix => RpcClient::connect_unix(&ctx.unix_path).await?,
+                    _ => RpcClient::connect(&ctx.ws_url).await?,
+                };
+                agent.set_replies(replies.clone());
+                let params =
+                    json!({"client_name": name, "version": "0.1", "type": "agent", "url": "https://example.invalid"});
+                if let Err(e) = agent.call("server.connection.identify", Some(params)).await? {
+                    return Err(anyhow!("the test agent couldn't identify: {}", e.message));
+                }
+                ctx.agent = Some(agent);
+                Ok(())
+            }
+            AgentAction::Disconnect => {
+                ctx.agent = None;
+                Ok(())
+            }
+        },
+        Step::AgentReceived(r) => {
+            let agent = ctx.agent.as_ref().context("expect_agent_received needs an `agent: connect` step first")?;
+            let expected = substitute(&r.expect_agent_received, &ctx.vars);
+            let found = agent
+                .wait_notification(Duration::from_millis(r.within_ms), |m| {
+                    mismatches(&expected, &json!({"method": m.method, "params": m.params})).is_empty()
+                })
+                .await;
+            if found.is_none() {
+                let seen: Vec<String> = agent.notifications().iter().map(|m| m.method.clone()).collect();
+                return Err(anyhow!("the test agent never received {} (got: {})", short(&expected), seen.join(", ")));
+            }
+            Ok(())
+        }
         Step::Sleep(s) => {
             tokio::time::sleep(Duration::from_millis(s.sleep_ms)).await;
             Ok(())
@@ -359,7 +415,10 @@ fn check_outcome(
 ) -> Vec<String> {
     match (outcome, expect_error) {
         (Err(e), Some(exp)) => {
-            let actual = json!({"code": e.code, "message": e.message});
+            let mut actual = json!({"code": e.code, "message": e.message});
+            if let Some(data) = &e.data {
+                actual["data"] = data.clone();
+            }
             mismatches(&substitute(exp, vars), &actual)
         }
         (Ok(v), Some(_)) => vec![format!("expected an error, got {}", short(v))],

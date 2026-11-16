@@ -54,11 +54,18 @@ pub enum Transport {
 pub struct ApiError {
     pub status: u16,
     pub message: String,
+    /// Extra detail sent as the JSON-RPC error's `data`: an agent's own error.
+    pub data: Option<Value>,
 }
 
 impl ApiError {
     pub fn new(status: u16, message: impl Into<String>) -> Self {
-        Self { status, message: message.into() }
+        Self { status, message: message.into(), data: None }
+    }
+
+    pub fn with_data(mut self, data: Value) -> Self {
+        self.data = Some(data);
+        self
     }
 
     /// Moonraker's default `ServerError` status.

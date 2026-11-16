@@ -85,6 +85,7 @@ pub struct App {
     pub webcams: crate::webcam::Webcams,
     pub history: crate::history::History,
     pub cors: crate::access::Cors,
+    pub extensions: crate::extensions::Extensions,
     warnings: Mutex<Vec<String>>,
 }
 
@@ -103,6 +104,7 @@ const COMPONENTS: &[&str] = &[
     "job_queue",
     "history",
     "webcam",
+    "extensions",
 ];
 
 impl App {
@@ -137,6 +139,7 @@ impl App {
             webcams,
             history: crate::history::History::default(),
             cors,
+            extensions: crate::extensions::Extensions::default(),
             warnings: Mutex::new(warnings),
         });
         app.register_endpoints();
@@ -149,6 +152,7 @@ impl App {
         crate::proc_stats::register_endpoints(&app);
         crate::job_queue::register_endpoints(&app);
         crate::webcam::register_endpoints(&app);
+        crate::extensions::register_endpoints(&app);
         crate::history::register_endpoints(&app);
         Ok(app)
     }
@@ -187,8 +191,14 @@ impl App {
     }
 
     pub fn remove_client(&self, id: ConnId) {
+        crate::extensions::remove_connection(self, id);
         self.clients.lock().expect("clients lock").remove(&id);
         self.klippy.remove_subscription(crate::klippy::Subscriber::Conn(id));
+    }
+
+    /// What a client sent in `server.connection.identify`: name, version, type, and url.
+    pub fn client_identity(&self, id: ConnId) -> Option<Value> {
+        self.clients.lock().expect("clients lock").get(&id)?.identity.clone()
     }
 
     /// The name a client gave in `server.connection.identify`.
@@ -221,6 +231,17 @@ impl App {
         }
     }
 
+    /// Sends `notify_<name>` to every client except `except`, as Moonraker does for agent
+    /// events.
+    pub fn notify_except(&self, name: &str, params: Vec<Value>, except: ConnId) {
+        let text = json!({"jsonrpc": "2.0", "method": format!("notify_{name}"), "params": params}).to_string();
+        for (id, c) in self.clients.lock().expect("clients lock").iter() {
+            if *id != except {
+                let _ = c.tx.send(text.clone());
+            }
+        }
+    }
+
     // *** Dispatch ***
 
     /// Runs a JSON-RPC message (one request or a batch) and returns the reply, if any.
@@ -248,9 +269,13 @@ impl App {
         if obj.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
             return Some(rpc_error(-32600, "Invalid Request", id));
         }
-        // A message without a method is a client's reply to a server-initiated call; orrery
-        // makes none yet.
-        let method = obj.get("method")?;
+        // A message without a method is a client's reply to a call orrery sent it.
+        let Some(method) = obj.get("method") else {
+            if let Some(conn) = conn {
+                crate::extensions::resolve_response(self, conn, &obj);
+            }
+            return None;
+        };
         let Some(method) = method.as_str() else {
             return Some(rpc_error(-32600, "Invalid Request", id));
         };
@@ -278,7 +303,11 @@ impl App {
             Ok(v) => json!({"jsonrpc": "2.0", "result": v, "id": id}),
             Err(e) => {
                 tracing::info!("JSON-RPC Request Error - Requested Method: {method}, Code: {}, Message: {e}", e.status);
-                rpc_error(e.jsonrpc_code(), &e.message, id)
+                let mut reply = rpc_error(e.jsonrpc_code(), &e.message, id);
+                if let Some(data) = e.data {
+                    reply["error"]["data"] = data;
+                }
+                reply
             }
         })
     }
@@ -373,8 +402,19 @@ async fn connection_identify(app: Arc<App>, req: Request) -> ApiResult {
     if client.identity.is_some() {
         return Err(ApiError::bad_request(format!("Connection already identified: {conn}")));
     }
+    let identity = json!({"name": name, "version": version, "type": client_type, "url": url});
+    client.identity = Some(identity.clone());
+    drop(clients);
+    if client_type == "agent"
+        && let Err(e) = crate::extensions::register_agent(&app, conn, &name, &identity)
+    {
+        // As in Moonraker, the connection stays identified, but not as an agent.
+        if let Some(c) = app.clients.lock().expect("clients lock").get_mut(&conn) {
+            c.identity.as_mut().expect("identified above")["type"] = json!("");
+        }
+        return Err(e);
+    }
     tracing::info!("Websocket {conn} Client Identified - Name: {name}, Version: {version}, Type: {client_type}");
-    client.identity = Some(json!({"name": name, "version": version, "type": client_type, "url": url}));
     Ok(json!({"connection_id": conn}))
 }
 

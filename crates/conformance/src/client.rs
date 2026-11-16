@@ -32,6 +32,8 @@ struct Inbox {
     /// Raw text frames that weren't a response to a pending call (for `raw_ws` steps).
     raw: Vec<Value>,
     notifications: Vec<Received>,
+    /// Replies by method name for calls the server sends this client, when it acts as an agent.
+    replies: Option<Map<String, Value>>,
 }
 
 /// A JSON-RPC connection: the websocket at `/websocket`, or the unix socket.
@@ -40,6 +42,16 @@ pub struct RpcClient {
     inbox: Arc<Mutex<Inbox>>,
     arrived: Arc<Notify>,
     next_id: Mutex<u64>,
+    /// The reader and writer tasks, stopped when the client is dropped so the connection closes.
+    tasks: Vec<tokio::task::JoinHandle<()>>,
+}
+
+impl Drop for RpcClient {
+    fn drop(&mut self) {
+        for task in &self.tasks {
+            task.abort();
+        }
+    }
 }
 
 impl RpcClient {
@@ -48,21 +60,22 @@ impl RpcClient {
             tokio_tungstenite::connect_async(url).await.with_context(|| format!("connecting to {url}"))?;
         let (mut sink, mut source) = stream.split();
         let (out, mut out_rx) = mpsc::unbounded_channel::<String>();
-        tokio::spawn(async move {
+        let writer = tokio::spawn(async move {
             while let Some(text) = out_rx.recv().await {
                 if sink.send(Message::text(text)).await.is_err() {
                     break;
                 }
             }
         });
-        let client = Self::new(out);
+        let mut client = Self::new(out.clone());
         let (inbox, arrived) = (client.inbox.clone(), client.arrived.clone());
-        tokio::spawn(async move {
+        let reader = tokio::spawn(async move {
             while let Some(Ok(msg)) = source.next().await {
                 let Message::Text(text) = msg else { continue };
-                receive(&inbox, &arrived, &text);
+                receive(&inbox, &arrived, &out, &text);
             }
         });
+        client.tasks = vec![writer, reader];
         Ok(client)
     }
 
@@ -71,7 +84,7 @@ impl RpcClient {
         let stream = UnixStream::connect(path).await.with_context(|| format!("connecting to {}", path.display()))?;
         let (reader, mut writer) = stream.into_split();
         let (out, mut out_rx) = mpsc::unbounded_channel::<String>();
-        tokio::spawn(async move {
+        let writer = tokio::spawn(async move {
             while let Some(text) = out_rx.recv().await {
                 let mut data = text.into_bytes();
                 data.push(0x03);
@@ -80,9 +93,9 @@ impl RpcClient {
                 }
             }
         });
-        let client = Self::new(out);
+        let mut client = Self::new(out.clone());
         let (inbox, arrived) = (client.inbox.clone(), client.arrived.clone());
-        tokio::spawn(async move {
+        let reader = tokio::spawn(async move {
             let mut reader = BufReader::new(reader);
             let mut buf = Vec::new();
             loop {
@@ -94,9 +107,10 @@ impl RpcClient {
                 if buf.pop() != Some(0x03) {
                     break;
                 }
-                receive(&inbox, &arrived, &String::from_utf8_lossy(&buf));
+                receive(&inbox, &arrived, &out, &String::from_utf8_lossy(&buf));
             }
         });
+        client.tasks = vec![writer, reader];
         Ok(client)
     }
 
@@ -106,6 +120,7 @@ impl RpcClient {
             inbox: Arc::new(Mutex::new(Inbox::default())),
             arrived: Arc::new(Notify::new()),
             next_id: Mutex::new(0),
+            tasks: Vec::new(),
         }
     }
 
@@ -168,15 +183,33 @@ impl RpcClient {
         }
     }
 
+    /// Answers calls from the server with these replies, by method name.
+    pub fn set_replies(&self, replies: Map<String, Value>) {
+        self.inbox.lock().unwrap().replies = Some(replies);
+    }
+
     pub fn drain(&self) {
         self.inbox.lock().unwrap().notifications.clear();
     }
 }
 
-/// Files an incoming message: a reply to a pending call, a notification, or a raw message.
-fn receive(inbox: &Mutex<Inbox>, arrived: &Notify, text: &str) {
+/// Files an incoming message: a reply to a pending call, a notification, or a raw message. A
+/// call from the server (a method with an id) is filed like a notification, and answered when
+/// the client has replies set.
+fn receive(inbox: &Mutex<Inbox>, arrived: &Notify, out: &mpsc::UnboundedSender<String>, text: &str) {
     let Ok(value) = serde_json::from_str::<Value>(text) else { return };
     let mut inbox = inbox.lock().unwrap();
+    if let (Some(method), Some(id), Some(replies)) =
+        (value.get("method").and_then(Value::as_str), value.get("id"), inbox.replies.as_ref())
+    {
+        let mut reply = match replies.get(method) {
+            Some(Value::Object(r)) => Value::Object(r.clone()),
+            _ => json!({"error": {"code": -32601, "message": format!("Method not found: {method}")}}),
+        };
+        reply["jsonrpc"] = json!("2.0");
+        reply["id"] = id.clone();
+        let _ = out.send(reply.to_string());
+    }
     match Incoming::from_value(value.clone()) {
         Some(Incoming::Notification { method, params }) => {
             inbox.notifications.push(Received { method, params });

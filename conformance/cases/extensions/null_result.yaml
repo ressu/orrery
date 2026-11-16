@@ -1,0 +1,21 @@
+name: Moonraker turns an agent's null result into an agent error
+description: >
+  JSON-RPC allows a null result, but Moonraker reads a null result like a missing one and returns
+  an agent error. orrery passes the null on as the result instead, so this case fails on orrery
+  by design. A reply with neither result nor error is an agent error in both.
+transports: [ws, http, unix]
+klippy: none
+known_regression: agent-null-result
+steps:
+  - agent:
+      connect:
+        name: test-agent
+        replies:
+          nothing: {}
+          null_result: {result: null}
+  - call: server.extensions.request
+    params: {agent: test-agent, method: nothing}
+    expect_error: {code: 424, message: Agent test-agent RPC error}
+  - call: server.extensions.request
+    params: {agent: test-agent, method: null_result}
+    expect_error: {code: 424, message: Agent test-agent RPC error}

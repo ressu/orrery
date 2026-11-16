@@ -1,0 +1,25 @@
+name: an agent registers a Klippy remote method and receives its calls
+transports: [ws, unix]
+steps:
+  - agent: {connect: {name: test-agent}}
+  - call: connection.register_remote_method
+    as_agent: true
+    params: {method_name: test_agent_method}
+    expect: ok
+  - expect_klippy_request:
+      method: register_remote_method
+      params: {remote_method: test_agent_method, response_template: {method: test_agent_method}}
+  # A macro calls it with `action_call_remote_method("test_agent_method", value=3)`.
+  - klippy: {remote_method: {method: test_agent_method, params: {value: 3}}}
+  - expect_agent_received: {method: test_agent_method, params: {value: 3}}
+  - call: connection.register_remote_method
+    as_agent: true
+    params: {method_name: test_agent_method}
+    expect_error: {code: 400, message: Remote method (test_agent_method) already registered}
+  - call: connection.register_remote_method
+    as_agent: true
+    params: {method_name: pause_job_queue}
+    expect_error: {code: 400, message: Remote method (pause_job_queue) already registered}
+  - call: connection.register_remote_method
+    params: {method_name: another_method}
+    expect_error: {code: 400, message: Only connections of the 'agent' type can register methods}

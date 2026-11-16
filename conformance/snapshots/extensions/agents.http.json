@@ -1,0 +1,53 @@
+[
+  {
+    "step": 1,
+    "call": "server.extensions.list",
+    "result": {
+      "agents": []
+    }
+  },
+  {
+    "step": 2,
+    "call": "server.info",
+    "result": {
+      "klippy_connected": "bool",
+      "klippy_state": "string",
+      "components": [
+        "string"
+      ],
+      "failed_components": [],
+      "registered_directories": [
+        "string"
+      ],
+      "warnings": [],
+      "websocket_count": "number",
+      "moonraker_version": "string",
+      "missing_klippy_requirements": [],
+      "api_version": [
+        "number"
+      ],
+      "api_version_string": "string"
+    }
+  },
+  {
+    "step": 5,
+    "call": "server.extensions.list",
+    "result": {
+      "agents": [
+        {
+          "name": "string",
+          "version": "string",
+          "type": "string",
+          "url": "string"
+        }
+      ]
+    }
+  },
+  {
+    "step": 8,
+    "call": "server.extensions.list",
+    "result": {
+      "agents": []
+    }
+  }
+]

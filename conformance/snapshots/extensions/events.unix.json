@@ -1,0 +1,40 @@
+[
+  {
+    "step": 3,
+    "call": "connection.send_event",
+    "result": "string"
+  },
+  {
+    "step": 5,
+    "call": "connection.send_event",
+    "result": "string"
+  },
+  {
+    "step": 7,
+    "call": "connection.send_event",
+    "error": {
+      "code": 400
+    }
+  },
+  {
+    "step": 8,
+    "call": "connection.send_event",
+    "error": {
+      "code": 400
+    }
+  },
+  {
+    "step": 9,
+    "call": "server.connection.identify",
+    "error": {
+      "code": 400
+    }
+  },
+  {
+    "step": 10,
+    "call": "server.connection.identify",
+    "error": {
+      "code": 400
+    }
+  }
+]
