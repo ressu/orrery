@@ -1,0 +1,30 @@
+name: an agent reads its own config section
+targets: [orrery]
+transports: [ws, unix]
+klippy: none
+config: |
+  [test-agent]
+  server: http://old.invalid
+  timeout: 5
+files:
+  config/orrery.toml: |
+    [test-agent]
+    server = "http://spoolman.invalid:7912"
+    sync_rate = 5
+steps:
+  - agent: {connect: {name: test-agent}}
+  # orrery.toml's values keep their types and win; moonraker.conf's are text.
+  - call: orrery.agent.config
+    as_agent: true
+    expect:
+      section: test-agent
+      exists: true
+      options: {$exact: true, server: "http://spoolman.invalid:7912", timeout: "5", sync_rate: 5}
+  - call: orrery.agent.config
+    as_agent: true
+    params: {section: test-agent extra}
+    expect: {exists: false, options: {}}
+  - call: orrery.agent.config
+    as_agent: true
+    params: {section: server}
+    expect_error: {code: 400, message: "Agent test-agent may not read the section [server]"}

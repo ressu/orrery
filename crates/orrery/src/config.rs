@@ -190,6 +190,24 @@ impl Config {
         Section { config: self, name: name.to_owned(), options, typed }
     }
 
+    /// A section's options as JSON, without recording them as read: `orrery.toml`'s values with
+    /// their types, over `moonraker.conf`'s text. `None` if neither file has the section.
+    pub fn section_json(&self, name: &str) -> Option<Map<String, Value>> {
+        let ini = self.sections.iter().find(|(n, _)| n == name);
+        let typed = self.typed.iter().find(|(n, _)| n == name);
+        if ini.is_none() && typed.is_none() {
+            return None;
+        }
+        let mut out = Map::new();
+        for (k, v) in ini.map(|(_, o)| o.as_slice()).unwrap_or_default() {
+            out.insert(k.clone(), json!(v));
+        }
+        for (k, v) in typed.map(|(_, o)| o.as_slice()).unwrap_or_default() {
+            out.insert(k.clone(), v.clone());
+        }
+        Some(out)
+    }
+
     /// The names of sections that start with `prefix`, such as every `[webcam <name>]`, from
     /// both files.
     pub fn section_names(&self, prefix: &str) -> Vec<String> {

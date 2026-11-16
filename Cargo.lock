@@ -1055,6 +1055,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "orrery-agent"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "orrery-proto"
 version = "0.1.0"
 dependencies = [

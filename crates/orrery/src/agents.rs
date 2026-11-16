@@ -140,6 +140,7 @@ pub fn register_endpoints(app: &Arc<App>) {
         handler(register_endpoint),
     );
     r.register("/orrery/agent/history_field", &[RequestType::Post], Transports::WebsocketOnly, handler(history_field));
+    r.register("/orrery/agent/config", &[RequestType::Get], Transports::WebsocketOnly, handler(agent_config));
 }
 
 /// Installs the configured maps, after every built-in endpoint is registered, and warns about
@@ -253,6 +254,20 @@ async fn history_field(app: Arc<App>, req: Request) -> ApiResult {
     let units = req.args.opt_str("units")?;
     crate::history::set_field(&app, &agent, &name, value, description, units).await?;
     Ok(json!("ok"))
+}
+
+/// An agent's own config: by default the section named after it, such as `[spoolman]`, from
+/// `orrery.toml` with its types, or from `moonraker.conf` as text. An agent may read only its
+/// own sections: `<name>`, `<name> <anything>`, and its `[agent.<name>]` table.
+async fn agent_config(app: Arc<App>, req: Request) -> ApiResult {
+    let agent = require_agent(&app, &req)?;
+    let section = req.args.opt_str("section")?.unwrap_or_else(|| agent.clone());
+    let own = section == agent || section.starts_with(&format!("{agent} ")) || section == format!("agent {agent}");
+    if !own {
+        return Err(ApiError::bad_request(format!("Agent {agent} may not read the section [{section}]")));
+    }
+    let options = app.config.section_json(&section);
+    Ok(json!({"section": section, "exists": options.is_some(), "options": options.unwrap_or_default()}))
 }
 
 #[cfg(test)]

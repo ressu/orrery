@@ -89,13 +89,14 @@ history_fields = ["spool_ids"]
 
 A configured agent can connect only over the unix socket. `user = "printer"` also limits it to
 one Unix user. See [docs/design/2026-11-15-plugin-interface.md](docs/design/2026-11-15-plugin-interface.md)
-for how agents work.
+for how agents work. To write an agent in Rust, use the `orrery-agent` crate.
 
 ## Layout
 
 | Path | Contents |
 |---|---|
 | `crates/orrery` | The server, `orrery`, and the database import, `orrery-import` |
+| `crates/orrery-agent` | A client for writing agents in Rust; see its `examples/hello.rs` |
 | `crates/orrery-proto` | Shared wire formats: Klippy socket framing and JSON-RPC envelopes |
 | `crates/fake-klippy` | A scriptable stand-in for Klipper's API socket |
 | `crates/conformance` | The conformance test runner |
