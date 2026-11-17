@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use regex::Regex;
@@ -255,14 +255,15 @@ fn unix_time() -> f64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or_default()
 }
 
-/// orrery's resident memory, from `/proc/self/smaps_rollup`.
+/// orrery's resident memory in kB. Moonraker reads `Rss` from `/proc/self/smaps_rollup`, which
+/// makes the kernel walk every memory mapping; `/proc/self/statm` has the same count for much
+/// less work, and this runs every second.
 fn memory_usage() -> (Option<u64>, Option<String>) {
-    let Ok(text) = std::fs::read_to_string("/proc/self/smaps_rollup") else { return (None, None) };
-    let rss = Regex::new(r"Rss:\s+(\d+)\s+(\w+)").expect("valid regex");
-    match rss.captures(&text) {
-        Some(c) => (c[1].parse().ok(), Some(c[2].to_owned())),
-        None => (None, None),
-    }
+    let Ok(text) = std::fs::read_to_string("/proc/self/statm") else { return (None, None) };
+    let Some(pages) = text.split_whitespace().nth(1).and_then(|p| p.parse::<u64>().ok()) else {
+        return (None, None);
+    };
+    (Some(pages * rustix::param::page_size() as u64 / 1024), Some("kB".into()))
 }
 
 fn net_stats() -> Map<String, Value> {
@@ -271,7 +272,8 @@ fn net_stats() -> Map<String, Value> {
 }
 
 fn parse_net_dev(text: &str) -> Map<String, Value> {
-    let line = Regex::new(r"(\w+):(.+)").expect("valid regex");
+    static LINE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(\w+):(.+)").expect("valid regex"));
+    let line = &*LINE;
     let mut out = Map::new();
     for c in line.captures_iter(text) {
         let fields: Vec<u64> = c[2].split_whitespace().filter_map(|f| f.parse().ok()).collect();
@@ -300,7 +302,8 @@ fn parse_net_dev(text: &str) -> Map<String, Value> {
 fn update_system_memory(st: &mut Stats) {
     let Ok(text) = std::fs::read_to_string("/proc/meminfo") else { return };
     let field = |name: &str| {
-        Regex::new(&format!(r"{name}:\s+(\d+)")).expect("valid regex").captures(&text)?[1].parse::<u64>().ok()
+        let line = text.lines().find_map(|l| l.strip_prefix(name)?.strip_prefix(':'))?;
+        line.split_whitespace().next()?.parse::<u64>().ok()
     };
     if let (Some(total), Some(available)) = (field("MemTotal"), field("MemAvailable")) {
         st.memory_usage.insert("total".into(), json!(total));
