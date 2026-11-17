@@ -71,7 +71,7 @@ fn init_logging(cli: &Cli, paths: &Paths) -> (Option<tracing_appender::non_block
             path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| logfile::LogFile::open(path, header));
         match opened {
             Ok(file) => {
-                let (writer, g) = tracing_appender::non_blocking(file);
+                let (writer, g) = tracing_appender::non_blocking(file.share());
                 guard = Some(g);
                 Some(tracing_subscriber::fmt::layer().with_ansi(false).with_writer(writer))
             }

@@ -99,7 +99,7 @@ change how safe or complete orrery is to run.
 - **Why:** frontends work without them.
 - **Cases:** none yet.
 
-### log-file: orrery's log is `orrery.log`, with no log rollover endpoint
+### log-file: orrery's log is `orrery.log`, and Klipper's log isn't rolled over
 
 - **Area:** files, server
 - **Moonraker:** writes `logs/moonraker.log` and serves it at `/server/files/moonraker.log`.
@@ -107,10 +107,14 @@ change how safe or complete orrery is to run.
   a new Moonraker or Klipper log on request.
 - **orrery:** writes `logs/orrery.log`, so it doesn't mix with Moonraker's log, and serves it
   at `/server/files/moonraker.log`. It starts a new file at midnight UTC and keeps two old
-  ones. `-l` sets another file and `-n` turns the file off, as in Moonraker. There's no
-  `server.logs.rollover`, so Fluidd's rollover button fails.
-- **Why:** frontends download the log by its Moonraker address. Rollover can follow.
-- **Cases:** `files/log_downloads`.
+  ones. `-l` sets another file and `-n` turns the file off, as in Moonraker.
+  `server.logs.rollover` starts a new orrery log, and names the old one for the time, as
+  Moonraker names a Klipper log it rolls over. Moonraker instead names it for the day, and
+  replaces an earlier rollover from the same day. For Klipper, orrery answers with Klipper
+  under `failed`.
+- **Why:** frontends download the log by its Moonraker address. Moonraker rolls Klipper's log
+  over by stopping and starting Klipper's service, and orrery doesn't control services yet.
+- **Cases:** `files/log_downloads`, `server/logs_rollover`.
 
 ### history-aux-fields: history's auxiliary fields come from agents, without totals
 

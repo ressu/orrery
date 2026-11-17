@@ -19,7 +19,7 @@ whether a conformance case covers it. It comes from Fluidd's `src/api/socketActi
 | `server.websocket.id` | Covered | `server/websocket_id` (not used by Fluidd) |
 | `printer.info` | Covered | `printer/info`, `printer/startup`, `printer/error_state` |
 | `server.restart` | To do | Restarts the server, so the runner needs to reconnect |
-| `server.logs.rollover` | To do | |
+| `server.logs.rollover` | Covered | `server/logs_rollover` (Klipper's log only checks the reply's shape) |
 
 | Notification | Status | Cases |
 |---|---|---|

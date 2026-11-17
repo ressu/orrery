@@ -1,0 +1,26 @@
+[
+  {
+    "step": 1,
+    "call": "server.logs.rollover",
+    "result": {
+      "rolled_over": [
+        "string"
+      ],
+      "failed": {}
+    }
+  },
+  {
+    "step": 2,
+    "call": null
+  },
+  {
+    "step": 4,
+    "call": "server.logs.rollover",
+    "result": {
+      "rolled_over": [],
+      "failed": {
+        "klipper": "string"
+      }
+    }
+  }
+]

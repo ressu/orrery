@@ -353,6 +353,7 @@ impl App {
             handler(connection_identify),
         );
         r.register("/server/websocket/id", &[RequestType::Get], Transports::WebsocketOnly, handler(websocket_id));
+        r.register("/server/logs/rollover", &[RequestType::Post], Transports::All, handler(logs_rollover));
     }
 }
 
@@ -414,6 +415,37 @@ async fn server_info(app: Arc<App>, req: Request) -> ApiResult {
 
 async fn server_config(app: Arc<App>, _req: Request) -> ApiResult {
     Ok(json!({"config": app.config.parsed(), "orig": app.config.orig(), "files": app.config.files()}))
+}
+
+/// Starts a new log file. Klipper's log waits for service control: Moonraker rolls it over by
+/// stopping Klipper, so its answer lists Klipper under `failed`.
+async fn logs_rollover(_app: Arc<App>, req: Request) -> ApiResult {
+    let mut apps = vec!["moonraker", "klipper"];
+    if let Some(app) = req.args.opt_str("application")? {
+        if !apps.contains(&app.as_str()) {
+            return Err(ApiError::bad_request(format!("Unknown application {app}")));
+        }
+        apps.retain(|a| *a == app);
+    }
+    let (mut rolled_over, mut failed) = (Vec::new(), Map::new());
+    if apps.contains(&"moonraker") {
+        match tokio::task::spawn_blocking(crate::logfile::rollover).await {
+            Ok(Some(Ok(()))) => {
+                tracing::info!("Started a new log file, as a client asked");
+                rolled_over.push("moonraker");
+            }
+            Ok(Some(Err(e))) => drop(failed.insert("moonraker".into(), json!(e.to_string()))),
+            Ok(None) => drop(failed.insert("moonraker".into(), json!("File Logging Disabled"))),
+            Err(e) => drop(failed.insert("moonraker".into(), json!(e.to_string()))),
+        }
+    }
+    if apps.contains(&"klipper") {
+        failed.insert(
+            "klipper".into(),
+            json!("orrery can't roll over Klipper's log yet: it needs to restart Klipper, and orrery doesn't control services yet."),
+        );
+    }
+    Ok(json!({"rolled_over": rolled_over, "failed": failed}))
 }
 
 const CLIENT_TYPES: &[&str] = &["web", "mobile", "desktop", "display", "bot", "agent", "other"];

@@ -1,0 +1,16 @@
+name: server.logs.rollover starts a new server log
+steps:
+  - call: server.logs.rollover
+    params: {application: moonraker}
+    expect: {$exact: true, rolled_over: [moonraker], failed: {$exact: true}}
+  # The new file is served at the same address.
+  - download: moonraker.log
+    expect_content_type: text/plain
+  - call: server.logs.rollover
+    params: {application: nothing}
+    expect_error: {code: 400, message: Unknown application nothing}
+    only: [http]
+  # Moonraker rolls Klipper's log over by restarting Klipper's service.
+  - call: server.logs.rollover
+    params: {application: klipper}
+    expect: {rolled_over: [], failed: {$exact: true, klipper: $type:string}}
