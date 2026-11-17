@@ -2,7 +2,7 @@
 //! `server.*` endpoints that don't belong to a component.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -129,8 +129,13 @@ impl App {
         let data_store = DataStore::new(&config)?;
         let webcams = crate::webcam::Webcams::new(&config, &paths)?;
         let job_queue = crate::job_queue::JobQueue::new(&config)?;
-        let (cors, warnings) = crate::access::Cors::new(&config);
-        let agents = crate::agents::Agents::new(&config)?;
+        let (cors, mut warnings) = crate::access::Cors::new(&config);
+        let exe = std::env::current_exe().ok();
+        let (agents, agent_warnings) = crate::agents::Agents::new(&config, exe.as_deref().and_then(Path::parent))?;
+        for w in &agent_warnings {
+            tracing::warn!("{w}");
+        }
+        warnings.extend(agent_warnings);
         // Connection ids look like Moonraker's (Python object ids): large numbers.
         let base = 0x7f00_0000_0000 + (std::process::id() as u64) * 0x1000;
         let app = Arc::new(Self {

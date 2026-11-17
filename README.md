@@ -95,24 +95,29 @@ for how agents work. To write an agent in Rust, use the `orrery-agent` crate.
 ### Spoolman
 
 Moonraker's Spoolman integration is a separate program in orrery, `orrery-spoolman`. It reads
-the same `[spoolman]` section, from `moonraker.conf` or `orrery.toml`. To use it:
+the same `[spoolman]` section, from `moonraker.conf` or `orrery.toml`, so a migrated printer
+needs no other setup:
 
-1. Add the `[agent.spoolman]` table above to `orrery.toml`.
-2. Add the agent's program to the table, so orrery starts it:
-
-   ```toml
-   command = "~/orrery/bin/orrery-spoolman"
-   ```
+- Without a `server` in `[spoolman]`, Spoolman is off.
+- With one, orrery starts `orrery-spoolman` from its own folder, and Fluidd and Mainsail reach it
+  under Moonraker's names. If the program isn't there, orrery says so in a warning.
 
 The agent takes the active spool from Moonraker's database on its first run.
 
-`command` is the program, or a list of the program and its arguments, such as
-`["python3", "my_agent.py"]`. orrery runs it in its data folder (`~/printer_data`), with the
-unix socket's path in `ORRERY_SOCKET` and the agent's name in `ORRERY_AGENT`. The agent's
-output goes to orrery's log. If it exits, orrery starts it again, after a wait that grows from
-1 second to a minute. When orrery stops, so does the agent.
+An `[agent.spoolman]` table in `orrery.toml` changes the built-in setup one option at a time.
+For example, `command = "~/bin/orrery-spoolman"` runs the agent from another place, and
+`command = false` means you start it yourself.
 
-To start an agent yourself instead, leave out `command`. Run it after orrery, as the same user:
+### Starting agents
+
+`command` in an agent's table is the program orrery starts, or a list of the program and its
+arguments, such as `["python3", "my_agent.py"]`. orrery runs it in its data folder
+(`~/printer_data`), with the unix socket's path in `ORRERY_SOCKET` and the agent's name in
+`ORRERY_AGENT`. The agent's output goes to orrery's log. If it exits, orrery starts it again,
+after a wait that grows from 1 second to a minute. When orrery stops, so does the agent.
+
+To start an agent yourself instead, leave out `command`, or set it to `false` for a built-in
+agent. Run it after orrery, as the same user:
 
 ```
 orrery-spoolman ~/printer_data/comms/moonraker.sock

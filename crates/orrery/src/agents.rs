@@ -9,7 +9,11 @@
 //!   may add to history jobs with `orrery.agent.history_field`.
 //! - A configured agent's name can only be claimed over the unix socket, optionally by one Unix
 //!   user, so another program can't connect under it and receive its calls.
+//! - Some agents are built in: a `server` option in `[spoolman]` turns on the Spoolman agent,
+//!   with Moonraker's names, and starts `orrery-spoolman` from orrery's own folder. An
+//!   `[agent.spoolman]` table overrides the built-in options one at a time.
 
+use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Result, bail};
@@ -32,8 +36,18 @@ pub struct AgentConfig {
     pub history_fields: Vec<String>,
     /// The only Unix user that may connect as this agent.
     pub user: Option<u32>,
+    pub command: Command,
+}
+
+/// How an agent starts.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Command {
+    /// No `command` option: something else starts the agent, unless it's built in.
+    Unset,
+    /// `command = false`: something else starts the agent, even a built-in one.
+    Off,
     /// The program orrery starts for the agent, and its arguments.
-    pub command: Option<Vec<String>>,
+    Run(Vec<String>),
 }
 
 #[derive(Debug, Default)]
@@ -42,13 +56,17 @@ pub struct Agents {
 }
 
 impl Agents {
-    pub fn new(config: &Config) -> Result<Self> {
+    /// The agent tables, and warnings for `server.info`. `agent_dir` is where built-in agents'
+    /// programs are: orrery's own folder.
+    pub fn new(config: &Config, agent_dir: Option<&Path>) -> Result<(Self, Vec<String>)> {
         let mut configs = Vec::new();
         for section in config.section_names("agent ") {
             let name = section["agent ".len()..].to_owned();
             configs.push(parse_section(config, &section, &name)?);
         }
-        Ok(Self { configs })
+        let mut warnings = Vec::new();
+        builtin_spoolman(config, agent_dir, &mut configs, &mut warnings);
+        Ok((Self { configs }, warnings))
     }
 
     fn get(&self, name: &str) -> Option<&AgentConfig> {
@@ -57,7 +75,10 @@ impl Agents {
 
     /// The agents orrery starts itself: `(name, command)`.
     pub fn commands(&self) -> impl Iterator<Item = (&str, &[String])> {
-        self.configs.iter().filter_map(|c| Some((c.name.as_str(), c.command.as_deref()?)))
+        self.configs.iter().filter_map(|c| match &c.command {
+            Command::Run(command) => Some((c.name.as_str(), command.as_slice())),
+            _ => None,
+        })
     }
 
     /// Component names configured agents add to `server.info`.
@@ -97,16 +118,19 @@ fn parse_section(config: &Config, section: &str, name: &str) -> Result<AgentConf
         Some(other) => bail!("[{section}] user: expected a user name or id, got {other}"),
     };
     let command = match s.get_value("command") {
-        None => None,
-        Some(Value::String(program)) if !program.is_empty() => Some(vec![program]),
+        None => Command::Unset,
+        Some(Value::Bool(false)) => Command::Off,
+        Some(Value::String(program)) if !program.is_empty() => Command::Run(vec![program]),
         Some(Value::Array(items)) if !items.is_empty() => {
             let words: Option<Vec<String>> = items.iter().map(|i| i.as_str().map(str::to_owned)).collect();
-            Some(words.filter(|w| !w[0].is_empty()).ok_or_else(|| {
+            Command::Run(words.filter(|w| !w[0].is_empty()).ok_or_else(|| {
                 anyhow::anyhow!("[{section}] command: expected a list of strings, starting with the program")
             })?)
         }
         Some(other) => {
-            bail!("[{section}] command: expected the program, or a list of the program and its arguments, got {other}")
+            bail!(
+                "[{section}] command: expected the program, a list of the program and its arguments, or false, got {other}"
+            )
         }
     };
     let mut methods = Vec::new();
@@ -140,6 +164,62 @@ fn parse_section(config: &Config, section: &str, name: &str) -> Result<AgentConf
         Some(other) => bail!("[{section}] maps: expected a table, got {other}"),
     }
     Ok(AgentConfig { name: name.to_owned(), component, methods, notifications, history_fields, user, command })
+}
+
+/// The built-in Spoolman agent. It's off until `[spoolman]` has a `server`, in `moonraker.conf`
+/// or `orrery.toml`, as Moonraker's component is. Then it gets Moonraker's names, and orrery
+/// starts `orrery-spoolman` from `agent_dir`, unless `[agent.spoolman]` says otherwise.
+fn builtin_spoolman(
+    config: &Config,
+    agent_dir: Option<&Path>,
+    configs: &mut Vec<AgentConfig>,
+    warnings: &mut Vec<String>,
+) {
+    let Some(options) = config.section_json("spoolman") else { return };
+    if !options.contains_key("server") {
+        warnings
+            .push("[spoolman] has no server option, so Spoolman is off. Set it to the Spoolman server's URL.".into());
+        return;
+    }
+    let c = match configs.iter().position(|c| c.name == "spoolman") {
+        Some(i) => &mut configs[i],
+        None => {
+            configs.push(AgentConfig {
+                name: "spoolman".into(),
+                component: None,
+                methods: Vec::new(),
+                notifications: Vec::new(),
+                history_fields: Vec::new(),
+                user: None,
+                command: Command::Unset,
+            });
+            configs.last_mut().expect("just pushed")
+        }
+    };
+    if c.component.is_none() {
+        c.component = Some("spoolman".into());
+    }
+    if c.history_fields.is_empty() {
+        c.history_fields = vec!["spool_ids".into()];
+    }
+    if c.methods.is_empty() && c.notifications.is_empty() {
+        c.methods = vec![("server.spoolman".into(), "agent.spoolman".into())];
+        c.notifications = ["active_spool_set", "spoolman_status_changed"].map(|e| (e.to_owned(), e.to_owned())).into();
+    }
+    if c.command == Command::Unset {
+        match agent_dir.map(|dir| dir.join("orrery-spoolman")) {
+            Some(program) if program.is_file() => {
+                c.command = Command::Run(vec![program.to_string_lossy().into_owned()])
+            }
+            program => {
+                let place = program.map_or_else(|| "orrery's folder".to_owned(), |p| p.display().to_string());
+                warnings.push(format!(
+                    "Spoolman is set up in [spoolman], but orrery can't find its agent at {place}. Put \
+                     orrery-spoolman there, or set command in [agent.spoolman] in orrery.toml."
+                ));
+            }
+        }
+    }
 }
 
 /// Looks up a user's id in `/etc/passwd`. A number is taken as the id itself.
@@ -315,12 +395,49 @@ async fn agent_config(app: Arc<App>, req: Request) -> ApiResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     fn agents(toml: &str) -> Result<Agents> {
-        let mut c = Config::parse("[server]\n").unwrap();
+        with_spoolman("[server]\n", toml, None).map(|(a, _)| a)
+    }
+
+    fn with_spoolman(conf: &str, toml: &str, dir: Option<&Path>) -> Result<(Agents, Vec<String>)> {
+        let mut c = Config::parse(conf).unwrap();
         c.parse_toml(toml, Path::new("orrery.toml"))?;
-        Agents::new(&c)
+        Agents::new(&c, dir)
+    }
+
+    #[test]
+    fn spoolman_is_built_in() {
+        let dir = tempfile::tempdir().unwrap();
+        // Off without a server.
+        let (a, w) = with_spoolman("[server]\n", "", Some(dir.path())).unwrap();
+        assert!(a.get("spoolman").is_none() && w.is_empty());
+        let (a, w) = with_spoolman("[spoolman]\nsync_rate: 5\n", "", Some(dir.path())).unwrap();
+        assert!(a.get("spoolman").is_none());
+        assert!(w[0].starts_with("[spoolman] has no server option"));
+
+        // On with one, and a warning while the agent's program is missing.
+        let conf = "[spoolman]\nserver: http://spoolman.local\n";
+        let (a, w) = with_spoolman(conf, "", Some(dir.path())).unwrap();
+        let c = a.get("spoolman").unwrap();
+        assert_eq!(c.component.as_deref(), Some("spoolman"));
+        assert_eq!(a.notification("spoolman", "spoolman_status_changed"), Some("spoolman_status_changed"));
+        assert_eq!(c.command, Command::Unset);
+        assert!(w[0].contains("can't find its agent at"), "{w:?}");
+
+        let program = dir.path().join("orrery-spoolman");
+        std::fs::write(&program, "").unwrap();
+        let (a, w) = with_spoolman(conf, "", Some(dir.path())).unwrap();
+        assert!(w.is_empty());
+        let started: Vec<_> = a.commands().map(|(n, c)| (n.to_owned(), c.to_vec())).collect();
+        assert_eq!(started, vec![("spoolman".to_owned(), vec![program.to_string_lossy().into_owned()])]);
+
+        // [agent.spoolman] overrides one option at a time, and command = false starts nothing.
+        let (a, w) = with_spoolman(conf, "[agent.spoolman]\ncommand = false\nuser = 1000\n", Some(dir.path())).unwrap();
+        let c = a.get("spoolman").unwrap();
+        assert!(w.is_empty());
+        assert_eq!((c.command.clone(), c.user, c.component.as_deref()), (Command::Off, Some(1000), Some("spoolman")));
+        assert_eq!(a.commands().count(), 0);
     }
 
     #[test]
@@ -348,7 +465,7 @@ command = ["~/bin/orrery-spoolman", "-v"]
                 notifications: vec![("active_spool_set".into(), "active_spool_set".into())],
                 history_fields: vec!["spool_ids".into()],
                 user: Some(1000),
-                command: Some(vec!["~/bin/orrery-spoolman".into(), "-v".into()]),
+                command: Command::Run(vec!["~/bin/orrery-spoolman".into(), "-v".into()]),
             })
         );
         assert_eq!(a.notification("spoolman", "active_spool_set"), Some("active_spool_set"));

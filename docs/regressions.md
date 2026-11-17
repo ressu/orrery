@@ -124,18 +124,17 @@ change how safe or complete orrery is to run.
 
 - **Area:** Spoolman
 - **Moonraker:** a `[spoolman]` section turns on the built-in component.
-- **orrery:** the `orrery-spoolman` agent does the same work, from the same section. You add its
-  `[agent.spoolman]` table to `orrery.toml`, with the agent's program as `command`. Without the
-  table, Fluidd shows no Spoolman panel. Other differences:
+- **orrery:** the `orrery-spoolman` agent does the same work, from the same section. orrery
+  starts it from its own folder when `[spoolman]` has a `server`; without the program, Spoolman
+  stays offline and `server.info` has a warning. Other differences:
   - The agent keeps the active spool in the `spoolman` database namespace, not in `moonraker`.
     On its first run, it takes the spool Moonraker had.
   - A job gets its `spool_ids` field only while the agent is connected. Moonraker adds the field
     to every job.
   - When Spoolman sends no reply at all, a `proxy` request with `use_v2_response` gets
     `status_code` 500 and the error's text.
-- **Why:** plugins are separate programs (docs/design/2026-11-15-plugin-interface.md). A built-in
-  table for migrated printers, so the `[spoolman]` section is enough, is planned.
-- **Cases:** none against Moonraker yet. `crates/orrery-spoolman/tests/agent.rs` checks the
+- **Why:** plugins are separate programs (docs/design/2026-11-15-plugin-interface.md).
+- **Cases:** `agents/builtin_spoolman` (orrery only); none against Moonraker yet. `crates/orrery-spoolman/tests/agent.rs` checks the
   agent against stand-ins for orrery and Spoolman.
 
 ### no-python-info: `machine.system_info` has no `python` field
