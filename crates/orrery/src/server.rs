@@ -438,7 +438,8 @@ async fn connection_identify(app: Arc<App>, req: Request) -> ApiResult {
         }
         return Err(e);
     }
-    tracing::info!("Websocket {conn} Client Identified - Name: {name}, Version: {version}, Type: {client_type}");
+    let transport = if app.client_peer(conn).unix { "Unix Socket" } else { "Websocket" };
+    tracing::info!("{transport} {conn} Client Identified - Name: {name}, Version: {version}, Type: {client_type}");
     Ok(json!({"connection_id": conn}))
 }
 
