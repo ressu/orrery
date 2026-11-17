@@ -123,6 +123,7 @@ impl App {
         let (events, _) = broadcast::channel(1024);
         let server = config.section("server");
         let socket = server.get_str("klippy_uds_address", &paths.data.join("comms/klippy.sock").to_string_lossy());
+        config.record_moonraker_options()?;
         let database = Database::open(&config, &paths)?;
         let files = FileManager::new(&config, &paths)?;
         let machine = crate::machine::Machine::new(&config)?;

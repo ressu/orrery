@@ -181,6 +181,11 @@ fn builtin_spoolman(
             .push("[spoolman] has no server option, so Spoolman is off. Set it to the Spoolman server's URL.".into());
         return;
     }
+    // In server.config, as Moonraker's component reads them: Fluidd connects to Spoolman itself,
+    // at `server`, for live updates. A bad sync_rate is the agent's to report.
+    let section = config.section("spoolman");
+    section.get_str("server", "");
+    let _ = section.get_int("sync_rate", 5);
     let c = match configs.iter().position(|c| c.name == "spoolman") {
         Some(i) => &mut configs[i],
         None => {

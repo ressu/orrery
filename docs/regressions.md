@@ -39,14 +39,19 @@ change how safe or complete orrery is to run.
 - **Cases:** `server/config` (it expects an `authorization` section), and the authorization
   cases when they're written. `access/trusted` covers the trusted-client replies.
 
-### partial-server-config: `server.config` lists only orrery's options
+### partial-server-config: `server.config` leaves out components orrery doesn't have
 
 - **Area:** config
 - **Moonraker:** `server.config` reports every option of every loaded component, with defaults.
-- **orrery:** it reports the options orrery reads, so sections for components orrery doesn't
-  have are missing.
-- **Why:** reporting options orrery ignores would claim support it doesn't have.
-- **Cases:** `server/config` (snapshot differences).
+- **orrery:** it reports the options of Moonraker's default components, with Moonraker's
+  defaults, in Moonraker's order, including options orrery ignores, such as `ssl_port`. Sections
+  of optional components that orrery doesn't have, such as `[update_manager]` or `[power]`,
+  aren't listed. `file_system_observer` is `none`, because orrery has no file watcher yet.
+- **Why:** clients read values from this list: Fluidd reads `spoolman.server` to connect to
+  Spoolman itself, and `data_store.temperature_store_size` for its charts. Matching Moonraker's
+  whole list keeps clients that weren't checked working too. A listed option isn't a promise
+  that orrery uses it; this file lists what orrery ignores.
+- **Cases:** `server/config` passes.
 
 ### datastore: orrery keeps its own store
 

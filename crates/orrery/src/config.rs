@@ -232,6 +232,32 @@ impl Config {
         Value::Object(out)
     }
 
+    /// Reads the options Moonraker's components read and orrery doesn't, with Moonraker's
+    /// defaults, so `server.config` lists them as Moonraker does: Fluidd and Mainsail show that
+    /// list. It also lists every component's section in Moonraker's load order, so call it
+    /// before orrery's components read their options.
+    pub fn record_moonraker_options(&self) -> Result<()> {
+        use Moonraker::*;
+        for (name, options) in MOONRAKER_OPTIONS {
+            let s = self.section(name);
+            for (key, default) in *options {
+                match default {
+                    Int(d) => drop(s.get_int(key, *d)?),
+                    OptInt => match s.get_value(key) {
+                        Some(_) => drop(s.get_int(key, 0)?),
+                        None => s.record(key, Value::Null),
+                    },
+                    Float(d) => drop(s.get_float(key, *d)?),
+                    Bool(d) => drop(s.get_bool(key, *d)?),
+                    Str(d) => drop(s.get_str(key, d)),
+                    OptStr => drop(s.get_opt_str(key)),
+                    List => drop(s.get_list(key)),
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn parsed(&self) -> Value {
         Value::Object(self.parsed.lock().expect("config lock").clone())
     }
@@ -404,6 +430,89 @@ impl Section<'_> {
 fn lines(s: &str) -> Vec<String> {
     s.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_owned).collect()
 }
+
+/// The default of an option in [`MOONRAKER_OPTIONS`].
+enum Moonraker {
+    Int(i64),
+    /// A whole number, or `null` when it isn't set.
+    OptInt,
+    Float(f64),
+    Bool(bool),
+    Str(&'static str),
+    /// A string, or `null` when it isn't set.
+    OptStr,
+    List,
+}
+
+/// Moonraker's components, in the order it loads them, and the options each reads that orrery
+/// doesn't. Options orrery reads itself are recorded when it reads them.
+const MOONRAKER_OPTIONS: &[(&str, &[(&str, Moonraker)])] = &[
+    (
+        "server",
+        &[
+            ("ssl_port", Moonraker::Int(7130)),
+            ("enable_debug_logging", Moonraker::Bool(false)),
+            ("use_xheaders", Moonraker::Bool(true)),
+            ("ssl_certificate_path", Moonraker::OptStr),
+            ("ssl_key_path", Moonraker::OptStr),
+            ("route_prefix", Moonraker::OptStr),
+            ("max_websocket_connections", Moonraker::Int(50)),
+        ],
+    ),
+    ("template", &[]),
+    ("secrets", &[("secrets_path", Moonraker::OptStr)]),
+    ("database", &[]),
+    ("dbus_manager", &[]),
+    (
+        "file_manager",
+        &[
+            ("enable_object_processing", Moonraker::Bool(false)),
+            ("default_metadata_parser_timeout", Moonraker::Float(20.0)),
+            ("enable_observer_warnings", Moonraker::Bool(true)),
+            ("enable_inotify_warnings", Moonraker::Bool(true)),
+            ("config_path", Moonraker::OptStr),
+            ("log_path", Moonraker::OptStr),
+        ],
+    ),
+    (
+        "authorization",
+        &[
+            ("login_timeout", Moonraker::Int(90)),
+            ("force_logins", Moonraker::Bool(false)),
+            ("default_source", Moonraker::Str("moonraker")),
+            ("enable_api_key", Moonraker::Bool(true)),
+            ("max_login_attempts", Moonraker::OptInt),
+        ],
+    ),
+    ("klippy_apis", &[]),
+    (
+        "machine",
+        &[
+            ("sudo_password", Moonraker::OptStr),
+            ("shutdown_action", Moonraker::Str("poweroff")),
+            ("force_validation", Moonraker::Bool(false)),
+            ("validate_service", Moonraker::Bool(true)),
+            ("validate_config", Moonraker::Bool(true)),
+        ],
+    ),
+    ("shell_command", &[]),
+    ("data_store", &[]),
+    ("proc_stats", &[]),
+    ("job_state", &[]),
+    ("job_queue", &[]),
+    ("history", &[]),
+    ("http_client", &[]),
+    (
+        "announcements",
+        &[
+            ("enable_moonlight", Moonraker::Bool(true)),
+            ("dev_mode", Moonraker::Bool(false)),
+            ("subscriptions", Moonraker::List),
+        ],
+    ),
+    ("webcam", &[]),
+    ("extensions", &[]),
+];
 
 #[cfg(test)]
 mod tests {
