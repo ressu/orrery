@@ -32,6 +32,8 @@ pub struct AgentConfig {
     pub history_fields: Vec<String>,
     /// The only Unix user that may connect as this agent.
     pub user: Option<u32>,
+    /// The program orrery starts for the agent, and its arguments.
+    pub command: Option<Vec<String>>,
 }
 
 #[derive(Debug, Default)]
@@ -51,6 +53,11 @@ impl Agents {
 
     fn get(&self, name: &str) -> Option<&AgentConfig> {
         self.configs.iter().find(|c| c.name == name)
+    }
+
+    /// The agents orrery starts itself: `(name, command)`.
+    pub fn commands(&self) -> impl Iterator<Item = (&str, &[String])> {
+        self.configs.iter().filter_map(|c| Some((c.name.as_str(), c.command.as_deref()?)))
     }
 
     /// Component names configured agents add to `server.info`.
@@ -89,6 +96,19 @@ fn parse_section(config: &Config, section: &str, name: &str) -> Result<AgentConf
         Some(Value::String(u)) => Some(user_id(&u).ok_or_else(|| anyhow::anyhow!("[{section}] user: no user {u:?}"))?),
         Some(other) => bail!("[{section}] user: expected a user name or id, got {other}"),
     };
+    let command = match s.get_value("command") {
+        None => None,
+        Some(Value::String(program)) if !program.is_empty() => Some(vec![program]),
+        Some(Value::Array(items)) if !items.is_empty() => {
+            let words: Option<Vec<String>> = items.iter().map(|i| i.as_str().map(str::to_owned)).collect();
+            Some(words.filter(|w| !w[0].is_empty()).ok_or_else(|| {
+                anyhow::anyhow!("[{section}] command: expected a list of strings, starting with the program")
+            })?)
+        }
+        Some(other) => {
+            bail!("[{section}] command: expected the program, or a list of the program and its arguments, got {other}")
+        }
+    };
     let mut methods = Vec::new();
     let mut notifications = Vec::new();
     let own = format!("agent.{name}");
@@ -119,7 +139,7 @@ fn parse_section(config: &Config, section: &str, name: &str) -> Result<AgentConf
         }
         Some(other) => bail!("[{section}] maps: expected a table, got {other}"),
     }
-    Ok(AgentConfig { name: name.to_owned(), component, methods, notifications, history_fields, user })
+    Ok(AgentConfig { name: name.to_owned(), component, methods, notifications, history_fields, user, command })
 }
 
 /// Looks up a user's id in `/etc/passwd`. A number is taken as the id itself.
@@ -311,6 +331,7 @@ mod tests {
 component = "spoolman"
 history_fields = ["spool_ids"]
 user = 1000
+command = ["~/bin/orrery-spoolman", "-v"]
 
 [agent.spoolman.maps]
 "server.spoolman" = "agent.spoolman"
@@ -327,6 +348,7 @@ user = 1000
                 notifications: vec![("active_spool_set".into(), "active_spool_set".into())],
                 history_fields: vec!["spool_ids".into()],
                 user: Some(1000),
+                command: Some(vec!["~/bin/orrery-spoolman".into(), "-v".into()]),
             })
         );
         assert_eq!(a.notification("spoolman", "active_spool_set"), Some("active_spool_set"));
@@ -340,5 +362,7 @@ user = 1000
         assert!(err("[agent.a.maps]\n\"notify_x\" = \"agent.b.x\"\n").contains("this agent's events"));
         assert!(err("[agent.a.maps]\n\"orrery.x\" = \"agent.a\"\n").contains("orrery's own"));
         assert!(err("[agent.a]\nmaps = \"x\"\n").contains("expected a table"));
+        assert!(err("[agent.a]\ncommand = [1]\n").contains("list of strings"));
+        assert!(err("[agent.a]\ncommand = 5\n").contains("command"));
     }
 }

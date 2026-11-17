@@ -4,6 +4,7 @@
 //! orrery's store.
 
 mod access;
+pub mod agent_process;
 mod agents;
 mod api;
 pub mod config;

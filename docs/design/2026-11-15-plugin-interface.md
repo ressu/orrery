@@ -250,7 +250,9 @@ doesn't configure it.
    remote methods, call methods, and receive notifications.
 5. **The Spoolman agent,** tested against Fluidd and a Spoolman server, then measured on
    bluev2.
-6. **Starting agents** with `command` and `systemd_unit`.
+6. **Starting agents** with `command` and `systemd_unit`. `command` is done (case
+   `agents/command`). `systemd_unit` waits for service control, where native D-Bus and
+   `systemctl` still need comparing.
 7. **Decide what else moves out,** using the measurements from step 5.
 
 Steps 1 to 4 add no plugin features yet, so the conformance suite checks them as they go.

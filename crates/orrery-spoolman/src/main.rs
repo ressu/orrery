@@ -78,9 +78,14 @@ impl State {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
-        .init();
+    let log = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()));
+    // Started by orrery, whose log adds the time to each line.
+    if std::env::var_os("ORRERY_AGENT").is_some() {
+        log.without_time().with_ansi(false).init();
+    } else {
+        log.init();
+    }
     let spoolman = Arc::new(Spoolman {
         server: OnceLock::new(),
         sync_rate: OnceLock::new(),

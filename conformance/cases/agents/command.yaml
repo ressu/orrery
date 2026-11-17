@@ -1,0 +1,65 @@
+name: orrery starts the agents with a command, and starts them again when they exit
+description: orrery only. The agent is a small Python program in the data folder.
+targets: [orrery]
+transports: [ws, http]
+klippy: none
+files:
+  config/orrery.toml: |
+    [agent.started]
+    command = ["python3", "-I", "agent.py"]
+
+    [agent.missing]
+    command = "/nonexistent/orrery-agent"
+  agent.py: |
+    import json, os, socket, sys
+
+    # Counts its starts in a file, so a restart shows.
+    with open("starts.txt", "a") as f:
+        f.write("x")
+    with open("starts.txt") as f:
+        starts = len(f.read())
+    print(f"started {starts} times", flush=True)
+
+    sock = socket.socket(socket.AF_UNIX)
+    sock.connect(os.environ["ORRERY_SOCKET"])
+
+    def send(msg):
+        sock.sendall(json.dumps(msg).encode() + b"\x03")
+
+    send({"jsonrpc": "2.0", "method": "server.connection.identify", "id": 1, "params": {
+        "client_name": os.environ["ORRERY_AGENT"], "version": "1", "type": "agent", "url": ""}})
+    buf = b""
+    while True:
+        data = sock.recv(65536)
+        if not data:
+            sys.exit(0)
+        buf += data
+        while b"\x03" in buf:
+            raw, buf = buf.split(b"\x03", 1)
+            msg = json.loads(raw)
+            if "id" not in msg or "method" not in msg:
+                continue
+            if msg["method"] == "starts":
+                send({"jsonrpc": "2.0", "result": {"starts": starts, "cwd_has_config": os.path.isdir("config")}, "id": msg["id"]})
+            elif msg["method"] == "quit":
+                send({"jsonrpc": "2.0", "result": "bye", "id": msg["id"]})
+                sys.exit(3)
+steps:
+  - call: server.extensions.list
+    retry_ms: 5000
+    expect: {agents: [{name: started, type: agent}]}
+  # It runs in the data folder.
+  - call: server.extensions.request
+    params: {agent: started, method: starts}
+    expect: {starts: 1, cwd_has_config: true}
+  - call: server.info
+    expect:
+      warnings: {$contains: ["$regex:^orrery can't start the agent missing: /nonexistent/orrery-agent: "]}
+  # The agent exits; orrery starts it again a second later.
+  - call: server.extensions.request
+    params: {agent: started, method: quit}
+    expect: bye
+  - call: server.extensions.request
+    retry_ms: 5000
+    params: {agent: started, method: starts}
+    expect: {starts: 2}

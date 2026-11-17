@@ -124,9 +124,9 @@ change how safe or complete orrery is to run.
 
 - **Area:** Spoolman
 - **Moonraker:** a `[spoolman]` section turns on the built-in component.
-- **orrery:** the `orrery-spoolman` agent does the same work, from the same section. You start it
-  yourself, and add its `[agent.spoolman]` table to `orrery.toml`. Without the table, Fluidd
-  shows no Spoolman panel. Other differences:
+- **orrery:** the `orrery-spoolman` agent does the same work, from the same section. You add its
+  `[agent.spoolman]` table to `orrery.toml`, with the agent's program as `command`. Without the
+  table, Fluidd shows no Spoolman panel. Other differences:
   - The agent keeps the active spool in the `spoolman` database namespace, not in `moonraker`.
     On its first run, it takes the spool Moonraker had.
   - A job gets its `spool_ids` field only while the agent is connected. Moonraker adds the field

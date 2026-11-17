@@ -98,17 +98,28 @@ Moonraker's Spoolman integration is a separate program in orrery, `orrery-spoolm
 the same `[spoolman]` section, from `moonraker.conf` or `orrery.toml`. To use it:
 
 1. Add the `[agent.spoolman]` table above to `orrery.toml`.
-2. Start the agent after orrery, as the same user:
+2. Add the agent's program to the table, so orrery starts it:
 
+   ```toml
+   command = "~/orrery/bin/orrery-spoolman"
    ```
-   orrery-spoolman ~/printer_data/comms/moonraker.sock
-   ```
 
-   Without the path, it uses `$ORRERY_SOCKET`, then `~/printer_data/comms/moonraker.sock`. It
-   connects again by itself when orrery restarts.
+The agent takes the active spool from Moonraker's database on its first run.
 
-The agent takes the active spool from Moonraker's database on its first run. orrery can't start
-agents yet, so for now run it in tmux or as a systemd service.
+`command` is the program, or a list of the program and its arguments, such as
+`["python3", "my_agent.py"]`. orrery runs it in its data folder (`~/printer_data`), with the
+unix socket's path in `ORRERY_SOCKET` and the agent's name in `ORRERY_AGENT`. The agent's
+output goes to orrery's log. If it exits, orrery starts it again, after a wait that grows from
+1 second to a minute. When orrery stops, so does the agent.
+
+To start an agent yourself instead, leave out `command`. Run it after orrery, as the same user:
+
+```
+orrery-spoolman ~/printer_data/comms/moonraker.sock
+```
+
+Without the path, it uses `$ORRERY_SOCKET`, then `~/printer_data/comms/moonraker.sock`. It
+connects again by itself when orrery restarts.
 
 ## Layout
 

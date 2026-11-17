@@ -6,7 +6,7 @@ use clap::Parser;
 
 use orrery::config::Config;
 use orrery::server::{App, Paths};
-use orrery::{expand_home, history, job_queue, logfile, unix_socket, web};
+use orrery::{agent_process, expand_home, history, job_queue, logfile, unix_socket, web};
 
 #[derive(Parser)]
 #[command(version, about = "Experimental Moonraker-compatible API server for Klipper")]
@@ -125,11 +125,13 @@ async fn run(paths: Paths, socket_path: PathBuf, toml: (PathBuf, bool), log_warn
     app.start();
     // Kept until orrery exits, which removes the socket file.
     let _socket = unix_socket::start(&app, &socket_path).await?;
+    let agents = agent_process::start(&app, _socket.as_ref().map(|_| socket_path.as_path()));
     let addr = format!("{host}:{port}");
     let listener = tokio::net::TcpListener::bind(&addr).await.with_context(|| format!("listening on {addr}"))?;
     tracing::info!("Listening on {addr}");
     let service = web::router(app.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>();
     axum::serve(listener, service).with_graceful_shutdown(shutdown_signal()).await?;
+    agents.stop().await;
     job_queue::on_exit(&app).await;
     history::on_exit(&app).await;
     Ok(())
