@@ -1,0 +1,35 @@
+name: the watcher leaves out what clients don't need
+description: >
+  orrery only. Where Moonraker announces every step, orrery waits until the folder is quiet and
+  announces the outcome. See file-watcher in docs/regressions.md.
+targets: [orrery]
+transports: [ws]
+steps:
+  # Written to a temporary file and renamed into place: one create_file, at the new name.
+  - disk:
+      - {write: config/.printer.cfg.tmp, content: "[printer]\n"}
+      - {move: config/.printer.cfg.tmp, to: config/printer.cfg}
+  - expect_no_notification: notify_filelist_changed
+    match: [{item: {path: .printer.cfg.tmp}}]
+    within_ms: 1000
+  - expect_notification: notify_filelist_changed
+    match: [{$exact: true, action: create_file, item: {path: printer.cfg, root: config}}]
+  # A file made and removed again, such as a lock file, isn't announced.
+  - disk:
+      - {write: gcodes/print.lock, content: "1\n"}
+      - {remove: gcodes/print.lock}
+  - expect_no_notification: notify_filelist_changed
+    within_ms: 1000
+  # .git folders aren't watched.
+  - disk:
+      - {mkdir: config/.git}
+      - {write: config/.git/HEAD, content: "ref: refs/heads/main\n"}
+  - expect_no_notification: notify_filelist_changed
+    within_ms: 1000
+  # The thumbnails orrery writes for a new file aren't announced.
+  - disk: [{write: gcodes/cube.gcode, fixture: prusaslicer_cube.gcode}]
+  - expect_no_notification: notify_filelist_changed
+    match: [{item: {path: "$regex:thumbs"}}]
+    within_ms: 1000
+  - expect_notification: notify_filelist_changed
+    match: [{action: create_file, item: {path: cube.gcode}}]

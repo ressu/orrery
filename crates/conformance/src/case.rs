@@ -110,6 +110,7 @@ pub enum Step {
     Upload(Box<UploadStep>),
     Download(DownloadStep),
     Sleep(SleepStep),
+    Disk(DiskStep),
     Agent(AgentStep),
     AgentReceived(AgentReceivedStep),
 }
@@ -332,6 +333,41 @@ fn default_status() -> u16 {
 #[serde(deny_unknown_fields)]
 pub struct SleepStep {
     pub sleep_ms: u64,
+}
+
+/// Changes files in the data folder directly, outside the server's API, one after another
+/// with no wait between them.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiskStep {
+    pub disk: Vec<DiskOp>,
+}
+
+/// One change. Paths are relative to the data folder.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum DiskOp {
+    /// Writes `content`, or the fixture file, and closes the file.
+    Write {
+        write: String,
+        #[serde(default)]
+        content: Option<String>,
+        #[serde(default)]
+        fixture: Option<String>,
+    },
+    Mkdir {
+        mkdir: String,
+    },
+    /// Renames, as `mv` does within one file system.
+    Move {
+        #[serde(rename = "move")]
+        from: String,
+        to: String,
+    },
+    /// Removes a file, or a folder and everything in it.
+    Remove {
+        remove: String,
+    },
 }
 
 /// Loads every `*.yaml` under `dir`, sorted by id.

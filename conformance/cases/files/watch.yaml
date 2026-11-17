@@ -1,0 +1,66 @@
+name: changes made outside the API are broadcast
+description: >
+  Files change in the data folder directly, as with scp, cp -r, or Klipper's SAVE_CONFIG, and the
+  server announces them with notify_filelist_changed.
+transports: [ws]
+files:
+  config/printer.cfg: "[printer]\n"
+steps:
+  # A gcode file copied in: announced once it's written, with its metadata ready.
+  - disk: [{write: gcodes/scp.gcode, fixture: prusaslicer_cube.gcode}]
+  - expect_notification: notify_filelist_changed
+    match: [{action: create_file, item: {path: scp.gcode, root: gcodes, size: $type:number}}]
+  - call: server.files.metadata
+    params: {filename: scp.gcode}
+    expect: {filename: scp.gcode, slicer: PrusaSlicer}
+  # Klipper saves printer.cfg.
+  - disk: [{write: config/printer.cfg, content: "[printer]\nkinematics: corexy\n"}]
+  - expect_notification: notify_filelist_changed
+    match: [{action: modify_file, item: {path: printer.cfg, root: config, size: 29}}]
+  # A folder copied in is one create_dir.
+  - disk:
+      - {mkdir: gcodes/batch}
+      - {write: gcodes/batch/a.gcode, content: "G28\n"}
+      - {mkdir: gcodes/batch/sub}
+      - {write: gcodes/batch/sub/b.gcode, content: "G28\n"}
+  - expect_no_notification: notify_filelist_changed
+    match: [{item: {path: batch/a.gcode}}]
+    within_ms: 1000
+  - expect_notification: notify_filelist_changed
+    match: [{action: create_dir, item: {path: batch, root: gcodes}}]
+  # The files in it are watched too.
+  - disk: [{write: gcodes/batch/sub/c.gcode, content: "G28\n"}]
+  - expect_notification: notify_filelist_changed
+    match: [{action: create_file, item: {path: batch/sub/c.gcode, root: gcodes}}]
+  # A move within the roots keeps the metadata.
+  - disk: [{move: gcodes/scp.gcode, to: gcodes/batch/moved.gcode}]
+  - expect_notification: notify_filelist_changed
+    match: [{action: move_file, item: {path: batch/moved.gcode, root: gcodes}, source_item: {path: scp.gcode, root: gcodes}}]
+  - call: server.files.metadata
+    params: {filename: batch/moved.gcode}
+    expect: {filename: batch/moved.gcode, slicer: PrusaSlicer}
+  # A move out of the roots is a delete.
+  - disk: [{move: gcodes/batch/moved.gcode, to: outside.gcode}]
+  - expect_notification: notify_filelist_changed
+    match: [{action: delete_file, item: {path: batch/moved.gcode, root: gcodes}}]
+  # A renamed folder is one move_dir, and its files are still watched.
+  - disk: [{move: gcodes/batch, to: gcodes/kept}]
+  - expect_notification: notify_filelist_changed
+    match: [{action: move_dir, item: {path: kept, root: gcodes}, source_item: {path: batch, root: gcodes}}]
+  - disk: [{write: gcodes/kept/sub/d.gcode, content: "G28\n"}]
+  - expect_notification: notify_filelist_changed
+    match: [{action: create_file, item: {path: kept/sub/d.gcode, root: gcodes}}]
+  # A removed tree is one delete_dir.
+  - disk: [{remove: gcodes/kept}]
+  - expect_no_notification: notify_filelist_changed
+    match: [{action: delete_file}]
+    within_ms: 1000
+  - expect_notification: notify_filelist_changed
+    match: [{action: delete_dir, item: {path: kept, root: gcodes}}]
+  # A change through the API is announced once.
+  - call: server.files.post_directory
+    params: {path: gcodes/api}
+  - expect_notification: notify_filelist_changed
+    match: [{action: create_dir, item: {path: api}}]
+  - expect_no_notification: notify_filelist_changed
+    within_ms: 1500

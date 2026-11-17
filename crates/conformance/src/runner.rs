@@ -8,7 +8,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use fake_klippy::{FakeKlippy, Script};
 use serde_json::{Map, Value, json};
 
-use crate::case::{AgentAction, Case, KlippyAction, Step, Transport};
+use crate::case::{AgentAction, Case, DiskOp, KlippyAction, Step, Transport};
 use crate::client::{HttpClient, Outcome, Route, RpcClient};
 use crate::matcher::{mismatches, short};
 use crate::target::{DataDir, Paths, RealKlippy, Server, TargetKind, free_port};
@@ -80,6 +80,8 @@ struct Ctx {
     vars: Map<String, Value>,
     /// `conformance/fixtures/files`, for upload and download steps.
     fixtures: PathBuf,
+    /// The server's data folder, for `disk` steps.
+    data: PathBuf,
 }
 
 async fn run_steps(
@@ -125,6 +127,7 @@ async fn run_steps(
         real,
         vars: Map::new(),
         fixtures,
+        data: data.path().to_path_buf(),
     };
 
     if case.waits_ready() {
@@ -374,6 +377,34 @@ async fn run_step(ctx: &mut Ctx, step: &Step, index: usize, result: &mut RunResu
         Step::Sleep(s) => {
             tokio::time::sleep(Duration::from_millis(s.sleep_ms)).await;
             Ok(())
+        }
+        Step::Disk(d) => {
+            for op in &d.disk {
+                disk_op(&ctx.data, &ctx.fixtures, op)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn disk_op(data: &Path, fixtures: &Path, op: &DiskOp) -> Result<()> {
+    match op {
+        DiskOp::Write { write, content, fixture } => {
+            let bytes = match (content, fixture) {
+                (Some(c), None) => c.clone().into_bytes(),
+                (None, Some(f)) => read_fixture(fixtures, f)?,
+                _ => return Err(anyhow!("disk write {write}: give content or fixture")),
+            };
+            std::fs::write(data.join(write), bytes).with_context(|| format!("writing {write}"))
+        }
+        DiskOp::Mkdir { mkdir } => std::fs::create_dir(data.join(mkdir)).with_context(|| format!("making {mkdir}")),
+        DiskOp::Move { from, to } => {
+            std::fs::rename(data.join(from), data.join(to)).with_context(|| format!("moving {from} to {to}"))
+        }
+        DiskOp::Remove { remove } => {
+            let path = data.join(remove);
+            if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) }
+                .with_context(|| format!("removing {remove}"))
         }
     }
 }

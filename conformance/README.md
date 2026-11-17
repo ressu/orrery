@@ -86,6 +86,7 @@ Other case fields:
 | `agent: disconnect` | Closes the test agent's connection. |
 | `expect_agent_received: {method, params}` | Waits up to `within_ms` (default 3000) until the test agent receives a matching relayed call or notification. |
 | `sleep_ms: <n>` | Waits. |
+| `disk: [<change>, …]` | Changes files in the data folder directly, outside the API, one after another with no wait: `{write: <path>, content: <text>}` (or `fixture:`), `{mkdir: <path>}`, `{move: <path>, to: <path>}`, and `{remove: <path>}`, which also removes a folder. Paths are relative to the data folder. |
 
 A `call` step also takes these fields:
 

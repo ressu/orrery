@@ -46,7 +46,7 @@ change how safe or complete orrery is to run.
 - **orrery:** it reports the options of Moonraker's default components, with Moonraker's
   defaults, in Moonraker's order, including options orrery ignores, such as `ssl_port`. Sections
   of optional components that orrery doesn't have, such as `[update_manager]` or `[power]`,
-  aren't listed. `file_system_observer` is `none`, because orrery has no file watcher yet.
+  aren't listed.
 - **Why:** clients read values from this list: Fluidd reads `spoolman.server` to connect to
   Spoolman itself, and `data_store.temperature_store_size` for its charts. Matching Moonraker's
   whole list keeps clients that weren't checked working too. A listed option isn't a promise
@@ -63,20 +63,30 @@ change how safe or complete orrery is to run.
 - **Why:** see `docs/design/2026-11-01-datastore-spike.md`.
 - **Cases:** none; the API behaves the same.
 
-### no-file-observer: changes made outside the API aren't seen right away
+### file-watcher: the file watcher announces outcomes, not every step
 
 - **Area:** files
-- **Moonraker:** watches the roots with inotify. When a file changes on disk, it sends
-  `notify_filelist_changed` and reads the new file's metadata.
-- **orrery:** works like Moonraker with `file_system_observer: none`. It sees the changes made
-  through its API, and it reads metadata for the gcodes folder when it starts. A file copied
-  in with scp, or a `printer.cfg` that Klipper saves, shows up when a client lists the folder
-  again. Its metadata is read the first time a client asks for it with
-  `server.files.metadata`, or with `server.files.metascan`. The same request also gets
-  metadata for a file that the startup scan hasn't reached yet. Moonraker answers 404 until
-  its scan gets there.
-- **Why:** the API cases come first. A watcher can follow.
-- **Cases:** none yet.
+- **Moonraker:** watches the roots with inotify, the kernel's way of reporting changes to
+  folders. When a file changes on disk, it sends `notify_filelist_changed` and reads a new gcode
+  file's metadata. It holds back the notification for each API change for a second, so the
+  watcher's can replace it.
+- **orrery:** watches the roots too, and sends the same notifications, with these differences:
+  - It waits until the folders have been quiet for 0.25 s, and announces the outcome. A file
+    created and removed in that time, such as a lock file, isn't announced. A file written and
+    then renamed into place is one `create_file`, at its new name. Moonraker announces each
+    step: `create_file` for the temporary name, then `move_file`.
+  - It doesn't ask the kernel for each write, only for "closed after writing", so it doesn't
+    wake for every line Klipper adds to its log. A file is announced once it's closed, as in
+    Moonraker. A file still open, such as a log, shows up when a client lists the folder again.
+  - API changes are announced at once, not a second later.
+  - The thumbnails orrery writes into `.thumbs` aren't announced. Moonraker announces them, and
+    Fluidd hides that folder.
+  - If the kernel's queue of changes overflows, orrery watches every folder again and sends
+    `root_update` for each root. Moonraker misses those changes.
+  - `file_system_observer: none` turns the watcher off, as in Moonraker.
+- **Why:** clients need to know what's in the folders, not each step that got there. Fewer
+  wakeups matter on a printer's small computer.
+- **Cases:** `files/watch` (both servers), `files/watch_orrery` (orrery only).
 
 ### partial-metadata: some slicers get only basic metadata
 

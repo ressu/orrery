@@ -1,18 +1,19 @@
 //! Files in the `config`, `logs`, and `gcodes` roots, after Moonraker's `file_manager.py`, and
 //! the `server.files.*` endpoints.
 //!
-//! orrery behaves like Moonraker with `file_system_observer: none`: it sees the changes made
-//! through its own API, and it scans the gcodes folder for metadata when it starts. Changes
-//! made to the folders directly (with scp, or by Klipper) show up when a client lists the
-//! folder again.
+//! orrery sees the changes made through its own API, and [`watch`] sees the ones made to the
+//! folders directly, with scp or by Klipper. It scans the gcodes folder for metadata when it
+//! starts.
 
 pub mod http;
 mod metadata;
+mod watch;
 
 use std::collections::{BTreeMap, HashSet};
 use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -48,6 +49,12 @@ pub struct FileManager {
     pub max_upload_size: usize,
     /// Uploads that ask to print go into the job queue when the print can't start.
     pub queue_gcodes: bool,
+    /// `file_system_observer`: `inotify` watches the roots, `none` doesn't.
+    observer: String,
+    observer_warnings: bool,
+    /// Paths the API is changing, for the watcher to leave out.
+    own_changes: Mutex<Vec<watch::OwnChange>>,
+    next_own_change: AtomicU64,
 }
 
 /// The file extension, lowercase and with its dot, as Python's `os.path.splitext` gives it.
@@ -115,7 +122,8 @@ impl FileManager {
         let config_write = section.get_bool("enable_config_write_access", true)?;
         let queue_gcodes = section.get_bool("queue_gcode_uploads", false)?;
         section.get_bool("check_klipper_config_path", true)?;
-        section.get_str("file_system_observer", "none");
+        let observer = section.get_str("file_system_observer", "inotify").to_lowercase();
+        let observer_warnings = section.get_bool("enable_observer_warnings", true)?;
         drop(section);
         let max_upload_size = config.section("server").get_int("max_upload_size", 1024)?.max(1) as usize * 1024 * 1024;
         let mut roots = Vec::new();
@@ -145,6 +153,10 @@ impl FileManager {
             parse_lock: tokio::sync::Mutex::new(()),
             max_upload_size,
             queue_gcodes,
+            observer,
+            observer_warnings,
+            own_changes: Mutex::new(Vec::new()),
+            next_own_change: AtomicU64::new(0),
         })
     }
 
@@ -467,6 +479,7 @@ pub fn start(app: &Arc<App>) {
             fm.remove_file_metadata(&app.database, k);
         }
     }
+    let app_for_watch = app.clone();
     let app = app.clone();
     tokio::spawn(async move {
         let dir = app.files.gcodes_dir().to_path_buf();
@@ -474,6 +487,7 @@ pub fn start(app: &Arc<App>) {
         let count = scan_directory_metadata(&app, &dir).await;
         tracing::info!("Checked metadata for {count} gcode files in {:.1?}", started.elapsed());
     });
+    watch::start(&app_for_watch);
 }
 
 /// Parses a gcode file's metadata unless the stored copy is still current.
@@ -488,6 +502,10 @@ pub async fn parse_metadata(app: &Arc<App>, full: &Path) {
     if fm.has_valid_metadata(&rel, &info) {
         return;
     }
+    // The thumbnails go into `.thumbs` next to the file. Moonraker announces them too, but
+    // clients hide that folder.
+    let thumbs = full.parent().map(|p| p.join(".thumbs"));
+    let _own = thumbs.as_deref().map(|t| fm.own_change(&[t]));
     let path = full.to_path_buf();
     let mut result = Err(anyhow::anyhow!("not run"));
     for _ in 0..3 {
@@ -815,6 +833,7 @@ async fn directory(app: Arc<App>, req: Request) -> ApiResult {
     let fm = &app.files;
     let _guard = fm.op_lock.lock().await;
     fm.check_reserved(&dir_path, true)?;
+    let _own = fm.own_change(&[&dir_path]);
     let action = match req.kind {
         RequestType::Post if fm.full_access(&root) => {
             std::fs::create_dir(&dir_path).map_err(io_error)?;
@@ -881,6 +900,7 @@ async fn move_copy(app: Arc<App>, req: Request) -> ApiResult {
         let action = if into_dir(&dest_path).is_file() { "modify_file" } else { "create_file" };
         (action, into_dir(&dest_path))
     };
+    let _own = fm.own_change(&[&src_path, &full_dest]);
     let (from, to) = (src_path.clone(), full_dest.clone());
     let op = tokio::task::spawn_blocking(move || {
         if is_move {
@@ -963,6 +983,7 @@ async fn zip_files(app: Arc<App>, req: Request) -> ApiResult {
         };
         sources.extend(children.into_iter().map(|p| (p.clone(), base.clone())));
     }
+    let _own = fm.own_change(&[&dest_path]);
     let dest_for_task = dest_path.clone();
     tokio::task::spawn_blocking(move || write_zip(&sources, &dest_for_task, store_only))
         .await
@@ -1015,6 +1036,7 @@ pub async fn delete_file(app: &Arc<App>, path: &str) -> Result<Map<String, Value
     {
         return Err(e);
     }
+    let _own = fm.own_change(&[&full]);
     std::fs::remove_file(&full).map_err(io_error)?;
     clear_metadata(app, &root, &full, false);
     Ok(changed_event(app, "delete_file", &root, &full, None))

@@ -171,6 +171,7 @@ async fn finalize_upload(
         })?;
     }
     let target = if is_link { std::fs::canonicalize(&dest).unwrap_or_else(|_| dest.clone()) } else { dest.clone() };
+    let _own = fm.own_change(&[&dest, &target]);
     super::move_path(temp, &target).map_err(|e| {
         tracing::info!("Upload Write Error: {e}");
         ApiError::new(500, "Unable to save file")
