@@ -3,6 +3,9 @@
 moonraker_src := env("MOONRAKER_SRC", home_directory() / "sources/moonraker")
 klipper_src := env("KLIPPER_SRC", home_directory() / "sources/klipper")
 work := "conformance/.work"
+# SSH connections to printers, shared by scripts/copy-to-printer.sh. %C is a hash of the user,
+# host, and port.
+ssh_control := "/tmp/orrery-ssh-" + `id -u`
 
 # Build, unit tests, then the conformance suite against the reference.
 default: test conformance
@@ -79,3 +82,27 @@ build-arm:
 # Build orrery for a printer's CPU and copy it to ~/orrery-test/bin on the printer.
 copy-to-printer host:
     scripts/copy-to-printer.sh {{host}}
+
+# Keep one SSH connection to a printer open, shared by ssh, scp, and copy-to-printer; closes after `idle` unused.
+connect-printer host idle="12h":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p {{ssh_control}}
+    chmod 700 {{ssh_control}}
+    if ssh -o ControlPath='{{ssh_control}}/%C' -O check '{{host}}' 2>/dev/null; then
+        echo "The SSH connection to {{host}} is already open."
+        exit 0
+    fi
+    ssh -fN -o ControlMaster=yes -o ControlPath='{{ssh_control}}/%C' -o ControlPersist='{{idle}}' '{{host}}'
+    echo "Opened an SSH connection to {{host}}. It closes after {{idle}} unused."
+    echo "To use it from another command, add: -o ControlPath={{ssh_control}}/%C"
+
+# Close the SSH connection that connect-printer or copy-to-printer opened.
+disconnect-printer host:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ssh -o ControlPath='{{ssh_control}}/%C' -O exit '{{host}}' 2>/dev/null; then
+        echo "Closed the SSH connection to {{host}}."
+    else
+        echo "There's no open SSH connection to {{host}}."
+    fi

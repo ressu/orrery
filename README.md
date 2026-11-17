@@ -160,3 +160,16 @@ scripts/copy-to-printer.sh <ssh host>
 `~/orrery-test/bin/orrery` on the printer, and it's copied only when it changed. The script
 doesn't start orrery or change anything else on the printer. To close the SSH connection it keeps
 open for 10 minutes, run `scripts/copy-to-printer.sh --disconnect <ssh host>`.
+
+To keep one SSH connection open while you work, so you log in once, run:
+
+```
+just connect-printer <ssh host>
+```
+
+Later `ssh`, `scp`, and `copy-to-printer` runs can share it. It closes after 12 hours unused;
+`just connect-printer <ssh host> 1h` sets another time. To close it, run:
+
+```
+just disconnect-printer <ssh host>
+```
