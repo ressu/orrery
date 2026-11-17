@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build orrery and orrery-import for a printer's CPU and copy them there.
+# Build orrery, orrery-import, and orrery-spoolman for a printer's CPU and copy them there.
 #
 # Usage:
 #   scripts/copy-to-printer.sh <ssh host>
@@ -62,7 +62,7 @@ if [ "$disconnect" = 1 ]; then
 fi
 
 # One call gets the CPU and the checksums of the binaries that are on the printer now.
-binaries=(orrery orrery-import)
+binaries=(orrery orrery-import orrery-spoolman)
 # shellcheck disable=SC2029 # The variables are meant to expand here, on this computer.
 info=$(ssh "$host" "mkdir -p $test_dir/bin && uname -m && cd $test_dir/bin && { sha256sum ${binaries[*]} 2>/dev/null || true; }")
 arch=$(sed -n 1p <<<"$info")
@@ -79,7 +79,7 @@ esac
 
 # cargo builds again only if the source changed.
 echo "==> Building for $arch ($target)"
-cargo build --quiet --release -p orrery --bins --target "$target"
+cargo build --quiet --release -p orrery -p orrery-spoolman --bins --target "$target"
 
 for name in "${binaries[@]}"; do
   binary="target/$target/release/$name"
