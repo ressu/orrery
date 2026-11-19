@@ -237,6 +237,90 @@ so agents written for Moonraker still find `[spoolman]` there. For someone movin
 Moonraker, the Spoolman agent falls back to `[spoolman]` in `moonraker.conf` when `orrery.toml`
 doesn't configure it.
 
+## Processors
+
+**Status (2026-11-19):** an idea for later, not built. This section fixes the conventions so
+the first processor can follow them.
+
+Some plugin work runs once per file and is then done: reading a file's metadata, turning one
+file format into another, or getting a file from somewhere else. That work doesn't need an
+agent that stays connected. It needs a **processor**: a program orrery starts for one file,
+which then exits. Moonraker already works this way for metadata: it starts `metadata.py` for each
+file, and stops it after `default_metadata_parser_timeout`.
+
+| | Agent | Processor |
+|---|---|---|
+| Runs | All the time; restarted when it exits | For one file, then exits |
+| Talks to orrery | The unix socket and the JSON-RPC API | Arguments in, JSON on stdout |
+| Memory | About 5 MB, all the time | Only while it runs |
+| Good for | Following an outside service, like Spoolman | Reading or changing a file |
+
+A processor never uses orrery's API, so a short Python script can be one.
+
+### Kinds
+
+orrery runs a new file through the processors that match it, in this order:
+
+1. **Fetch** gets a file into a root from somewhere else, such as a URL. It writes to a temporary
+   path that orrery gives it, and orrery moves the file into place.
+2. **Preprocess** turns the file into another one, such as a sliced 3MF into gcode, or gcode
+   with the object labels that cancel-object needs. It writes to an output path, and orrery
+   swaps the result in, in one rename.
+3. **Extract** reads the file's metadata, and writes thumbnails into a folder that orrery names.
+   It prints the metadata as JSON. orrery's own Rust extractor stays the default. If image
+   decoding keeps orrery's memory high, that extractor can become a processor program too,
+   with nothing else changing.
+
+Preprocess and extract come first, because they share one pipeline. Fetch waits for a real use.
+
+### Finding processors
+
+Users don't set processors up one by one. orrery finds them, as it finds the built-in Spoolman
+agent:
+
+- **One folder per processor,** in `processors/` next to the orrery binary. For example,
+  `processors/gcode-3mf/` holds the program and a `processor.toml`.
+- **The manifest** gives the kind, the file name endings it handles, the command, a timeout, and
+  the version. orrery reads manifests without running anything, so finding processors costs
+  nothing, and a broken one can't stall startup.
+- **Adding the folder turns a processor on,** and removing it turns the processor off. A
+  `[processor.<name>]` table in `orrery.toml` is only for turning one off or changing its
+  options.
+- **Changes are picked up while orrery runs.** The file watcher sees a processor folder appear,
+  change, or go away. A later update manager can unpack a new version beside the old one, and
+  rename it into place in one step, with no restart.
+
+```toml
+# processors/gcode-3mf/processor.toml
+kind = "preprocess"
+endings = [".gcode.3mf"]
+command = ["gcode-3mf"]
+timeout = 60
+version = "0.1.0"
+```
+
+### How they fit what's built
+
+- **Announcements:** a new file goes through its processors before `notify_filelist_changed`
+  announces it. The watcher's announcer already waits for metadata, so processors run there too.
+  orrery marks the files a processor writes as its own changes, as it does for thumbnails, so a
+  processed file gets one announcement.
+- **Uploads that start a print** wait until processing ends.
+- **Failures:** when a processor fails or runs out of time, orrery keeps the original file, logs
+  the reason, and adds one `server.info` warning.
+- **Safety:** the same rules as `command` agents: no shell, a timeout, SIGTERM and then SIGKILL,
+  and a limit on how much output orrery reads.
+
+### The first example: `.gcode.3mf`
+
+OrcaSlicer can upload a sliced plate as `.gcode.3mf`: a zip file with the plate's gcode, such as
+`Metadata/plate_1.gcode`, and PNG previews. A preprocessor unpacks the gcode, and keeps the
+preview as the thumbnail. Two things need deciding when it's built:
+
+- **Matching:** orrery's extension check sees only `.3mf` today. Processors match whole name
+  endings, so `.gcode.3mf` doesn't match a model `.3mf` that isn't sliced.
+- **The original:** keep the `.gcode.3mf` next to the gcode, or replace it.
+
 ## The order of work
 
 1. **The unix socket.** It comes first: agents on the printer use it, the name check needs its
@@ -253,7 +337,13 @@ doesn't configure it.
 6. **Starting agents** with `command` and `systemd_unit`. `command` is done (case
    `agents/command`). `systemd_unit` waits for service control, where native D-Bus and
    `systemctl` still need comparing.
-7. **Decide what else moves out,** using the measurements from step 5.
+7. **Decide what else moves out,** using the measurements from step 5. Decided on 2026-11-19:
+   nothing that's built moves out. Webcams are small, need no extra crates, and every frontend
+   uses them, so an agent would cost more memory than the code it moves. Files, history, the job
+   queue, and process stats are the core that agents build on. Agents are for the Moonraker
+   components orrery doesn't have yet, such as `update_manager`, `power`, and `mqtt`.
+8. **Processors,** later: preprocess and extract first, with `.gcode.3mf` as the first one (see
+   [Processors](#processors)).
 
 Steps 1 to 4 add no plugin features yet, so the conformance suite checks them as they go.
 
