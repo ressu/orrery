@@ -335,8 +335,8 @@ preview as the thumbnail. Two things need deciding when it's built:
 5. **The Spoolman agent,** tested against Fluidd and a Spoolman server, then measured on
    bluev2.
 6. **Starting agents** with `command` and `systemd_unit`. `command` is done (case
-   `agents/command`). `systemd_unit` waits for service control, where native D-Bus and
-   `systemctl` still need comparing.
+   `agents/command`). `systemd_unit` waits for service control. The comparison of D-Bus and
+   `systemctl` is in `2026-11-19-service-control.md`: D-Bus, with orrery's own client.
 7. **Decide what else moves out,** using the measurements from step 5. Decided on 2026-11-19:
    nothing that's built moves out. Webcams are small, need no extra crates, and every frontend
    uses them, so an agent would cost more memory than the code it moves. Files, history, the job
