@@ -131,7 +131,9 @@ that can reach the socket could connect as `spoolman` while the real agent is do
 Fluidd's Spoolman calls. The unix socket tells orrery the process id at the other end. orrery
 uses it:
 
-- **`command`:** the name is accepted only from the process orrery started.
+- **`command`:** the name is accepted only from the process orrery started, or from a process
+  it started, such as the program a wrapper script runs. orrery follows the connecting
+  process's parents in `/proc`.
 - **`systemd_unit`:** only from a process in the unit, which systemd's `GetUnitByPID` tells.
   Any process in the unit counts, so a wrapper script that starts the agent works too.
 - **Neither:** from the first connection that claims it. An optional `user` setting limits it to
@@ -341,8 +343,7 @@ preview as the thumbnail. Two things need deciding when it's built:
 6. **Starting agents** with `command` and `systemd_unit`. Both are done: `command` has the case
    `agents/command`, and `systemd_unit` was checked by hand on bluev2, since the suite has no
    systemd. The comparison of D-Bus and `systemctl` is in `2026-11-19-service-control.md`.
-   Still to do: a `command` agent's name is checked against its user only, not against the
-   process orrery started.
+   The name check for `command` agents has the case `agents/claim_command`.
 7. **Decide what else moves out,** using the measurements from step 5. Decided on 2026-11-19:
    nothing that's built moves out. Webcams are small, need no extra crates, and every frontend
    uses them, so an agent would cost more memory than the code it moves. Files, history, the job

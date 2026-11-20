@@ -89,7 +89,8 @@ history_fields = ["spool_ids"]
 ```
 
 A configured agent can connect only over the unix socket. `user = "printer"` also limits it to
-one Unix user. See [docs/design/2026-11-15-plugin-interface.md](docs/design/2026-11-15-plugin-interface.md)
+one Unix user. An agent that orrery starts with `command` must connect from that process, or
+from one it started, such as the program a wrapper script runs. See [docs/design/2026-11-15-plugin-interface.md](docs/design/2026-11-15-plugin-interface.md)
 for how agents work. To write an agent in Rust, use the `orrery-agent` crate.
 
 ### Spoolman

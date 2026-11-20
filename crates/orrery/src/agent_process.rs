@@ -4,7 +4,8 @@
 //! `ORRERY_AGENT` to its name. Its output goes to orrery's log, one line at a time, marked with
 //! its name. When it exits, orrery starts it again, waiting 1 second at first and twice as long
 //! each time, up to a minute; the wait starts over once an agent has run for a minute. When
-//! orrery stops, it stops its agents.
+//! orrery stops, it stops its agents. Only the process orrery started, or one it started, may
+//! connect under the agent's name (see `agents::check_claim`).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -90,9 +91,11 @@ impl Agent {
                         status = child.wait() => status,
                         () = stopped(&mut stopping) => {
                             self.terminate(&mut child).await;
+                            self.app.agents.set_process(&self.name, None);
                             return;
                         }
                     };
+                    self.app.agents.set_process(&self.name, None);
                     if started.elapsed() >= HEALTHY_RUN {
                         delay = FIRST_DELAY;
                     }
@@ -143,6 +146,8 @@ impl Agent {
             });
         }
         let mut child = cmd.spawn()?;
+        // Recorded before the agent can connect, which takes it longer than this.
+        self.app.agents.set_process(&self.name, child.id());
         if let Some(out) = child.stdout.take() {
             tokio::spawn(log_lines(self.name.clone(), out));
         }

@@ -8,9 +8,10 @@
 //!   `component` lists a name in `server.info`, and `history_fields` lists the fields the agent
 //!   may add to history jobs with `orrery.agent.history_field`.
 //! - A configured agent's name can only be claimed over the unix socket, optionally by one Unix
-//!   user, so another program can't connect under it and receive its calls. An agent with
-//!   `systemd_unit` must connect from a process in that unit, which orrery starts if it isn't
-//!   running.
+//!   user, so another program can't connect under it and receive its calls. An agent with a
+//!   `command` must connect from the process orrery started, or one that process started. An
+//!   agent with `systemd_unit` must connect from a process in that unit, which orrery starts if
+//!   it isn't running.
 //! - Some agents are built in: a `server` option in `[spoolman]` turns on the Spoolman agent,
 //!   with Moonraker's names, and starts `orrery-spoolman` from orrery's own folder. An
 //!   `[agent.spoolman]` table overrides the built-in options one at a time.
@@ -72,6 +73,8 @@ pub enum Command {
 #[derive(Debug, Default)]
 pub struct Agents {
     configs: Vec<AgentConfig>,
+    /// The process orrery started for each agent with a `command`, while it runs.
+    processes: std::sync::Mutex<std::collections::HashMap<String, u32>>,
 }
 
 impl Agents {
@@ -85,11 +88,20 @@ impl Agents {
         }
         let mut warnings = Vec::new();
         builtin_spoolman(config, agent_dir, &mut configs, &mut warnings);
-        Ok((Self { configs }, warnings))
+        Ok((Self { configs, ..Self::default() }, warnings))
     }
 
     fn get(&self, name: &str) -> Option<&AgentConfig> {
         self.configs.iter().find(|c| c.name == name)
+    }
+
+    /// Records the process orrery started for an agent, or that it exited.
+    pub fn set_process(&self, name: &str, pid: Option<u32>) {
+        let mut processes = self.processes.lock().expect("processes lock");
+        match pid {
+            Some(pid) => processes.insert(name.to_owned(), pid),
+            None => processes.remove(name),
+        };
     }
 
     /// The agents that run as systemd units: `(name, unit)`.
@@ -328,6 +340,14 @@ pub async fn check_claim(app: &App, name: &str, conn: ConnId) -> Result<(), ApiE
     {
         return Err(ApiError::bad_request(format!("Agent '{name}' must connect as user {user}")));
     }
+    if matches!(config.command, Command::Run(_)) {
+        let started = app.agents.processes.lock().expect("processes lock").get(name).copied();
+        if !started.zip(peer.pid).is_some_and(|(started, pid)| started_by(pid, started)) {
+            return Err(ApiError::bad_request(format!(
+                "Agent '{name}' is one orrery starts, so it must connect from the process orrery started"
+            )));
+        }
+    }
     if let Some(unit) = &config.unit {
         let found = match peer.pid {
             Some(pid) => app.machine.services.unit_of_process(unit.scope, pid).await,
@@ -347,6 +367,31 @@ pub async fn check_claim(app: &App, name: &str, conn: ConnId) -> Result<(), ApiE
         }
     }
     Ok(())
+}
+
+/// Whether `pid` is the process `started`, or a process it started, such as the program a
+/// wrapper script runs. Follows parent processes in `/proc`, at most 32 of them.
+fn started_by(pid: u32, started: u32) -> bool {
+    let mut pid = pid;
+    for _ in 0..32 {
+        if pid == started {
+            return true;
+        }
+        match parent_of(pid) {
+            Some(parent) if parent > 1 => pid = parent,
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// A process's parent, from `/proc/<pid>/stat`. The name there is in parentheses and may hold
+/// spaces, so the fields are read after the last `)`.
+fn parent_of(pid: u32) -> Option<u32> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let rest = &stat[stat.rfind(')')? + 1..];
+    // The state, then the parent.
+    rest.split_whitespace().nth(1)?.parse().ok()
 }
 
 /// Removes an agent's endpoints when it disconnects.
@@ -556,6 +601,21 @@ command = ["~/bin/orrery-spoolman", "-v"]
             with_spoolman(conf, "[agent.spoolman]\nsystemd_unit = \"orrery-spoolman\"\n", Some(dir.path())).unwrap();
         assert_eq!(a.commands().count(), 0);
         assert_eq!(a.units().count(), 1);
+    }
+
+    #[test]
+    fn follows_parents() {
+        let me = std::process::id();
+        let parent = rustix::process::getppid().map_or(0, |p| p.as_raw_nonzero().get() as u32);
+        assert!(started_by(me, me));
+        assert!(started_by(me, parent));
+        let child = std::process::Command::new("sleep").arg("5").spawn().unwrap();
+        assert!(started_by(child.id(), me));
+        assert!(!started_by(me, child.id()));
+        assert!(!started_by(u32::MAX, me));
+        let mut child = child;
+        let _ = child.kill();
+        let _ = child.wait();
     }
 
     #[test]

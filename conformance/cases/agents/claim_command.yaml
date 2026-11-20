@@ -1,0 +1,15 @@
+name: only the process orrery started can claim the name of an agent with a command
+description: orrery only. The agent is `sleep`, which never connects, so the runner tries its name.
+targets: [orrery]
+transports: [unix]
+klippy: none
+files:
+  config/orrery.toml: |
+    [agent.sleeper]
+    command = ["sleep", "60"]
+steps:
+  - call: server.connection.identify
+    params: {client_name: sleeper, version: "0.1", type: agent, url: "https://example.invalid"}
+    expect_error: {code: 400, message: "Agent 'sleeper' is one orrery starts, so it must connect from the process orrery started"}
+  - call: server.extensions.list
+    expect: {agents: []}
