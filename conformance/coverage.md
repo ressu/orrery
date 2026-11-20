@@ -146,7 +146,7 @@ tokens, and API keys.
 |---|---|---|
 | `machine.system_info` | Covered | `machine/system_info` (known regression: `no-python-info`) |
 | `machine.proc_stats` | Covered | `machine/proc_stats` |
-| `machine.reboot`, `machine.shutdown` | To do (guarded; never run in tests) |
+| `machine.reboot`, `machine.shutdown` | Done, not covered (guarded; never run in tests) |
 | `machine.services.restart`, `.start`, `.stop` | Covered: the refusals only (`machine/services`); actions checked by hand |
 | `machine.peripherals.usb`, `.serial`, `.video`, `.canbus` | To do |
 | `server.webcams.list`, `.get_item`, `.post_item`, `.delete_item`, `.test` | Covered | `webcam/config`, `webcam/saved` |

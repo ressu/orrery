@@ -5,7 +5,7 @@
 //! orrery lists the loaded services once at startup and keeps the allowed ones. systemd then
 //! reports each change of their state with a `PropertiesChanged` signal, so nothing is polled.
 //! `machine.services.start`, `stop`, and `restart` act on the listed services; orrery's own
-//! service can only be restarted.
+//! service can only be restarted. `machine.reboot` and `machine.shutdown` go to logind.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -47,6 +47,8 @@ const ALWAYS_ALLOWED: &[&str] = &["moonraker", "klipper", "orrery"];
 pub struct Services {
     /// Whether the provider is `systemd_dbus`.
     enabled: bool,
+    /// `[machine] shutdown_action`: `poweroff` or `halt`.
+    shutdown_action: String,
     allowed: Vec<String>,
     /// The system bus, connected on first use. `None` when it isn't there.
     bus: tokio::sync::OnceCell<Option<Bus>>,
@@ -66,9 +68,10 @@ struct Service {
 }
 
 impl Services {
-    pub fn new(provider: &str, paths: &Paths) -> Self {
+    pub fn new(provider: &str, shutdown_action: String, paths: &Paths) -> Self {
         Self {
             enabled: provider == "systemd_dbus",
+            shutdown_action,
             allowed: read_allowed(&paths.data.join("moonraker.asvc")),
             bus: tokio::sync::OnceCell::new(),
             list: Mutex::new(Vec::new()),
@@ -194,6 +197,55 @@ pub fn register_endpoints(app: &Arc<App>) {
             handler(service_action),
         );
     }
+    for action in ["reboot", "shutdown"] {
+        r.register(&format!("/machine/{action}"), &[RequestType::Post], Transports::All, handler(power_action));
+    }
+}
+
+/// `machine.reboot` and `machine.shutdown`, through logind, after Moonraker's
+/// `_handle_machine_request`. Shutdown powers off, or halts with `shutdown_action: halt`.
+async fn power_action(app: Arc<App>, req: Request) -> ApiResult {
+    let action = req.endpoint.rsplit('/').next().unwrap_or_default();
+    if let Some(container) = app.machine.container() {
+        return Err(ApiError::bad_request(format!("Cannot {action} from within a {container} container")));
+    }
+    let services = &app.machine.services;
+    if !services.enabled {
+        return Err(ApiError::new(
+            503,
+            format!("orrery can't {action} the machine: it needs [machine] provider: systemd_dbus"),
+        ));
+    }
+    let Some(bus) = services.bus().await else {
+        return Err(ApiError::new(503, format!("orrery isn't connected to D-Bus, so it can't {action} the machine")));
+    };
+    let (member, doing) = match action {
+        "reboot" => ("Reboot", "reboot"),
+        _ if services.shutdown_action == "halt" => ("Halt", "halt"),
+        _ => ("PowerOff", "power off"),
+    };
+    // Before the call: the log may not get another chance.
+    tracing::info!("Asking logind to {doing} the machine, as a client asked");
+    let call = Call {
+        destination: "org.freedesktop.login1",
+        path: "/org/freedesktop/login1",
+        interface: "org.freedesktop.login1.Manager",
+        member,
+        // Not interactive: nothing waits for a password.
+        args: vec![Value::Bool(false)],
+    };
+    match bus.call(call).await {
+        Ok(_) => Ok(json!("ok")),
+        Err(dbus::Error::Remote { name, message }) if is_refusal(&name) => {
+            Err(ApiError::new(403, format!("polkit doesn't allow orrery to {doing} the machine: {message}")))
+        }
+        Err(e) => Err(ApiError::new(500, format!("logind can't {doing} the machine: {e}"))),
+    }
+}
+
+/// Whether a D-Bus error means polkit refused.
+fn is_refusal(name: &str) -> bool {
+    name.ends_with("AccessDenied") || name.ends_with("InteractiveAuthorizationRequired")
 }
 
 /// `machine.services.start`, `stop`, and `restart`, after Moonraker's `_handle_service_request`.
@@ -235,9 +287,7 @@ async fn service_action(app: Arc<App>, req: Request) -> ApiResult {
             tracing::info!("Asked systemd to {action} {name}.service, as a client asked");
             Ok(json!("ok"))
         }
-        Err(dbus::Error::Remote { name: error, message })
-            if error.ends_with("AccessDenied") || error.ends_with("InteractiveAuthorizationRequired") =>
-        {
+        Err(dbus::Error::Remote { name: error, message }) if is_refusal(&error) => {
             Err(ApiError::new(403, format!("polkit doesn't allow orrery to {action} {name}: {message}")))
         }
         // The unit was removed after orrery listed it.
@@ -248,9 +298,39 @@ async fn service_action(app: Arc<App>, req: Request) -> ApiResult {
     }
 }
 
-/// Asks polkit whether orrery may do `action`, and adds a warning when it may not. Without
-/// interaction, so nothing waits for a password.
-async fn check_permission(app: &App, bus: &Bus, action: &str, what: &str) {
+/// Asks polkit what orrery may do, and adds one warning that lists what it may not. As in
+/// Moonraker, orrery still tries a refused action when a client asks.
+async fn check_permissions(app: &App, bus: &Bus) {
+    let shutdown = if app.machine.services.shutdown_action == "halt" { "halt" } else { "power-off" };
+    let checks = [
+        ("org.freedesktop.systemd1.manage-units".to_owned(), "start, stop, or restart services"),
+        ("org.freedesktop.login1.reboot".to_owned(), "reboot the machine"),
+        ("org.freedesktop.login1.reboot-multiple-sessions".to_owned(), "reboot while other users are logged in"),
+        (format!("org.freedesktop.login1.{shutdown}"), "shut down the machine"),
+        (format!("org.freedesktop.login1.{shutdown}-multiple-sessions"), "shut down while other users are logged in"),
+    ];
+    let mut refused = Vec::new();
+    for (action, what) in &checks {
+        match is_authorized(bus, action).await {
+            Ok(true) => {}
+            Ok(false) => refused.push(*what),
+            Err(e) => {
+                app.add_warning(format!("[machine]: orrery can't ask polkit what it may do: {e}"));
+                return;
+            }
+        }
+    }
+    if !refused.is_empty() {
+        app.add_warning(format!(
+            "[machine]: polkit doesn't allow orrery to: {}. On a Moonraker install, run orrery as a service with the moonraker-admin group.",
+            refused.join("; ")
+        ));
+    }
+}
+
+/// polkit's answer for this process and `action`, asked without interaction, so nothing waits
+/// for a password.
+async fn is_authorized(bus: &Bus, action: &str) -> dbus::Result<bool> {
     let subject = Value::Struct(vec![
         Value::str("unix-process"),
         Value::Dict(
@@ -275,13 +355,8 @@ async fn check_permission(app: &App, bus: &Bus, action: &str, what: &str) {
             Value::str(""),
         ],
     };
-    match bus.call(call).await {
-        Ok(reply) if reply.first().and_then(Value::items).and_then(|r| r.first()?.as_bool()) == Some(true) => {}
-        Ok(_) => app.add_warning(format!(
-            "[machine]: polkit doesn't allow orrery to {what} ({action}). On a Moonraker install, run orrery as a service with the moonraker-admin group."
-        )),
-        Err(e) => app.add_warning(format!("[machine]: orrery can't ask polkit whether it may {what}: {e}")),
-    }
+    let reply = bus.call(call).await?;
+    Ok(reply.first().and_then(Value::items).and_then(|r| r.first()?.as_bool()) == Some(true))
 }
 
 fn manager(member: &str, args: Vec<Value>) -> Call<'_> {
@@ -342,7 +417,7 @@ pub async fn run(app: Arc<App>) {
         app.add_warning("[machine]: D-Bus isn't available, so orrery can't list or control services.");
         return;
     };
-    check_permission(&app, bus, "org.freedesktop.systemd1.manage-units", "start, stop, or restart services").await;
+    check_permissions(&app, bus).await;
     if let Some(unit) = services.unit_of(std::process::id()).await {
         tracing::info!("orrery runs in {unit}.service");
         *services.own_unit.lock().expect("unit lock") = Some(unit);

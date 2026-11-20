@@ -165,7 +165,7 @@ change how safe or complete orrery is to run.
 - **Why:** there's no true value to give.
 - **Cases:** `machine/system_info`.
 
-### no-service-control: no reboot, shutdown, or service agents
+### no-service-control: no service agents or other providers
 
 - **Area:** API
 - **Moonraker:** with a systemd or supervisord `provider`, `machine.system_info` lists the
@@ -173,10 +173,14 @@ change how safe or complete orrery is to run.
   `machine.shutdown` control them.
 - **orrery:** with `provider: systemd_dbus`, the default, it lists the allowed services and
   follows their state over D-Bus, with `notify_service_state_changed`, and has
-  `machine.services.start`, `stop`, and `restart`. `instance_ids` come from systemd, as in
-  Moonraker. It doesn't have `machine.reboot`, `machine.shutdown`, agents started with
-  `systemd_unit`, Klipper's log rollover, or the `systemd_cli` and `supervisord_cli` providers
-  yet. Small differences:
+  `machine.services.start`, `stop`, and `restart`, and `machine.reboot` and `machine.shutdown`
+  through logind. `instance_ids` come from systemd, as in Moonraker. It doesn't have agents
+  started with `systemd_unit`, Klipper's log rollover, or the `systemd_cli` and
+  `supervisord_cli` providers yet. Small differences:
+  - Without logind, or with `provider: none`, reboot and shutdown fail. Moonraker falls back
+    to `sudo systemctl reboot`, with the sudo password it asks clients for.
+  - orrery gives one warning that lists every polkit action it isn't allowed, instead of one
+    warning per action.
   - Restarting orrery's own service, and `server.restart`, start orrery's program again in the
     same process, after the usual shutdown. Moonraker restarts its service through systemd,
     and restarts itself inside Python for `server.restart`. With `provider: none`, Moonraker

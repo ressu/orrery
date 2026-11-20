@@ -46,8 +46,21 @@ impl Machine {
         info.insert("canbus".into(), json!({}));
         info.insert("provider".into(), json!(provider));
         tracing::info!("Using System Provider: {provider}");
-        let services = Services::new(&provider, paths);
+        let shutdown_action = config.section("machine").get_str("shutdown_action", "poweroff").to_lowercase();
+        if !["halt", "poweroff"].contains(&shutdown_action.as_str()) {
+            bail!("[machine] shutdown_action: {shutdown_action} isn't a valid choice. It must be halt or poweroff.");
+        }
+        let services = Services::new(&provider, shutdown_action, paths);
         Ok(Self { provider, inside_container, system_info: Mutex::new(info), services })
+    }
+
+    /// The kind of container orrery runs in, such as `docker`, or `None` outside one.
+    pub fn container(&self) -> Option<String> {
+        if !self.inside_container {
+            return None;
+        }
+        let info = self.info();
+        Some(info["virtualization"]["virt_identifier"].as_str().unwrap_or("unknown").to_owned())
     }
 
     fn info(&self) -> std::sync::MutexGuard<'_, Map<String, Value>> {

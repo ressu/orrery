@@ -184,7 +184,8 @@ command, so the files have one source.
 ## Open questions
 
 1. **A sudo fallback.** Moonraker's D-Bus provider falls back to `sudo` for reboot and
-   shutdown when logind isn't available. orrery could leave that out at first.
+   shutdown when logind isn't available. orrery leaves it out for now: without logind, the
+   calls fail with an error that says so.
 2. **Restarting orrery itself. Decided (2026-11-20):** orrery shuts down as for SIGTERM, which
    stops its `command` agents, then starts its own program again in the same process. That
    works in a service, in tmux, and from a terminal, and needs no polkit permission.
