@@ -85,12 +85,58 @@ fn init_logging(cli: &Cli, paths: &Paths) -> (Option<tracing_appender::non_block
             }
         }
     });
+    // The journal records when each line came, so lines that go there leave out the time.
+    let journal = stdout_is_journal();
     tracing_subscriber::registry()
         .with(filter)
-        .with(tracing_subscriber::fmt::layer().with_ansi(false))
+        .with((!journal).then(|| tracing_subscriber::fmt::layer().with_ansi(false)))
+        .with(journal.then(|| tracing_subscriber::fmt::layer().event_format(JournalFormat)))
         .with(file_layer)
         .init();
     (guard, warning)
+}
+
+/// Lines for the journal, such as `<4>WARN orrery::web: …`. journald takes the `<4>` as the
+/// line's priority and adds the time itself.
+struct JournalFormat;
+
+impl<S, N> tracing_subscriber::fmt::FormatEvent<S, N> for JournalFormat
+where
+    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+    N: for<'a> tracing_subscriber::fmt::FormatFields<'a> + 'static,
+{
+    fn format_event(
+        &self,
+        ctx: &tracing_subscriber::fmt::FmtContext<'_, S, N>,
+        mut writer: tracing_subscriber::fmt::format::Writer<'_>,
+        event: &tracing::Event<'_>,
+    ) -> std::fmt::Result {
+        let meta = event.metadata();
+        let priority = match *meta.level() {
+            tracing::Level::ERROR => 3,
+            tracing::Level::WARN => 4,
+            tracing::Level::INFO => 6,
+            _ => 7,
+        };
+        write!(writer, "<{priority}>{} {}: ", meta.level(), meta.target())?;
+        ctx.field_format().format_fields(writer.by_ref(), event)?;
+        writeln!(writer)
+    }
+}
+
+/// Whether stdout goes to the systemd journal. systemd sets `JOURNAL_STREAM` to the device and
+/// inode of that stream; a child process with other output inherits the variable too, so it's
+/// compared with stdout.
+fn stdout_is_journal() -> bool {
+    let Some((dev, ino)) = std::env::var("JOURNAL_STREAM").ok().and_then(|s| {
+        let (dev, ino) = s.split_once(':')?;
+        Some((dev.parse::<u64>().ok()?, ino.parse::<u64>().ok()?))
+    }) else {
+        return false;
+    };
+    // The stat fields' types differ between targets.
+    #[allow(clippy::unnecessary_cast)]
+    rustix::fs::fstat(std::io::stdout()).is_ok_and(|st| st.st_dev as u64 == dev && st.st_ino as u64 == ino)
 }
 
 /// Where `orrery.toml` is, and whether it must exist.
