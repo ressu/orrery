@@ -152,7 +152,7 @@ Tiers, in order:
 
 **File metadata.** Moonraker shells out to `file_manager/metadata.py` (1467 lines of slicer parsers). Port the parsers for PrusaSlicer, SuperSlicer, OrcaSlicer, Cura and Klipper Estimator first, along with thumbnail extraction. The rest falls back to basic fields (size, modified time).
 
-**Explicitly out of scope:** update_manager (status stub only), power, sensors, mqtt, spoolman, simplyprint, octoprint_compat, paneldue, wled, zeroconf, ldap, analysis, notifier, button, gpio, td1, dbus/systemd service control beyond a guarded restart.
+**Explicitly out of scope:** update_manager (status stub only), power, sensors, mqtt, simplyprint, octoprint_compat, paneldue, wled, zeroconf, ldap, analysis, notifier, button, gpio, td1. Since this list was written, Spoolman came in as an agent, and systemd service control came in over D-Bus; see the decisions of 2026-11-16 and 2026-11-20.
 
 ## Verification
 
@@ -317,3 +317,43 @@ Tiers, in order:
   used for anything new. Spoolman is the first agent, in Rust, and moving existing features
   out waits for its footprint numbers. See
   [2026-11-15-plugin-interface.md](2026-11-15-plugin-interface.md).
+- **2026-11-19: service control over D-Bus, with orrery's own client.** Polling `systemctl`
+  costs about 2.7% of a core on bluev2, and `zbus` adds 1.3 to 1.6 MB, so orrery has a small
+  D-Bus client of its own (`crates/orrery/src/dbus/`), tested against a private `dbus-daemon`.
+  systemd comes first; nothing outside service control may depend on it. orrery gets its own
+  `orrery.service`, and uses Moonraker's `moonraker-admin` polkit rule until `orrery setup`
+  writes its own. See [2026-11-19-service-control.md](2026-11-19-service-control.md).
+- **2026-11-20: service control is in.** The service list with live state, start, stop, and
+  restart, reboot and shutdown through logind, Klipper's log rollover, `server.restart`, and
+  agents run as systemd units (`systemd_unit`, with user units listed as `user/<unit>`). The
+  differences from Moonraker are in `no-service-control` in `docs/regressions.md`. Notable
+  choices:
+  - An instance id that isn't a service is `(unknown)`, not `klipper` or `moonraker`, so on a
+    machine with several printers a restart button can't reach another printer's Klipper.
+  - orrery restarts itself by starting its own program again in the same process, after the
+    usual shutdown, in a service or not.
+  - Agents' names are checked against the process that may use them: the process orrery
+    started for a `command` agent (or one it started), and a process in the unit for a
+    `systemd_unit` agent.
+  - On a printer, orrery is tested as a temporary unit, `orrery-test`, with
+    `just printer-test start <ssh host>`, so it gets the `moonraker-admin` group.
+- **2026-11-20: authorization is designed from scratch.** Moonraker's `[authorization]` trusts
+  whole IP ranges, so anything on the home network gets full control, which now includes
+  rebooting the printer. orrery won't copy that. The design comes first, as a note in
+  `docs/design/`, before any code. See "Open work" below.
+
+## Open work
+
+In order, as of 2026-11-20:
+
+1. **Authorization: API keys.** Designed in
+   [2026-11-20-authorization.md](2026-11-20-authorization.md), under review: keys declared in
+   `orrery.toml` with roles, trusted networks as in Moonraker, and checks on browser requests.
+   User logins come later. Today there's none: see `no-auth` in `docs/regressions.md`.
+2. **A real print on bluev2,** to check job state, history, and Spoolman's usage end to end.
+3. **The thumbnail memory check.**
+4. **`sudo orrery setup`,** which writes `orrery.service`, an `orrery-admin` group, and a polkit
+   rule (normal or strict). See the service-control note's Deployment section.
+5. **Processors,** starting with `.gcode.3mf`. See the plugin note's "Processors".
+6. **A `moonraker.conf` to `orrery.toml` converter,** the musl allocator, and a check of
+   Mainsail.

@@ -6,6 +6,9 @@ managers may come later, so service control sits behind one interface, and nothi
 may depend on systemd. The D-Bus client is a small one written for orrery, not the `zbus` crate.
 This note compares the options and records what bluev2 has.
 
+**Status (2026-11-20):** built, except the `systemd_cli` and `supervisord_cli` providers and
+`orrery setup`. What differs from Moonraker is in `no-service-control` in `docs/regressions.md`.
+
 Service control closes most of `no-service-control` in `docs/regressions.md`. It gives Fluidd's
 service list and its restart buttons, `machine.reboot` and `machine.shutdown`, agents started
 with `systemd_unit`, and Klipper's log rollover, which stops and starts Klipper.

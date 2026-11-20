@@ -28,14 +28,16 @@ change how safe or complete orrery is to run.
 - **Moonraker:** `[authorization]` controls access: trusted networks, user logins, JWTs, and an
   API key.
 - **orrery:** there's no authorization yet. **Every client that can reach the port has full
-  access**, including gcode and file changes. Run orrery only on a network you trust.
+  access**, including gcode, file changes, starting and stopping services, restarting orrery,
+  and rebooting or shutting down the machine. Run orrery only on a network you trust.
   Every client gets what Moonraker gives a trusted client: `access.get_user` returns
   `_TRUSTED_USER_`, and `access.info` says `trusted: true`. `access.oneshot_token` hands out
   tokens so frontends can build download links, and orrery doesn't check them. Logins, user
   accounts, JWTs, and the API key aren't there.
   CORS follows `cors_domains` as in Moonraker, including the fallback for an origin whose host
   is a trusted IP. Host names in `trusted_clients` don't count for that fallback.
-- **Why:** authorization comes later; see `conformance/coverage.md`.
+- **Why:** authorization is being designed from scratch, not copied from Moonraker; see
+  `docs/design/2026-11-20-authorization.md`.
 - **Cases:** `server/config` (it expects an `authorization` section), and the authorization
   cases when they're written. `access/trusted` covers the trusted-client replies.
 
