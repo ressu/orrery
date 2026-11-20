@@ -1,6 +1,6 @@
 //! `machine.system_info`, after the system info parts of Moonraker's `machine.py`: the CPU, the
-//! SD card, the distribution, virtualization, and network interfaces. The service list comes
-//! from [`crate::services`]; starting and stopping services isn't written yet.
+//! SD card, the distribution, virtualization, and network interfaces. The services, and
+//! starting and stopping them, are in [`crate::services`].
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -58,6 +58,8 @@ impl Machine {
 pub fn register_endpoints(app: &Arc<App>) {
     let mut r = app.registry.write().expect("registry lock");
     r.register("/machine/system_info", &[RequestType::Get], Transports::All, handler(|app, _| system_info(app)));
+    drop(r);
+    crate::services::register_endpoints(app);
 }
 
 pub fn start(app: &Arc<App>) {

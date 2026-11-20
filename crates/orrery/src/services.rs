@@ -4,6 +4,8 @@
 //!
 //! orrery lists the loaded services once at startup and keeps the allowed ones. systemd then
 //! reports each change of their state with a `PropertiesChanged` signal, so nothing is polled.
+//! `machine.services.start`, `stop`, and `restart` act on the listed services; orrery's own
+//! service can only be restarted.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -11,7 +13,8 @@ use std::sync::{Arc, Mutex};
 use serde_json::{Map, Value as Json, json};
 use tokio::sync::broadcast::error::RecvError;
 
-use crate::dbus::{Bus, Call, Message, Value};
+use crate::api::{ApiError, ApiResult, Request, RequestType, Transports, handler};
+use crate::dbus::{self, Bus, Call, Message, Value};
 use crate::server::{App, Paths};
 
 const SYSTEMD: &str = "org.freedesktop.systemd1";
@@ -110,15 +113,23 @@ impl Services {
     /// Fluidd's restart button would restart that one. Without a provider nothing can be
     /// controlled, so the ids are Moonraker's defaults.
     pub fn instance_ids(&self) -> Json {
+        json!({"moonraker": self.own_name(), "klipper": self.instance_id(&self.klipper_unit, "klipper")})
+    }
+
+    /// orrery's own service, as `instance_ids.moonraker` names it.
+    fn own_name(&self) -> String {
+        self.instance_id(&self.own_unit, "moonraker")
+    }
+
+    fn instance_id(&self, unit: &Mutex<Option<String>>, default: &str) -> String {
         if !self.enabled {
-            return json!({"moonraker": "moonraker", "klipper": "klipper"});
+            return default.to_owned();
         }
-        let own = self.own_unit.lock().expect("unit lock").clone();
-        let klipper = self.klipper_unit.lock().expect("unit lock").clone();
-        json!({
-            "moonraker": own.as_deref().unwrap_or(NOT_A_SERVICE),
-            "klipper": klipper.as_deref().unwrap_or(NOT_A_SERVICE),
-        })
+        unit.lock().expect("unit lock").clone().unwrap_or_else(|| NOT_A_SERVICE.to_owned())
+    }
+
+    fn is_listed(&self, name: &str) -> bool {
+        self.list.lock().expect("services lock").iter().any(|s| s.name == name)
     }
 
     /// The service a process runs in, such as `klipper` for `klipper.service`. A process
@@ -170,6 +181,106 @@ impl Services {
 impl Service {
     fn state(&self) -> Json {
         json!({"active_state": self.active_state, "sub_state": self.sub_state})
+    }
+}
+
+pub fn register_endpoints(app: &Arc<App>) {
+    let mut r = app.registry.write().expect("registry lock");
+    for action in ["start", "stop", "restart"] {
+        r.register(
+            &format!("/machine/services/{action}"),
+            &[RequestType::Post],
+            Transports::All,
+            handler(service_action),
+        );
+    }
+}
+
+/// `machine.services.start`, `stop`, and `restart`, after Moonraker's `_handle_service_request`.
+/// orrery's own service can only be restarted, which orrery does itself, as `server.restart`.
+async fn service_action(app: Arc<App>, req: Request) -> ApiResult {
+    let name = req.args.str("service")?;
+    let action = req.endpoint.rsplit('/').next().unwrap_or_default();
+    let services = &app.machine.services;
+    if name == services.own_name() {
+        if action != "restart" {
+            return Err(ApiError::bad_request(format!("Service action '{action}' not available for {name}")));
+        }
+        tracing::info!("Restarting, as a client asked");
+        tokio::spawn(async move {
+            // Time for the answer to reach the client before the connections close.
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            app.restart.notify_one();
+        });
+        return Ok(json!("ok"));
+    }
+    if !services.is_listed(&name) {
+        if services.allowed.contains(&name) {
+            return Err(ApiError::bad_request(format!("Service '{name}' not installed")));
+        }
+        return Err(ApiError::bad_request(format!("Service '{name}' not allowed")));
+    }
+    let Some(bus) = services.bus().await else {
+        return Err(ApiError::new(503, "orrery isn't connected to D-Bus, so it can't control services"));
+    };
+    let member = match action {
+        "start" => "StartUnit",
+        "stop" => "StopUnit",
+        _ => "RestartUnit",
+    };
+    // `replace` takes the place of a job that's already waiting for the unit, as systemctl does.
+    let args = vec![Value::str(&format!("{name}.service")), Value::str("replace")];
+    match bus.call(manager(member, args)).await {
+        Ok(_) => {
+            tracing::info!("Asked systemd to {action} {name}.service, as a client asked");
+            Ok(json!("ok"))
+        }
+        Err(dbus::Error::Remote { name: error, message })
+            if error.ends_with("AccessDenied") || error.ends_with("InteractiveAuthorizationRequired") =>
+        {
+            Err(ApiError::new(403, format!("polkit doesn't allow orrery to {action} {name}: {message}")))
+        }
+        // The unit was removed after orrery listed it.
+        Err(dbus::Error::Remote { name: error, .. }) if error.ends_with("NoSuchUnit") => {
+            Err(ApiError::bad_request(format!("Service '{name}' not installed")))
+        }
+        Err(e) => Err(ApiError::new(500, format!("systemd can't {action} {name}: {e}"))),
+    }
+}
+
+/// Asks polkit whether orrery may do `action`, and adds a warning when it may not. Without
+/// interaction, so nothing waits for a password.
+async fn check_permission(app: &App, bus: &Bus, action: &str, what: &str) {
+    let subject = Value::Struct(vec![
+        Value::str("unix-process"),
+        Value::Dict(
+            "s".into(),
+            "v".into(),
+            vec![
+                (Value::str("pid"), Value::Variant(Box::new(Value::U32(std::process::id())))),
+                (Value::str("start-time"), Value::Variant(Box::new(Value::U64(0)))),
+            ],
+        ),
+    ]);
+    let call = Call {
+        destination: "org.freedesktop.PolicyKit1",
+        path: "/org/freedesktop/PolicyKit1/Authority",
+        interface: "org.freedesktop.PolicyKit1.Authority",
+        member: "CheckAuthorization",
+        args: vec![
+            subject,
+            Value::str(action),
+            Value::Dict("s".into(), "s".into(), vec![]),
+            Value::U32(0),
+            Value::str(""),
+        ],
+    };
+    match bus.call(call).await {
+        Ok(reply) if reply.first().and_then(Value::items).and_then(|r| r.first()?.as_bool()) == Some(true) => {}
+        Ok(_) => app.add_warning(format!(
+            "[machine]: polkit doesn't allow orrery to {what} ({action}). On a Moonraker install, run orrery as a service with the moonraker-admin group."
+        )),
+        Err(e) => app.add_warning(format!("[machine]: orrery can't ask polkit whether it may {what}: {e}")),
     }
 }
 
@@ -231,6 +342,7 @@ pub async fn run(app: Arc<App>) {
         app.add_warning("[machine]: D-Bus isn't available, so orrery can't list or control services.");
         return;
     };
+    check_permission(&app, bus, "org.freedesktop.systemd1.manage-units", "start, stop, or restart services").await;
     if let Some(unit) = services.unit_of(std::process::id()).await {
         tracing::info!("orrery runs in {unit}.service");
         *services.own_unit.lock().expect("unit lock") = Some(unit);

@@ -1,0 +1,18 @@
+name: machine.services refuses what it can't control
+# The suite runs with `provider: none`, so no service is listed, and orrery's own entry is
+# `moonraker`. moonraker.asvc has Moonraker's default list.
+steps:
+  - call: machine.services.stop
+    params: {service: moonraker}
+    expect_error: {code: 400, message: "Service action 'stop' not available for moonraker"}
+  - call: machine.services.start
+    params: {service: moonraker}
+    expect_error: {code: 400, message: "Service action 'start' not available for moonraker"}
+  - call: machine.services.restart
+    params: {service: crowsnest}
+    expect_error: {code: 400, message: "Service 'crowsnest' not installed"}
+  - call: machine.services.start
+    params: {service: sshd}
+    expect_error: {code: 400, message: "Service 'sshd' not allowed"}
+  - call: machine.services.stop
+    expect_error: {code: 400, message: "No data for argument: service"}

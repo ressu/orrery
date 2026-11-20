@@ -165,16 +165,24 @@ change how safe or complete orrery is to run.
 - **Why:** there's no true value to give.
 - **Cases:** `machine/system_info`.
 
-### no-service-control: services are listed, not controlled
+### no-service-control: no reboot, shutdown, or service agents
 
 - **Area:** API
 - **Moonraker:** with a systemd or supervisord `provider`, `machine.system_info` lists the
   services clients can control, with their state. `machine.services.*`, `machine.reboot`, and
   `machine.shutdown` control them.
 - **orrery:** with `provider: systemd_dbus`, the default, it lists the allowed services and
-  follows their state over D-Bus, with `notify_service_state_changed`. `instance_ids` come from
-  systemd, as in Moonraker. It doesn't have the control endpoints yet, or the
-  `systemd_cli` and `supervisord_cli` providers. Small differences:
+  follows their state over D-Bus, with `notify_service_state_changed`, and has
+  `machine.services.start`, `stop`, and `restart`. `instance_ids` come from systemd, as in
+  Moonraker. It doesn't have `machine.reboot`, `machine.shutdown`, agents started with
+  `systemd_unit`, Klipper's log rollover, or the `systemd_cli` and `supervisord_cli` providers
+  yet. Small differences:
+  - Restarting orrery's own service, and `server.restart`, start orrery's program again in the
+    same process, after the usual shutdown. Moonraker restarts its service through systemd,
+    and restarts itself inside Python for `server.restart`. With `provider: none`, Moonraker
+    answers `ok` to a restart of its own service and does nothing; orrery restarts.
+  - When polkit refuses an action, the error is 403 and says so. Moonraker passes on the D-Bus
+    error.
   - orrery lists only `.service` units. Moonraker takes every unit type and cuts the name at its
     first dot, so a `klipper.socket` could stand in for `klipper.service`.
   - orrery always allows services whose names start with `orrery`, beside `moonraker` and
@@ -188,8 +196,9 @@ change how safe or complete orrery is to run.
     Klippy connects. orrery finds it again on each connection.
   - For virtualization, orrery runs `systemd-detect-virt` instead of asking systemd over D-Bus.
 - **Why:** service control comes in steps; see `docs/design/2026-11-19-service-control.md`.
-- **Cases:** none. The conformance suite runs with `provider: none`; the D-Bus client is tested
-  against a private `dbus-daemon`.
+- **Cases:** `machine/services` covers the refusals. The conformance suite runs with
+  `provider: none`, so the actions were checked by hand; the D-Bus client is tested against a
+  private `dbus-daemon`.
 
 ### import-gaps: what `orrery-import` doesn't bring over
 
