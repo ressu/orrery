@@ -436,3 +436,18 @@ where
 pub fn default_socket() -> PathBuf {
     AgentBuilder::new("").socket_path()
 }
+
+/// Whether stdout goes to the systemd journal, as when a systemd unit runs the agent. The
+/// journal records when each line came, so the agent's log can leave out the time. systemd
+/// sets `JOURNAL_STREAM` to the stream's device and inode; a process with other output can
+/// inherit the variable, so it's compared with stdout.
+pub fn stdout_is_journal() -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let Some((dev, ino)) = std::env::var("JOURNAL_STREAM").ok().and_then(|s| {
+        let (dev, ino) = s.split_once(':')?;
+        Some((dev.parse::<u64>().ok()?, ino.parse::<u64>().ok()?))
+    }) else {
+        return false;
+    };
+    std::fs::metadata("/proc/self/fd/1").is_ok_and(|m| m.dev() == dev && m.ino() == ino)
+}

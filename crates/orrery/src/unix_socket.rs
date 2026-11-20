@@ -66,7 +66,14 @@ async fn serve(app: Arc<App>, stream: UnixStream) {
     let cred = stream.peer_cred().ok();
     let (reader, mut writer) = stream.into_split();
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-    let conn = app.add_client(tx.clone(), crate::server::Peer { unix: true, uid: cred.map(|c| c.uid()) });
+    let conn = app.add_client(
+        tx.clone(),
+        crate::server::Peer {
+            unix: true,
+            uid: cred.map(|c| c.uid()),
+            pid: cred.and_then(|c| c.pid()).and_then(|p| u32::try_from(p).ok()),
+        },
+    );
     let opened = std::time::Instant::now();
     tracing::info!(
         "Unix Socket Opened - Client ID: {conn}, Process ID: {}, User ID: {}, Group ID: {}",

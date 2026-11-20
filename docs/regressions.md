@@ -164,7 +164,7 @@ change how safe or complete orrery is to run.
 - **Why:** there's no true value to give.
 - **Cases:** `machine/system_info`.
 
-### no-service-control: no service agents or other providers
+### no-service-control: no systemd_cli or supervisord_cli provider
 
 - **Area:** API
 - **Moonraker:** with a systemd or supervisord `provider`, `machine.system_info` lists the
@@ -173,9 +173,8 @@ change how safe or complete orrery is to run.
 - **orrery:** with `provider: systemd_dbus`, the default, it lists the allowed services and
   follows their state over D-Bus, with `notify_service_state_changed`, and has
   `machine.services.start`, `stop`, and `restart`, and `machine.reboot` and `machine.shutdown`
-  through logind. `instance_ids` come from systemd, as in Moonraker. It doesn't have agents
-  started with `systemd_unit`, or the `systemd_cli` and `supervisord_cli` providers yet. Small
-  differences:
+  through logind. `instance_ids` come from systemd, as in Moonraker. It doesn't have the
+  `systemd_cli` and `supervisord_cli` providers yet. Small differences:
   - Klipper's log rollover waits for Klipper to stop before it renames the log, refuses while
     a print is paused as well as while it prints, and starts Klipper again when the rename
     fails. Moonraker renames as soon as the stop is queued, and leaves Klipper stopped when the
@@ -194,6 +193,9 @@ change how safe or complete orrery is to run.
     first dot, so a `klipper.socket` could stand in for `klipper.service`.
   - orrery always allows services whose names start with `orrery`, beside `moonraker` and
     `klipper` ones.
+  - Agents' units are listed too, so clients can restart an agent alone. An agent's user unit
+    is listed as `user/<unit>`, such as `user/orrery-spoolman`, which no Moonraker service
+    name can be.
   - For orrery or Klippy started outside a service, such as from a terminal, its
     `instance_ids` entry is `(unknown)`, which can't match a real service. Moonraker gives the
     scope's name, such as `session-3`, and falls back to `moonraker` and `klipper`. A fallback

@@ -126,6 +126,26 @@ orrery-spoolman ~/printer_data/comms/moonraker.sock
 Without the path, it uses `$ORRERY_SOCKET`, then `~/printer_data/comms/moonraker.sock`. It
 connects again by itself when orrery restarts.
 
+To run an agent as a systemd service, name its unit in the agent's table:
+
+```toml
+[agent.spoolman]
+systemd_unit = "orrery-spoolman.service"
+systemd_scope = "user"
+```
+
+`systemd_scope` is `system`, the default, or `user` for a unit of orrery's user, in
+`~/.config/systemd/user`. A user unit needs that user's systemd running while nobody is logged
+in, which `loginctl enable-linger <user>` turns on. With a unit:
+
+- orrery starts the unit if it isn't running, and leaves it running when orrery stops. The unit's
+  own `Restart=` setting starts the agent again if it exits.
+- Only a process in that unit can connect under the agent's name.
+- The unit appears in Fluidd's service list, with its restart button, so you can restart the
+  agent alone. A user unit is listed as `user/<unit>`, such as `user/orrery-spoolman`.
+- An agent has `command` or `systemd_unit`, not both. With `systemd_unit`, orrery doesn't start
+  the built-in Spoolman program itself.
+
 ## Layout
 
 | Path | Contents |

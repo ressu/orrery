@@ -132,7 +132,8 @@ Fluidd's Spoolman calls. The unix socket tells orrery the process id at the othe
 uses it:
 
 - **`command`:** the name is accepted only from the process orrery started.
-- **`systemd_unit`:** only from the unit's main process, which `systemctl show` gives.
+- **`systemd_unit`:** only from a process in the unit, which systemd's `GetUnitByPID` tells.
+  Any process in the unit counts, so a wrapper script that starts the agent works too.
 - **Neither:** from the first connection that claims it. An optional `user` setting limits it to
   one Unix user.
 
@@ -178,12 +179,15 @@ picks one of three ways:
   stops. The program's output goes to orrery's log, marked with the agent's name. This is the
   convenient default, with nothing else to set up.
 - **`systemd_unit`:** the agent runs as a systemd unit, such as
-  `systemd_unit = "orrery-spoolman.service"` with `systemd_scope = "user"` (or `"system"`). orrery starts
-  the unit with `systemctl` if it isn't running, and can restart it. This is the "elaborate"
-  setup, with systemd's own restarts, limits, and logs. A user unit needs no extra permissions;
-  a system unit needs the same sudo or polkit rule that Moonraker's service control needs.
-  These agents can also appear in `system_info`'s service list, so Fluidd shows restart
-  buttons. That covers part of the `no-service-control` gap in `docs/regressions.md`.
+  `systemd_unit = "orrery-spoolman.service"` with `systemd_scope = "user"` (or `"system"`, the
+  default). orrery starts the unit over D-Bus if it isn't running, and leaves it running when
+  orrery stops; the unit's `Restart=` handles crashes. This is the "elaborate" setup, with
+  systemd's own restarts, limits, and logs. A user unit needs no extra permissions, but the
+  user's systemd must run without a login (lingering). A system unit needs the polkit rule that
+  service control needs. Both appear in `system_info`'s service list, so Fluidd shows a
+  restart button for the agent alone. A user unit is listed as `user/<unit>`: unit names can't
+  have a `/`, so it can't clash with a system service, and the prefix tells orrery which
+  systemd to ask.
 - **Neither:** something else starts the agent, such as a container or a shell. orrery only
   waits for it to connect.
 
@@ -334,9 +338,11 @@ preview as the thumbnail. Two things need deciding when it's built:
    remote methods, call methods, and receive notifications.
 5. **The Spoolman agent,** tested against Fluidd and a Spoolman server, then measured on
    bluev2.
-6. **Starting agents** with `command` and `systemd_unit`. `command` is done (case
-   `agents/command`). `systemd_unit` waits for service control. The comparison of D-Bus and
-   `systemctl` is in `2026-11-19-service-control.md`: D-Bus, with orrery's own client.
+6. **Starting agents** with `command` and `systemd_unit`. Both are done: `command` has the case
+   `agents/command`, and `systemd_unit` was checked by hand on bluev2, since the suite has no
+   systemd. The comparison of D-Bus and `systemctl` is in `2026-11-19-service-control.md`.
+   Still to do: a `command` agent's name is checked against its user only, not against the
+   process orrery started.
 7. **Decide what else moves out,** using the measurements from step 5. Decided on 2026-11-19:
    nothing that's built moves out. Webcams are small, need no extra crates, and every frontend
    uses them, so an agent would cost more memory than the code it moves. Files, history, the job

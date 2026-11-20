@@ -77,6 +77,7 @@ pub fn register_endpoints(app: &Arc<App>) {
 
 pub fn start(app: &Arc<App>) {
     tokio::spawn(crate::services::run(app.clone()));
+    tokio::spawn(crate::services::start_agent_units(app.clone()));
     let app = app.clone();
     tokio::spawn(async move {
         if !app.machine.inside_container {

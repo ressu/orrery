@@ -75,6 +75,8 @@ pub struct Peer {
     pub unix: bool,
     /// The connecting process's user id, from the unix socket.
     pub uid: Option<u32>,
+    /// The connecting process's id, from the unix socket.
+    pub pid: Option<u32>,
 }
 
 pub struct App {
@@ -475,16 +477,17 @@ async fn connection_identify(app: Arc<App>, req: Request) -> ApiResult {
     if !CLIENT_TYPES.contains(&client_type.as_str()) {
         return Err(ApiError::bad_request(format!("Invalid Client Type: {client_type}")));
     }
-    let mut clients = app.clients.lock().expect("clients lock");
-    let client = clients.get_mut(&conn).ok_or_else(|| ApiError::bad_request("Connection closed"))?;
-    if client.identity.is_some() {
-        return Err(ApiError::bad_request(format!("Connection already identified: {conn}")));
-    }
     let identity = json!({"name": name, "version": version, "type": client_type, "url": url});
-    client.identity = Some(identity.clone());
-    drop(clients);
+    {
+        let mut clients = app.clients.lock().expect("clients lock");
+        let client = clients.get_mut(&conn).ok_or_else(|| ApiError::bad_request("Connection closed"))?;
+        if client.identity.is_some() {
+            return Err(ApiError::bad_request(format!("Connection already identified: {conn}")));
+        }
+        client.identity = Some(identity.clone());
+    }
     if client_type == "agent"
-        && let Err(e) = crate::extensions::register_agent(&app, conn, &name, &identity)
+        && let Err(e) = crate::extensions::register_agent(&app, conn, &name, &identity).await
     {
         // As in Moonraker, the connection stays identified, but not as an agent.
         if let Some(c) = app.clients.lock().expect("clients lock").get_mut(&conn) {

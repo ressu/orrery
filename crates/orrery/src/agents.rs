@@ -8,7 +8,9 @@
 //!   `component` lists a name in `server.info`, and `history_fields` lists the fields the agent
 //!   may add to history jobs with `orrery.agent.history_field`.
 //! - A configured agent's name can only be claimed over the unix socket, optionally by one Unix
-//!   user, so another program can't connect under it and receive its calls.
+//!   user, so another program can't connect under it and receive its calls. An agent with
+//!   `systemd_unit` must connect from a process in that unit, which orrery starts if it isn't
+//!   running.
 //! - Some agents are built in: a `server` option in `[spoolman]` turns on the Spoolman agent,
 //!   with Moonraker's names, and starts `orrery-spoolman` from orrery's own folder. An
 //!   `[agent.spoolman]` table overrides the built-in options one at a time.
@@ -37,6 +39,23 @@ pub struct AgentConfig {
     /// The only Unix user that may connect as this agent.
     pub user: Option<u32>,
     pub command: Command,
+    /// `systemd_unit`: the service the agent runs as.
+    pub unit: Option<Unit>,
+}
+
+/// A systemd service that runs an agent.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Unit {
+    /// The unit's full name, such as `orrery-spoolman.service`.
+    pub name: String,
+    pub scope: Scope,
+}
+
+/// Which systemd runs a unit: the system's, or orrery's user's own.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Scope {
+    System,
+    User,
 }
 
 /// How an agent starts.
@@ -71,6 +90,11 @@ impl Agents {
 
     fn get(&self, name: &str) -> Option<&AgentConfig> {
         self.configs.iter().find(|c| c.name == name)
+    }
+
+    /// The agents that run as systemd units: `(name, unit)`.
+    pub fn units(&self) -> impl Iterator<Item = (&str, &Unit)> {
+        self.configs.iter().filter_map(|c| Some((c.name.as_str(), c.unit.as_ref()?)))
     }
 
     /// The agents orrery starts itself: `(name, command)`.
@@ -133,6 +157,24 @@ fn parse_section(config: &Config, section: &str, name: &str) -> Result<AgentConf
             )
         }
     };
+    let unit = match s.get_opt_str("systemd_unit") {
+        None => None,
+        Some(unit) => {
+            if unit.is_empty() || unit.contains('/') {
+                bail!("[{section}] systemd_unit: expected a unit name, such as orrery-{name}.service, got {unit:?}");
+            }
+            let name = if unit.contains('.') { unit } else { format!("{unit}.service") };
+            let scope = match s.get_str("systemd_scope", "system").as_str() {
+                "system" => Scope::System,
+                "user" => Scope::User,
+                other => bail!("[{section}] systemd_scope: expected system or user, got {other:?}"),
+            };
+            Some(Unit { name, scope })
+        }
+    };
+    if unit.is_some() && matches!(command, Command::Run(_)) {
+        bail!("[{section}]: an agent has either command or systemd_unit, not both");
+    }
     let mut methods = Vec::new();
     let mut notifications = Vec::new();
     let own = format!("agent.{name}");
@@ -163,7 +205,7 @@ fn parse_section(config: &Config, section: &str, name: &str) -> Result<AgentConf
         }
         Some(other) => bail!("[{section}] maps: expected a table, got {other}"),
     }
-    Ok(AgentConfig { name: name.to_owned(), component, methods, notifications, history_fields, user, command })
+    Ok(AgentConfig { name: name.to_owned(), component, methods, notifications, history_fields, user, command, unit })
 }
 
 /// The built-in Spoolman agent. It's off until `[spoolman]` has a `server`, in `moonraker.conf`
@@ -197,6 +239,7 @@ fn builtin_spoolman(
                 history_fields: Vec::new(),
                 user: None,
                 command: Command::Unset,
+                unit: None,
             });
             configs.last_mut().expect("just pushed")
         }
@@ -211,7 +254,7 @@ fn builtin_spoolman(
         c.methods = vec![("server.spoolman".into(), "agent.spoolman".into())];
         c.notifications = ["active_spool_set", "spoolman_status_changed"].map(|e| (e.to_owned(), e.to_owned())).into();
     }
-    if c.command == Command::Unset {
+    if c.command == Command::Unset && c.unit.is_none() {
         match agent_dir.map(|dir| dir.join("orrery-spoolman")) {
             Some(program) if program.is_file() => {
                 c.command = Command::Run(vec![program.to_string_lossy().into_owned()])
@@ -270,9 +313,9 @@ pub fn start(app: &Arc<App>) {
     }
 }
 
-/// Checks that a connection may use an agent name. Configured names need the unix socket, and
-/// the configured user when there is one.
-pub fn check_claim(app: &App, name: &str, conn: ConnId) -> Result<(), ApiError> {
+/// Checks that a connection may use an agent name. Configured names need the unix socket, the
+/// configured user when there is one, and a process in the agent's unit when it has one.
+pub async fn check_claim(app: &App, name: &str, conn: ConnId) -> Result<(), ApiError> {
     let Some(config) = app.agents.get(name) else { return Ok(()) };
     let peer = app.client_peer(conn);
     if !peer.unix {
@@ -284,6 +327,24 @@ pub fn check_claim(app: &App, name: &str, conn: ConnId) -> Result<(), ApiError> 
         && peer.uid != Some(user)
     {
         return Err(ApiError::bad_request(format!("Agent '{name}' must connect as user {user}")));
+    }
+    if let Some(unit) = &config.unit {
+        let found = match peer.pid {
+            Some(pid) => app.machine.services.unit_of_process(unit.scope, pid).await,
+            None => Ok(None),
+        };
+        match found {
+            Ok(Some(found)) if found == unit.name => {}
+            Ok(_) => {
+                return Err(ApiError::bad_request(format!("Agent '{name}' must connect from its unit, {}", unit.name)));
+            }
+            Err(e) => {
+                return Err(ApiError::new(
+                    503,
+                    format!("orrery can't check that agent '{name}' runs in {}: {e}", unit.name),
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -471,10 +532,30 @@ command = ["~/bin/orrery-spoolman", "-v"]
                 history_fields: vec!["spool_ids".into()],
                 user: Some(1000),
                 command: Command::Run(vec!["~/bin/orrery-spoolman".into(), "-v".into()]),
+                unit: None,
             })
         );
         assert_eq!(a.notification("spoolman", "active_spool_set"), Some("active_spool_set"));
         assert_eq!(a.components().collect::<Vec<_>>(), vec!["spoolman"]);
+    }
+
+    #[test]
+    fn systemd_units() {
+        let a = agents("[agent.a]\nsystemd_unit = \"orrery-a\"\n[agent.b]\nsystemd_unit = \"b.service\"\nsystemd_scope = \"user\"\n").unwrap();
+        let units: Vec<_> = a.units().map(|(n, u)| (n, u.name.as_str(), u.scope)).collect();
+        assert_eq!(units, [("a", "orrery-a.service", Scope::System), ("b", "b.service", Scope::User)]);
+        let err = |t: &str| agents(t).unwrap_err().to_string();
+        assert!(err("[agent.a]\nsystemd_unit = \"a\"\ncommand = \"x\"\n").contains("not both"));
+        assert!(err("[agent.a]\nsystemd_unit = \"a\"\nsystemd_scope = \"session\"\n").contains("system or user"));
+        assert!(err("[agent.a]\nsystemd_unit = \"/etc/a\"\n").contains("unit name"));
+        // The built-in Spoolman agent doesn't start its own program when a unit runs it.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("orrery-spoolman"), "").unwrap();
+        let conf = "[spoolman]\nserver: http://spoolman:7912\n";
+        let (a, _) =
+            with_spoolman(conf, "[agent.spoolman]\nsystemd_unit = \"orrery-spoolman\"\n", Some(dir.path())).unwrap();
+        assert_eq!(a.commands().count(), 0);
+        assert_eq!(a.units().count(), 1);
     }
 
     #[test]

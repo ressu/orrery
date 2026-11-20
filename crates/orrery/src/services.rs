@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 use serde_json::{Map, Value as Json, json};
 use tokio::sync::broadcast::error::RecvError;
 
+use crate::agents::Scope;
 use crate::api::{ApiError, ApiResult, Request, RequestType, Transports, handler};
 use crate::dbus::{self, Bus, Call, Message, Value};
 use crate::server::{App, Paths};
@@ -52,6 +53,8 @@ pub struct Services {
     allowed: Vec<String>,
     /// The system bus, connected on first use. `None` when it isn't there.
     bus: tokio::sync::OnceCell<Option<Bus>>,
+    /// orrery's user's session bus, for agents that run as user units.
+    user_bus: tokio::sync::OnceCell<Result<Bus, String>>,
     list: Mutex<Vec<Service>>,
     /// The services orrery and Klipper run in, such as `orrery` for `orrery.service`.
     own_unit: Mutex<Option<String>>,
@@ -60,7 +63,13 @@ pub struct Services {
 
 #[derive(Debug, Clone, PartialEq)]
 struct Service {
+    /// The name clients see: `klipper` for `klipper.service`, and `user/orrery-spoolman` for an
+    /// agent's user unit. Unit names can't have a `/`, so a user unit can't be mistaken for a
+    /// system one.
     name: String,
+    /// The unit's full name, such as `klipper.service`.
+    unit: String,
+    scope: Scope,
     /// The unit's D-Bus object, which its signals come from.
     path: String,
     active_state: String,
@@ -74,6 +83,7 @@ impl Services {
             shutdown_action,
             allowed: read_allowed(&paths.data.join("moonraker.asvc")),
             bus: tokio::sync::OnceCell::new(),
+            user_bus: tokio::sync::OnceCell::new(),
             list: Mutex::new(Vec::new()),
             own_unit: Mutex::new(None),
             klipper_unit: Mutex::new(None),
@@ -100,6 +110,35 @@ impl Services {
             })
             .await
             .as_ref()
+    }
+
+    /// The bus that a scope's systemd answers on.
+    async fn bus_for(&self, scope: Scope) -> Result<&Bus, String> {
+        match scope {
+            Scope::System if !self.enabled => Err("system units need [machine] provider: systemd_dbus".into()),
+            Scope::System => self.bus().await.ok_or_else(|| "D-Bus isn't available".to_owned()),
+            Scope::User => self
+                .user_bus
+                .get_or_init(|| async {
+                    Bus::session().await.map_err(|e| format!("the user's systemd isn't reachable: {e}"))
+                })
+                .await
+                .as_ref()
+                .map_err(Clone::clone),
+        }
+    }
+
+    /// The unit a process runs in, such as `orrery-spoolman.service`, in a scope's systemd.
+    /// `None` when that systemd doesn't run the process.
+    pub async fn unit_of_process(&self, scope: Scope, pid: u32) -> Result<Option<String>, String> {
+        let bus = self.bus_for(scope).await?;
+        let path = match bus.call(manager("GetUnitByPID", vec![Value::U32(pid)])).await {
+            Ok(reply) => reply.first().and_then(Value::as_str).unwrap_or_default().to_owned(),
+            Err(dbus::Error::Remote { .. }) => return Ok(None),
+            Err(e) => return Err(e.to_string()),
+        };
+        let id = bus.property(SYSTEMD, &path, UNIT, "Id").await.map_err(|e| e.to_string())?;
+        Ok(id.as_str().map(str::to_owned))
     }
 
     /// `available_services` and `service_state`, as `machine.system_info` has them.
@@ -131,8 +170,9 @@ impl Services {
         unit.lock().expect("unit lock").clone().unwrap_or_else(|| NOT_A_SERVICE.to_owned())
     }
 
-    fn is_listed(&self, name: &str) -> bool {
-        self.list.lock().expect("services lock").iter().any(|s| s.name == name)
+    /// The listed service with the name clients see.
+    fn listed(&self, name: &str) -> Option<Service> {
+        self.list.lock().expect("services lock").iter().find(|s| s.name == name).cloned()
     }
 
     /// The service a process runs in, such as `klipper` for `klipper.service`. A process
@@ -165,11 +205,11 @@ impl Services {
         }
     }
 
-    /// Applies new states to the service whose object is `path`, and returns it when it
-    /// changed.
-    fn update(&self, path: &str, active: Option<&str>, sub: Option<&str>) -> Option<Service> {
+    /// Applies new states to the service whose object is `path` in a scope's systemd, and
+    /// returns it when it changed.
+    fn update(&self, scope: Scope, path: &str, active: Option<&str>, sub: Option<&str>) -> Option<Service> {
         let mut list = self.list.lock().expect("services lock");
-        let svc = list.iter_mut().find(|s| s.path == path)?;
+        let svc = list.iter_mut().find(|s| s.scope == scope && s.path == path)?;
         let before = svc.clone();
         if let Some(a) = active {
             svc.active_state = a.to_owned();
@@ -241,6 +281,39 @@ async fn power_action(app: Arc<App>, req: Request) -> ApiResult {
         }
         Err(e) => Err(ApiError::new(500, format!("logind can't {doing} the machine: {e}"))),
     }
+}
+
+/// Starts the units of agents with `systemd_unit` that aren't running. orrery leaves them
+/// running when it stops, and their units restart them when they exit.
+pub async fn start_agent_units(app: Arc<App>) {
+    let units: Vec<(String, crate::agents::Unit)> =
+        app.agents.units().map(|(n, u)| (n.to_owned(), u.clone())).collect();
+    for (name, unit) in units {
+        if let Err(e) = start_unit(&app, &unit).await {
+            app.add_warning(format!("[agent.{name}]: orrery can't start {}: {e}", unit.name));
+        }
+    }
+}
+
+async fn start_unit(app: &App, unit: &crate::agents::Unit) -> Result<(), String> {
+    let bus = app.machine.services.bus_for(unit.scope).await?;
+    // LoadUnit, unlike GetUnit, also finds a unit that nothing has started yet.
+    let reply = bus.call(manager("LoadUnit", vec![Value::str(&unit.name)])).await.map_err(|e| e.to_string())?;
+    let path = reply.first().and_then(Value::as_str).unwrap_or_default().to_owned();
+    let load = bus.property(SYSTEMD, &path, UNIT, "LoadState").await.map_err(|e| e.to_string())?;
+    if load.as_str() != Some("loaded") {
+        return Err(format!("the unit is {}", load.as_str().unwrap_or("unknown")));
+    }
+    let state = bus.property(SYSTEMD, &path, UNIT, "ActiveState").await.map_err(|e| e.to_string())?;
+    if matches!(state.as_str(), Some("active" | "activating" | "reloading")) {
+        tracing::info!("{} is already running", unit.name);
+        return Ok(());
+    }
+    bus.call(manager("StartUnit", vec![Value::str(&unit.name), Value::str("replace")]))
+        .await
+        .map_err(|e| e.to_string())?;
+    tracing::info!("Started {}", unit.name);
+    Ok(())
 }
 
 /// How long a rollover waits for Klipper to stop. systemd's own limit is 90 s by default, but
@@ -333,25 +406,26 @@ async fn service_action(app: Arc<App>, req: Request) -> ApiResult {
         });
         return Ok(json!("ok"));
     }
-    if !services.is_listed(&name) {
+    let Some(svc) = services.listed(&name) else {
         if services.allowed.contains(&name) {
             return Err(ApiError::bad_request(format!("Service '{name}' not installed")));
         }
         return Err(ApiError::bad_request(format!("Service '{name}' not allowed")));
-    }
-    let Some(bus) = services.bus().await else {
-        return Err(ApiError::new(503, "orrery isn't connected to D-Bus, so it can't control services"));
     };
+    let bus = services
+        .bus_for(svc.scope)
+        .await
+        .map_err(|e| ApiError::new(503, format!("orrery can't control {name}: {e}")))?;
     let member = match action {
         "start" => "StartUnit",
         "stop" => "StopUnit",
         _ => "RestartUnit",
     };
     // `replace` takes the place of a job that's already waiting for the unit, as systemctl does.
-    let args = vec![Value::str(&format!("{name}.service")), Value::str("replace")];
+    let args = vec![Value::str(&svc.unit), Value::str("replace")];
     match bus.call(manager(member, args)).await {
         Ok(_) => {
-            tracing::info!("Asked systemd to {action} {name}.service, as a client asked");
+            tracing::info!("Asked systemd to {action} {}, as a client asked", svc.name);
             Ok(json!("ok"))
         }
         Err(dbus::Error::Remote { name: error, message }) if is_refusal(&error) => {
@@ -468,10 +542,71 @@ fn parse_units(reply: &[Value], allowed: impl Fn(&str) -> bool) -> Vec<Service> 
         if !allowed(&name) || list.iter().any(|s| s.name == name) {
             continue;
         }
-        list.push(Service { name, path: text(6), active_state: text(3), sub_state: text(4) });
+        let unit = text(0);
+        list.push(Service {
+            name,
+            unit,
+            scope: Scope::System,
+            path: text(6),
+            active_state: text(3),
+            sub_state: text(4),
+        });
     }
     list.sort_by(|a, b| a.name.cmp(&b.name));
     list
+}
+
+/// Subscribes to a systemd's unit signals: before its states are read, so no change falls in
+/// between. systemd sends them only while a client has called `Subscribe`. Others usually
+/// have, but orrery doesn't count on it.
+async fn follow_units(bus: &Bus) -> dbus::Result<tokio::sync::broadcast::Receiver<Arc<Message>>> {
+    if let Err(e) = bus.call(manager("Subscribe", vec![])).await {
+        tracing::info!("systemd refused orrery's Subscribe call: {e}");
+    }
+    let rule = format!(
+        "type='signal',sender='{SYSTEMD}',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged',arg0='{UNIT}'"
+    );
+    bus.subscribe(&rule).await
+}
+
+/// The agents' user units, as `user/<name>`, and the signals of the user's systemd. `None`
+/// when no agent runs as a user unit.
+async fn user_units(app: &App) -> Option<(Vec<Service>, tokio::sync::broadcast::Receiver<Arc<Message>>)> {
+    let units: Vec<String> =
+        app.agents.units().filter(|(_, u)| u.scope == Scope::User).map(|(_, u)| u.name.clone()).collect();
+    if units.is_empty() {
+        return None;
+    }
+    let result: Result<_, String> = async {
+        let bus = app.machine.services.bus_for(Scope::User).await?;
+        let signals = follow_units(bus).await.map_err(|e| e.to_string())?;
+        let mut list = Vec::new();
+        for unit in units {
+            let reply = bus.call(manager("LoadUnit", vec![Value::str(&unit)])).await.map_err(|e| e.to_string())?;
+            let path = reply.first().and_then(Value::as_str).unwrap_or_default().to_owned();
+            let get = |prop| bus.property(SYSTEMD, &path, UNIT, prop);
+            let (active, sub) = (get("ActiveState").await, get("SubState").await);
+            let text = |v: dbus::Result<Value>| v.ok().and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default();
+            let short = unit.strip_suffix(".service").unwrap_or(&unit);
+            list.push(Service {
+                name: format!("user/{short}"),
+                unit: unit.clone(),
+                scope: Scope::User,
+                path: path.clone(),
+                active_state: text(active),
+                sub_state: text(sub),
+            });
+        }
+        Ok((list, signals))
+    }
+    .await;
+    match result {
+        Ok(found) => Some(found),
+        Err(e) => {
+            app.add_warning(format!("[machine]: orrery can't list the agents' user units: {e}"));
+            None
+        }
+    }
 }
 
 /// Connects to systemd, lists the services, and follows their states until the bus closes.
@@ -489,16 +624,7 @@ pub async fn run(app: Arc<App>) {
         tracing::info!("orrery runs in {unit}.service");
         *services.own_unit.lock().expect("unit lock") = Some(unit);
     }
-    // systemd sends units' signals only while a client has subscribed. Others usually have,
-    // but orrery doesn't count on it.
-    if let Err(e) = bus.call(manager("Subscribe", vec![])).await {
-        tracing::info!("systemd refused orrery's Subscribe call: {e}");
-    }
-    // Subscribed before the list is read, so no change falls in between.
-    let rule = format!(
-        "type='signal',sender='{SYSTEMD}',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged',arg0='{UNIT}'"
-    );
-    let mut signals = match bus.subscribe(&rule).await {
+    let signals = match follow_units(bus).await {
         Ok(rx) => rx,
         Err(e) => {
             app.add_warning(format!("[machine]: orrery can't follow the services' states: {e}"));
@@ -507,7 +633,19 @@ pub async fn run(app: Arc<App>) {
     };
     match bus.call(manager("ListUnitsFiltered", vec![Value::strs(&["loaded"])])).await {
         Ok(reply) => {
-            let list = parse_units(&reply, |n| services.is_allowed(n));
+            // Agents' system units are listed too, so clients can restart them.
+            let agent_units: Vec<String> = app
+                .agents
+                .units()
+                .filter(|(_, u)| u.scope == Scope::System)
+                .filter_map(|(_, u)| u.name.strip_suffix(".service").map(str::to_owned))
+                .collect();
+            let mut list = parse_units(&reply, |n| services.is_allowed(n) || agent_units.iter().any(|u| u == n));
+            if let Some((user, user_signals)) = user_units(&app).await {
+                list.extend(user);
+                tokio::spawn(follow(app.clone(), Scope::User, user_signals));
+            }
+            list.sort_by(|a, b| a.name.cmp(&b.name));
             let names: Vec<&str> = list.iter().map(|s| s.name.as_str()).collect();
             tracing::info!("Services: {}", names.join(", "));
             *services.list.lock().expect("services lock") = list;
@@ -517,11 +655,16 @@ pub async fn run(app: Arc<App>) {
             return;
         }
     }
+    follow(app.clone(), Scope::System, signals).await;
+}
+
+/// Follows the states of a scope's services until its bus closes.
+async fn follow(app: Arc<App>, scope: Scope, mut signals: tokio::sync::broadcast::Receiver<Arc<Message>>) {
     loop {
         match signals.recv().await {
-            Ok(msg) => changed(&app, &msg),
+            Ok(msg) => changed(&app, scope, &msg),
             // Signals were missed, so read every state again.
-            Err(RecvError::Lagged(_)) => refresh(&app, bus).await,
+            Err(RecvError::Lagged(_)) => refresh(&app, scope).await,
             Err(RecvError::Closed) => {
                 tracing::warn!("Service states stop updating: the D-Bus connection closed");
                 return;
@@ -532,7 +675,7 @@ pub async fn run(app: Arc<App>) {
 
 /// A unit's `PropertiesChanged` signal: the interface, the changed properties, and the
 /// invalidated ones.
-fn changed(app: &App, msg: &Message) {
+fn changed(app: &App, scope: Scope, msg: &Message) {
     if msg.member.as_deref() != Some("PropertiesChanged") || msg.body.first().and_then(Value::as_str) != Some(UNIT) {
         return;
     }
@@ -542,19 +685,28 @@ fn changed(app: &App, msg: &Message) {
     if active.is_none() && sub.is_none() {
         return;
     }
-    if let Some(svc) = app.machine.services.update(path, active, sub) {
+    if let Some(svc) = app.machine.services.update(scope, path, active, sub) {
         notify(app, &svc);
     }
 }
 
-async fn refresh(app: &App, bus: &Bus) {
-    let paths: Vec<String> =
-        app.machine.services.list.lock().expect("services lock").iter().map(|s| s.path.clone()).collect();
+async fn refresh(app: &App, scope: Scope) {
+    let Ok(bus) = app.machine.services.bus_for(scope).await else { return };
+    let paths: Vec<String> = app
+        .machine
+        .services
+        .list
+        .lock()
+        .expect("services lock")
+        .iter()
+        .filter(|s| s.scope == scope)
+        .map(|s| s.path.clone())
+        .collect();
     for path in paths {
         let active = bus.property(SYSTEMD, &path, UNIT, "ActiveState").await.ok();
         let sub = bus.property(SYSTEMD, &path, UNIT, "SubState").await.ok();
         let (active, sub) = (active.as_ref().and_then(Value::as_str), sub.as_ref().and_then(Value::as_str));
-        if let Some(svc) = app.machine.services.update(&path, active, sub) {
+        if let Some(svc) = app.machine.services.update(scope, &path, active, sub) {
             notify(app, &svc);
         }
     }

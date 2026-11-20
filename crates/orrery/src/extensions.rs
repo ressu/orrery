@@ -77,8 +77,8 @@ pub fn register_endpoints(app: &Arc<App>) {
 }
 
 /// Registers a connection that identified as an agent, and tells the other clients.
-pub fn register_agent(app: &App, conn: ConnId, name: &str, identity: &Value) -> Result<(), ApiError> {
-    crate::agents::check_claim(app, name, conn)?;
+pub async fn register_agent(app: &App, conn: ConnId, name: &str, identity: &Value) -> Result<(), ApiError> {
+    crate::agents::check_claim(app, name, conn).await?;
     {
         let mut inner = app.extensions.lock();
         if inner.agents.iter().any(|(n, _)| n == name) {

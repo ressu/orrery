@@ -105,6 +105,18 @@ impl Bus {
         }
     }
 
+    /// Connects to this user's session bus, which the user's systemd answers on:
+    /// `DBUS_SESSION_BUS_ADDRESS`, or `/run/user/<uid>/bus`.
+    pub async fn session() -> Result<Self> {
+        match std::env::var("DBUS_SESSION_BUS_ADDRESS") {
+            Ok(address) => Self::connect(&socket_path(&address)?).await,
+            Err(_) => {
+                let uid = rustix::process::getuid().as_raw();
+                Self::connect(&PathBuf::from(format!("/run/user/{uid}/bus"))).await
+            }
+        }
+    }
+
     /// Connects to the bus at a unix socket, and logs in.
     pub async fn connect(socket: &Path) -> Result<Self> {
         let stream = UnixStream::connect(socket).await?;

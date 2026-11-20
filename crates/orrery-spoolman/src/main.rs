@@ -76,12 +76,42 @@ impl State {
     }
 }
 
+/// Lines for the journal, such as `<4>WARN orrery_agent: …`, as orrery writes them: journald
+/// takes the `<4>` as the line's priority.
+struct JournalFormat;
+
+impl<S, N> tracing_subscriber::fmt::FormatEvent<S, N> for JournalFormat
+where
+    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+    N: for<'a> tracing_subscriber::fmt::FormatFields<'a> + 'static,
+{
+    fn format_event(
+        &self,
+        ctx: &tracing_subscriber::fmt::FmtContext<'_, S, N>,
+        mut writer: tracing_subscriber::fmt::format::Writer<'_>,
+        event: &tracing::Event<'_>,
+    ) -> std::fmt::Result {
+        let meta = event.metadata();
+        let priority = match *meta.level() {
+            tracing::Level::ERROR => 3,
+            tracing::Level::WARN => 4,
+            tracing::Level::INFO => 6,
+            _ => 7,
+        };
+        write!(writer, "<{priority}>{} {}: ", meta.level(), meta.target())?;
+        ctx.field_format().format_fields(writer.by_ref(), event)?;
+        writeln!(writer)
+    }
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let log = tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()));
-    // Started by orrery, whose log adds the time to each line.
-    if std::env::var_os("ORRERY_AGENT").is_some() {
+    // The journal and orrery's log add the time to each line.
+    if orrery_agent::stdout_is_journal() {
+        log.event_format(JournalFormat).init();
+    } else if std::env::var_os("ORRERY_AGENT").is_some() {
         log.without_time().with_ansi(false).init();
     } else {
         log.init();
