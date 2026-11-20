@@ -37,6 +37,7 @@
               pkgs.git
               pkgs.jujutsu
               pkgs.just
+              pkgs.dbus # dbus-daemon, for the D-Bus client tests
               pkgs.qemu # run ARM release binaries locally
               # Only for the conformance reference tiers: upstream Moonraker and real Klipper.
               pkgs.uv

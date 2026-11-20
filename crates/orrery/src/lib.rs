@@ -10,6 +10,7 @@ mod api;
 pub mod config;
 mod data_store;
 pub mod database;
+pub mod dbus;
 mod extensions;
 mod files;
 pub mod history;
