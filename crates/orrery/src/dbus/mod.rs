@@ -82,7 +82,8 @@ struct Inner {
     /// Calls waiting for their reply, by serial. Dropped when the connection closes, so the
     /// callers wake with [`Error::Closed`].
     pending: Mutex<Option<HashMap<u32, oneshot::Sender<Message>>>>,
-    signals: broadcast::Sender<Arc<Message>>,
+    /// Dropped when the connection closes, so subscribers see the end of their stream.
+    signals: Mutex<Option<broadcast::Sender<Arc<Message>>>>,
     name: OnceLock<String>,
 }
 
@@ -123,7 +124,7 @@ impl Bus {
             writer: tokio::sync::Mutex::new(write),
             serial: AtomicU32::new(1),
             pending: Mutex::new(Some(HashMap::new())),
-            signals,
+            signals: Mutex::new(Some(signals)),
             name: OnceLock::new(),
         });
         tokio::spawn(read_messages(Arc::downgrade(&inner), read));
@@ -213,7 +214,7 @@ impl Bus {
     /// `type='signal',interface='org.freedesktop.DBus.Properties'`, and returns a receiver for
     /// every signal this connection gets. Subscribe before the call whose signals you need.
     pub async fn subscribe(&self, rule: &str) -> Result<broadcast::Receiver<Arc<Message>>> {
-        let rx = self.inner.signals.subscribe();
+        let rx = self.inner.signals.lock().expect("signals lock").as_ref().ok_or(Error::Closed)?.subscribe();
         self.call(Call {
             destination: "org.freedesktop.DBus",
             path: "/org/freedesktop/DBus",
@@ -280,7 +281,9 @@ async fn read_messages(inner: std::sync::Weak<Inner>, mut read: BufReader<OwnedR
                     }
                 }
                 Kind::Signal => {
-                    let _ = inner.signals.send(Arc::new(msg));
+                    if let Some(tx) = inner.signals.lock().expect("signals lock").as_ref() {
+                        let _ = tx.send(Arc::new(msg));
+                    }
                 }
                 Kind::MethodCall => {
                     if msg.flags & message::NO_REPLY_EXPECTED == 0 {
@@ -302,6 +305,7 @@ async fn read_messages(inner: std::sync::Weak<Inner>, mut read: BufReader<OwnedR
             tracing::warn!("The D-Bus connection closed: {e}");
         }
         inner.pending.lock().expect("pending lock").take();
+        inner.signals.lock().expect("signals lock").take();
     }
 }
 

@@ -126,7 +126,7 @@ impl App {
         config.record_moonraker_options()?;
         let database = Database::open(&config, &paths)?;
         let files = FileManager::new(&config, &paths)?;
-        let machine = crate::machine::Machine::new(&config)?;
+        let machine = crate::machine::Machine::new(&config, &paths)?;
         let data_store = DataStore::new(&config)?;
         let webcams = crate::webcam::Webcams::new(&config, &paths)?;
         let job_queue = crate::job_queue::JobQueue::new(&config)?;

@@ -141,6 +141,7 @@ impl FileManager {
             ("systemd", paths.data.join("systemd"), false),
             ("backup", paths.data.join("backup"), false),
             ("secrets", paths.data.join("moonraker.secrets"), false),
+            ("allowed_services", paths.data.join("moonraker.asvc"), false),
         ]
         .into_iter()
         .map(|(n, p, r)| (n.to_owned(), resolve(&p), r))

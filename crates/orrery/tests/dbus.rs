@@ -148,6 +148,7 @@ async fn receives_signals() {
 async fn notices_a_closed_bus() {
     let t = test_bus().await;
     let bus = connect(&t.socket).await;
+    let mut signals = bus.subscribe("type='signal'").await.unwrap();
     drop(t);
     tokio::time::timeout(Duration::from_secs(5), async {
         while bus.is_open() {
@@ -157,4 +158,11 @@ async fn notices_a_closed_bus() {
     .await
     .unwrap();
     assert!(matches!(bus.call(bus_call("ListNames", vec![])).await, Err(Error::Closed | Error::Io(_))));
+    // Signal streams end too, so a listener doesn't wait forever.
+    loop {
+        match signals.recv().await {
+            Ok(_) => continue,
+            Err(e) => break assert_eq!(e, tokio::sync::broadcast::error::RecvError::Closed),
+        }
+    }
 }

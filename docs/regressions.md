@@ -165,17 +165,31 @@ change how safe or complete orrery is to run.
 - **Why:** there's no true value to give.
 - **Cases:** `machine/system_info`.
 
-### no-service-control: no service list, reboot, or shutdown
+### no-service-control: services are listed, not controlled
 
 - **Area:** API
 - **Moonraker:** with a systemd or supervisord `provider`, `machine.system_info` lists the
   services clients can control, with their state. `machine.services.*`, `machine.reboot`, and
   `machine.shutdown` control them.
-- **orrery:** lists no services, as Moonraker does with `provider: none`, and has none of the
-  control endpoints yet. `instance_ids` are always `moonraker` and `klipper`. For
-  virtualization, orrery runs `systemd-detect-virt` instead of asking systemd over D-Bus.
-- **Why:** service control comes later.
-- **Cases:** none.
+- **orrery:** with `provider: systemd_dbus`, the default, it lists the allowed services and
+  follows their state over D-Bus, with `notify_service_state_changed`. `instance_ids` come from
+  systemd, as in Moonraker. It doesn't have the control endpoints yet, or the
+  `systemd_cli` and `supervisord_cli` providers. Small differences:
+  - orrery lists only `.service` units. Moonraker takes every unit type and cuts the name at its
+    first dot, so a `klipper.socket` could stand in for `klipper.service`.
+  - orrery always allows services whose names start with `orrery`, beside `moonraker` and
+    `klipper` ones.
+  - For orrery or Klippy started outside a service, such as from a terminal, its
+    `instance_ids` entry is `(unknown)`, which can't match a real service. Moonraker gives the
+    scope's name, such as `session-3`, and falls back to `moonraker` and `klipper`. A fallback
+    could name another printer's Klipper on a machine with several, and an empty id makes
+    Fluidd fall back the same way.
+  - Moonraker saves Klipper's unit in its database, so `instance_ids.klipper` is right before
+    Klippy connects. orrery finds it again on each connection.
+  - For virtualization, orrery runs `systemd-detect-virt` instead of asking systemd over D-Bus.
+- **Why:** service control comes in steps; see `docs/design/2026-11-19-service-control.md`.
+- **Cases:** none. The conformance suite runs with `provider: none`; the D-Bus client is tested
+  against a private `dbus-daemon`.
 
 ### import-gaps: what `orrery-import` doesn't bring over
 

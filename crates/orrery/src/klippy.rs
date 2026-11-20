@@ -361,6 +361,9 @@ pub async fn run(app: Arc<App>) {
             }
         };
         tracing::info!("Klippy Connection Established");
+        let pid = stream.peer_cred().ok().and_then(|c| c.pid()).and_then(|p| u32::try_from(p).ok());
+        let found = app.clone();
+        tokio::spawn(async move { found.machine.services.found_klippy(pid).await });
         let (read, mut write) = stream.into_split();
         let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
         {

@@ -1,8 +1,6 @@
 //! `machine.system_info`, after the system info parts of Moonraker's `machine.py`: the CPU, the
-//! SD card, the distribution, virtualization, and network interfaces.
-//!
-//! Service control (`machine.services.*`, reboot, and shutdown) isn't written yet, so the service
-//! lists are empty, as with Moonraker's `provider: none`.
+//! SD card, the distribution, virtualization, and network interfaces. The service list comes
+//! from [`crate::services`]; starting and stopping services isn't written yet.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -13,7 +11,8 @@ use serde_json::{Map, Value, json};
 
 use crate::api::{ApiResult, RequestType, Transports, handler};
 use crate::config::Config;
-use crate::server::App;
+use crate::server::{App, Paths};
+use crate::services::Services;
 
 const PROVIDERS: &[&str] = &["none", "systemd_cli", "systemd_dbus", "supervisord_cli"];
 const SD_CID_PATH: &str = "/sys/block/mmcblk0/device/cid";
@@ -28,10 +27,11 @@ pub struct Machine {
     provider: String,
     inside_container: bool,
     system_info: Mutex<Map<String, Value>>,
+    pub services: Services,
 }
 
 impl Machine {
-    pub fn new(config: &Config) -> Result<Self> {
+    pub fn new(config: &Config, paths: &Paths) -> Result<Self> {
         let provider = config.section("machine").get_str("provider", "systemd_dbus");
         if !PROVIDERS.contains(&provider.as_str()) {
             bail!("[machine] provider: Invalid Provider: {provider}");
@@ -45,10 +45,9 @@ impl Machine {
         info.insert("network".into(), json!({}));
         info.insert("canbus".into(), json!({}));
         info.insert("provider".into(), json!(provider));
-        info.insert("available_services".into(), json!([]));
-        info.insert("service_state".into(), json!({}));
         tracing::info!("Using System Provider: {provider}");
-        Ok(Self { provider, inside_container, system_info: Mutex::new(info) })
+        let services = Services::new(&provider, paths);
+        Ok(Self { provider, inside_container, system_info: Mutex::new(info), services })
     }
 
     fn info(&self) -> std::sync::MutexGuard<'_, Map<String, Value>> {
@@ -62,6 +61,7 @@ pub fn register_endpoints(app: &Arc<App>) {
 }
 
 pub fn start(app: &Arc<App>) {
+    tokio::spawn(crate::services::run(app.clone()));
     let app = app.clone();
     tokio::spawn(async move {
         if !app.machine.inside_container {
@@ -74,7 +74,10 @@ pub fn start(app: &Arc<App>) {
 
 async fn system_info(app: Arc<App>) -> ApiResult {
     let mut info = app.machine.info().clone();
-    info.insert("instance_ids".into(), json!({"moonraker": "moonraker", "klipper": "klipper"}));
+    let (names, states) = app.machine.services.system_info();
+    info.insert("available_services".into(), names);
+    info.insert("service_state".into(), states);
+    info.insert("instance_ids".into(), app.machine.services.instance_ids());
     Ok(json!({"system_info": info}))
 }
 
