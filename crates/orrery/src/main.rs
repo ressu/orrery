@@ -1,5 +1,8 @@
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -147,7 +150,8 @@ fn orrery_config_path(cli: &Cli, paths: &Paths) -> Result<(PathBuf, bool)> {
     }
 }
 
-async fn run(paths: Paths, socket_path: PathBuf, toml: (PathBuf, bool), log_warning: Option<String>) -> Result<()> {
+/// Runs orrery until it's stopped. Returns whether a client asked it to restart.
+async fn run(paths: Paths, socket_path: PathBuf, toml: (PathBuf, bool), log_warning: Option<String>) -> Result<bool> {
     for dir in [paths.data.clone(), paths.data.join("comms"), paths.logs_dir(), paths.gcodes_dir(), paths.config_dir()]
     {
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
@@ -176,20 +180,32 @@ async fn run(paths: Paths, socket_path: PathBuf, toml: (PathBuf, bool), log_warn
     let listener = tokio::net::TcpListener::bind(&addr).await.with_context(|| format!("listening on {addr}"))?;
     tracing::info!("Listening on {addr}");
     let service = web::router(app.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>();
-    axum::serve(listener, service).with_graceful_shutdown(shutdown_signal()).await?;
+    let restart = Arc::new(AtomicBool::new(false));
+    axum::serve(listener, service).with_graceful_shutdown(shutdown_signal(app.clone(), restart.clone())).await?;
     agents.stop().await;
     job_queue::on_exit(&app).await;
     history::on_exit(&app).await;
-    Ok(())
+    Ok(restart.load(Ordering::Relaxed))
 }
 
-async fn shutdown_signal() {
+async fn shutdown_signal(app: Arc<App>, restart: Arc<AtomicBool>) {
     let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("SIGTERM handler");
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {}
         _ = term.recv() => {}
+        _ = app.restart.notified() => restart.store(true, Ordering::Relaxed),
     }
     tracing::info!("Shutting down");
+}
+
+/// Starts orrery's program again in this process, with the same arguments. It's started by
+/// the name it was run with, not `/proc/self/exe`, so a binary copied over the old one runs.
+fn restart() -> ExitCode {
+    let mut args = std::env::args_os();
+    let program = args.next().unwrap_or_else(|| "orrery".into());
+    let e = std::process::Command::new(&program).args(args).exec();
+    eprintln!("orrery can't restart: running {} failed: {e}", Path::new(&program).display());
+    ExitCode::FAILURE
 }
 
 fn main() -> ExitCode {
@@ -227,8 +243,14 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match runtime.block_on(run(paths, socket_path, toml, log_warning)) {
-        Ok(()) => ExitCode::SUCCESS,
+    let result = runtime.block_on(run(paths, socket_path, toml, log_warning));
+    // Ends the tasks that are left, and writes out the log, before a restart replaces the
+    // process.
+    drop(runtime);
+    drop(_log_guard);
+    match result {
+        Ok(true) => restart(),
+        Ok(false) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("orrery can't start: {e:#}");
             ExitCode::FAILURE

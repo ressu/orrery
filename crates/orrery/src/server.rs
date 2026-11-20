@@ -98,6 +98,8 @@ pub struct App {
     pub extensions: crate::extensions::Extensions,
     pub agents: crate::agents::Agents,
     warnings: Mutex<Vec<String>>,
+    /// Set when a client asks orrery to restart; `main` waits for it beside the stop signals.
+    pub restart: tokio::sync::Notify,
 }
 
 /// Moonraker's names for the components orrery implements, as `server.info` lists them.
@@ -160,6 +162,7 @@ impl App {
             extensions: crate::extensions::Extensions::default(),
             agents,
             warnings: Mutex::new(warnings),
+            restart: tokio::sync::Notify::new(),
         });
         app.register_endpoints();
         crate::klippy::register_endpoints(&app);
@@ -354,6 +357,7 @@ impl App {
         );
         r.register("/server/websocket/id", &[RequestType::Get], Transports::WebsocketOnly, handler(websocket_id));
         r.register("/server/logs/rollover", &[RequestType::Post], Transports::All, handler(logs_rollover));
+        r.register("/server/restart", &[RequestType::Post], Transports::All, handler(|app, _| server_restart(app)));
     }
 }
 
@@ -415,6 +419,18 @@ async fn server_info(app: Arc<App>, req: Request) -> ApiResult {
 
 async fn server_config(app: Arc<App>, _req: Request) -> ApiResult {
     Ok(json!({"config": app.config.parsed(), "orig": app.config.orig(), "files": app.config.files()}))
+}
+
+/// Restarts orrery, as Moonraker's `server.restart`: it answers first, then shuts down as for
+/// SIGTERM and starts its program again in the same process.
+async fn server_restart(app: Arc<App>) -> ApiResult {
+    tracing::info!("Restarting, as a client asked");
+    tokio::spawn(async move {
+        // Time for the answer to reach the client before the connections close.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        app.restart.notify_one();
+    });
+    Ok(json!("ok"))
 }
 
 /// Starts a new log file. Klipper's log waits for service control: Moonraker rolls it over by
