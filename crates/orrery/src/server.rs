@@ -433,9 +433,9 @@ async fn server_restart(app: Arc<App>) -> ApiResult {
     Ok(json!("ok"))
 }
 
-/// Starts a new log file. Klipper's log waits for service control: Moonraker rolls it over by
-/// stopping Klipper, so its answer lists Klipper under `failed`.
-async fn logs_rollover(_app: Arc<App>, req: Request) -> ApiResult {
+/// Starts a new log file for orrery, Klipper, or both. Klipper's needs Klipper stopped; see
+/// [`crate::services::rollover_klipper_log`].
+async fn logs_rollover(app: Arc<App>, req: Request) -> ApiResult {
     let mut apps = vec!["moonraker", "klipper"];
     if let Some(app) = req.args.opt_str("application")? {
         if !apps.contains(&app.as_str()) {
@@ -456,10 +456,10 @@ async fn logs_rollover(_app: Arc<App>, req: Request) -> ApiResult {
         }
     }
     if apps.contains(&"klipper") {
-        failed.insert(
-            "klipper".into(),
-            json!("orrery can't roll over Klipper's log yet: it needs to restart Klipper, and orrery doesn't control services yet."),
-        );
+        match crate::services::rollover_klipper_log(&app).await {
+            Ok(()) => rolled_over.push("klipper"),
+            Err(e) => drop(failed.insert("klipper".into(), json!(e))),
+        }
     }
     Ok(json!({"rolled_over": rolled_over, "failed": failed}))
 }

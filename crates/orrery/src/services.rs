@@ -243,6 +243,73 @@ async fn power_action(app: Arc<App>, req: Request) -> ApiResult {
     }
 }
 
+/// How long a rollover waits for Klipper to stop. systemd's own limit is 90 s by default, but
+/// Klipper stops in about a second.
+const KLIPPER_STOP_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Starts a new log file for Klipper, after Moonraker's `rollover_log`: stops Klipper's
+/// service, renames `klippy.log` to `klippy.log.<time>`, and starts the service again. Unlike
+/// Moonraker, orrery waits for Klipper to stop before the rename, refuses while a print is
+/// paused as well as while it prints, and starts Klipper again when the rename fails.
+pub async fn rollover_klipper_log(app: &App) -> Result<(), String> {
+    let services = &app.machine.services;
+    let unit = services.klipper_unit.lock().expect("unit lock").clone().filter(|_| services.enabled);
+    let Some(unit) = unit else {
+        return Err("Unable to detect Klipper Service, cannot perform manual rollover".into());
+    };
+    let Some(log) = app.klippy.reported_log_file() else {
+        return Err("Unable to detect path to Klipper log file".into());
+    };
+    if app.klippy.is_connected() {
+        match app.job_state.last_stats().get("state").and_then(Json::as_str) {
+            Some("printing") => return Err("Cannot rollover log while printing".into()),
+            Some("paused") => return Err("Cannot rollover log while a print is paused".into()),
+            _ => {}
+        }
+    }
+    let log = log.canonicalize().unwrap_or(log);
+    if !log.is_file() {
+        return Err(format!("No file at {} exists, cannot perform rollover", log.display()));
+    }
+    let Some(bus) = services.bus().await else {
+        return Err("orrery isn't connected to D-Bus, so it can't restart Klipper".into());
+    };
+    let service = format!("{unit}.service");
+    let job = |member| manager(member, vec![Value::str(&service), Value::str("replace")]);
+    bus.call(job("StopUnit")).await.map_err(|e| format!("systemd can't stop {service}: {e}"))?;
+    let stopped = wait_stopped(bus, &service).await;
+    let mut name = log.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(".{}", crate::logfile::stamp_now()));
+    let renamed = match &stopped {
+        Ok(()) => {
+            std::fs::rename(&log, log.with_file_name(&name)).map_err(|e| format!("Can't rename {}: {e}", log.display()))
+        }
+        Err(e) => Err(e.clone()),
+    };
+    let started = bus.call(job("StartUnit")).await.map_err(|e| format!("systemd can't start {service} again: {e}"));
+    renamed?;
+    started?;
+    tracing::info!("Started a new Klipper log, as a client asked: the old one is {}", name.to_string_lossy());
+    Ok(())
+}
+
+/// Waits until a unit is `inactive` or `failed`.
+async fn wait_stopped(bus: &Bus, service: &str) -> Result<(), String> {
+    let reply = bus.call(manager("GetUnit", vec![Value::str(service)])).await.map_err(|e| e.to_string())?;
+    let path = reply.first().and_then(Value::as_str).unwrap_or_default().to_owned();
+    let deadline = tokio::time::Instant::now() + KLIPPER_STOP_WAIT;
+    loop {
+        let state = bus.property(SYSTEMD, &path, UNIT, "ActiveState").await.map_err(|e| e.to_string())?;
+        if matches!(state.as_str(), Some("inactive" | "failed")) {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(format!("{service} didn't stop within {} s", KLIPPER_STOP_WAIT.as_secs()));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+
 /// Whether a D-Bus error means polkit refused.
 fn is_refusal(name: &str) -> bool {
     name.ends_with("AccessDenied") || name.ends_with("InteractiveAuthorizationRequired")

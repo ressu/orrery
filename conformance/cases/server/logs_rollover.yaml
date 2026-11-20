@@ -10,7 +10,7 @@ steps:
     params: {application: nothing}
     expect_error: {code: 400, message: Unknown application nothing}
     only: [http]
-  # Moonraker rolls Klipper's log over by restarting Klipper's service.
+  # Klipper's log is rolled over by restarting its service; the suite has no services.
   - call: server.logs.rollover
     params: {application: klipper}
-    expect: {rolled_over: [], failed: {$exact: true, klipper: $type:string}}
+    expect: {rolled_over: [], failed: {$exact: true, klipper: "Unable to detect Klipper Service, cannot perform manual rollover"}}

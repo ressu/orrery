@@ -133,7 +133,6 @@ impl Klippy {
         self.lock().writer.is_some()
     }
 
-    /// Klipper's log file, as Klippy reported it. Moonraker falls back to `/tmp/klippy.log`.
     /// Waits up to 20 seconds for a connected Klippy to finish starting, as Moonraker's
     /// `wait_started`. Returns whether Klippy is connected.
     pub async fn wait_started(&self) -> bool {
@@ -144,8 +143,14 @@ impl Klippy {
         self.is_connected()
     }
 
+    /// Klipper's log file, as Klippy reported it. Moonraker falls back to `/tmp/klippy.log`.
     pub fn log_file(&self) -> PathBuf {
         PathBuf::from(self.lock().log_file.clone().unwrap_or_else(|| "/tmp/klippy.log".into()))
+    }
+
+    /// Klipper's log file, only when Klippy has reported it.
+    pub fn reported_log_file(&self) -> Option<PathBuf> {
+        self.lock().log_file.clone().map(PathBuf::from)
     }
 
     pub fn missing_requirements(&self) -> Vec<String> {

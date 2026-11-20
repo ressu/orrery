@@ -109,7 +109,7 @@ change how safe or complete orrery is to run.
 - **Why:** frontends work without them.
 - **Cases:** none yet.
 
-### log-file: orrery's log is `orrery.log`, and Klipper's log isn't rolled over
+### log-file: orrery's log is `orrery.log`
 
 - **Area:** files, server
 - **Moonraker:** writes `logs/moonraker.log` and serves it at `/server/files/moonraker.log`.
@@ -120,10 +120,9 @@ change how safe or complete orrery is to run.
   ones. `-l` sets another file and `-n` turns the file off, as in Moonraker.
   `server.logs.rollover` starts a new orrery log, and names the old one for the time, as
   Moonraker names a Klipper log it rolls over. Moonraker instead names it for the day, and
-  replaces an earlier rollover from the same day. For Klipper, orrery answers with Klipper
-  under `failed`.
-- **Why:** frontends download the log by its Moonraker address. Moonraker rolls Klipper's log
-  over by stopping and starting Klipper's service, and orrery doesn't control services yet.
+  replaces an earlier rollover from the same day. Klipper's log is rolled over as in
+  Moonraker, with the differences in `no-service-control`.
+- **Why:** frontends download the log by its Moonraker address.
 - **Cases:** `files/log_downloads`, `server/logs_rollover`.
 
 ### history-aux-fields: history's auxiliary fields come from agents, without totals
@@ -175,8 +174,12 @@ change how safe or complete orrery is to run.
   follows their state over D-Bus, with `notify_service_state_changed`, and has
   `machine.services.start`, `stop`, and `restart`, and `machine.reboot` and `machine.shutdown`
   through logind. `instance_ids` come from systemd, as in Moonraker. It doesn't have agents
-  started with `systemd_unit`, Klipper's log rollover, or the `systemd_cli` and
-  `supervisord_cli` providers yet. Small differences:
+  started with `systemd_unit`, or the `systemd_cli` and `supervisord_cli` providers yet. Small
+  differences:
+  - Klipper's log rollover waits for Klipper to stop before it renames the log, refuses while
+    a print is paused as well as while it prints, and starts Klipper again when the rename
+    fails. Moonraker renames as soon as the stop is queued, and leaves Klipper stopped when the
+    rename fails. The time in the old log's name is UTC.
   - Without logind, or with `provider: none`, reboot and shutdown fail. Moonraker falls back
     to `sudo systemctl reboot`, with the sudo password it asks clients for.
   - orrery gives one warning that lists every polkit action it isn't allowed, instead of one

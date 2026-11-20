@@ -46,8 +46,7 @@ impl LogFile {
     /// Starts a new file now, as `server.logs.rollover` asks.
     pub fn rollover(&mut self) -> io::Result<()> {
         self.file.flush()?;
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
-        rotate_to(&self.path, &format_stamp(now))?;
+        rotate_to(&self.path, &stamp_now())?;
         self.file = open_append(&self.path)?;
         self.day = day_of(SystemTime::now());
         self.write_header()
@@ -97,6 +96,11 @@ impl Write for SharedLog {
     fn flush(&mut self) -> io::Result<()> {
         self.0.lock().unwrap_or_else(|e| e.into_inner()).flush()
     }
+}
+
+/// The time now as `YYYY-MM-DD_HH-MM-SS`, in UTC, as a rolled-over log's suffix.
+pub fn stamp_now() -> String {
+    format_stamp(SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs())
 }
 
 /// Starts a new log file now. `None` when orrery writes no log file.
