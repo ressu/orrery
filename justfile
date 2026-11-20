@@ -106,3 +106,7 @@ disconnect-printer host:
     else
         echo "There's no open SSH connection to {{host}}."
     fi
+
+# Run orrery on a printer as a temporary systemd unit, orrery-test: start, stop, status, or log.
+printer-test command host *args:
+    scripts/printer-test.sh {{command}} {{host}} {{args}}

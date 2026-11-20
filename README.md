@@ -178,6 +178,18 @@ scripts/copy-to-printer.sh <ssh host>
 doesn't start orrery or change anything else on the printer. To close the SSH connection it keeps
 open for 10 minutes, run `scripts/copy-to-printer.sh --disconnect <ssh host>`.
 
+To run orrery on the printer as a temporary systemd unit, `orrery-test`, run:
+
+```
+just printer-test start <ssh host>
+```
+
+It stops Moonraker, and an installed `orrery.service`, while it runs. The unit runs as your user
+with the `moonraker-admin` group, so orrery can manage services through Moonraker's polkit rule.
+No unit file is written. `just printer-test log <ssh host>` follows the log, and
+`just printer-test stop <ssh host>` stops the unit and starts again what it stopped. Options after
+the host go to orrery, for example `just printer-test start <ssh host> --verbose`.
+
 To keep one SSH connection open while you work, so you log in once, run:
 
 ```
