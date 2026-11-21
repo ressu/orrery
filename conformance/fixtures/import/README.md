@@ -8,6 +8,7 @@
 - two print history jobs (one completed, one cancelled) and their totals
 - Moonraker's own `database`, `moonraker`, and `gcode_metadata` namespaces
 - the `_API_KEY_USER_` user Moonraker always creates
+- two local users, `alice` (password `secret1`) and `bob` (password `secret2`)
 
 The case `conformance/cases/import/seed.yaml` builds it. To build it again, run the case against
 the reference and keep its data folder:

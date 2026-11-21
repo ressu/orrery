@@ -35,3 +35,10 @@ steps:
     match: [{action: finished, job: {filename: b.gcode, status: cancelled}}]
   - call: server.history.list
     expect: {count: 2}
+  # Two local users, for the import tests.
+  - call: access.post_user
+    params: {username: alice, password: secret1}
+    expect: {username: alice}
+  - call: access.post_user
+    params: {username: bob, password: secret2}
+    expect: {username: bob}

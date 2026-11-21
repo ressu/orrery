@@ -281,14 +281,17 @@ change how safe or complete orrery is to run.
 - **Area:** datastore import
 - **Moonraker:** keeps users, its own state, and the gcode metadata cache in `moonraker-sql.db`.
 - **orrery:** `orrery-import` skips these:
-  - Users, because orrery has no user logins yet. The import reports how many it skipped.
-    Moonraker's API key is copied, as orrery's `moonraker` key.
+  - Users' signing keys, so users log in again after the switch, with the same password.
+    orrery makes them new keys.
+  - Users' groups, which Moonraker stores but doesn't use. Users themselves are imported, with
+    their password hashes, and Moonraker's API key is copied, as orrery's `moonraker` key. A user that orrery already has is left as it is, and so is orrery's own
+    user with the same name. An LDAP user is imported, but can't log in until orrery has LDAP.
   - The `moonraker` and `database` namespaces: Moonraker's own state, such as its instance id
     and the update manager's data. orrery keeps its own.
   - `gcode_metadata`: orrery reads the files again instead. It still copies each file's link to
     its last print (`job_id` and `print_start_time`) when the file hasn't changed.
   - The legacy LMDB database (`moonraker.db/`), from Moonraker before v0.9.
-- **Why:** users come with logins. The rest belongs to Moonraker, or orrery rebuilds it.
+- **Why:** orrery has no groups yet. The rest belongs to Moonraker, or orrery rebuilds it.
 - **Cases:** none; the import's unit tests read `conformance/fixtures/import/seed.db`.
 
 ### agent-null-result: an agent's `null` result is a result

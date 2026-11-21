@@ -93,8 +93,21 @@ fn print_report(r: &Report, dry_run: bool, store: &str) {
     if r.api_key {
         println!("API key: copied. Clients that use Moonraker's API key keep working.");
     }
-    if r.users > 0 {
-        println!("Users: {} not imported, because orrery has no user logins yet.", r.users);
+    if !r.user_names.is_empty() {
+        println!("Users: {}: {}.", counts(&r.users), r.user_names.join(", "));
+        println!("Their passwords and logins work as in Moonraker. orrery.toml decides their roles:");
+        println!("without [authorization.users], every user is admin, as in Moonraker. To give them roles, add:");
+        println!("  [authorization.users]");
+        println!("  admin = [{}]", r.user_names.iter().map(|n| format!("{n:?}")).collect::<Vec<_>>().join(", "));
+    }
+    for name in &r.ldap_users {
+        println!("The user {name} logs in with LDAP, which orrery doesn't have yet, so they can't log in.");
+    }
+    for name in &r.kept_users {
+        println!("Kept orrery's own user {name}. Moonraker's user of the same name wasn't imported.");
+    }
+    for (name, why) in &r.skipped_users {
+        println!("Skipped the user {name}: {why}");
     }
     if dry_run {
         println!("Nothing was written, because of --dry-run.");

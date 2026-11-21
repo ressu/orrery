@@ -1,0 +1,160 @@
+[
+  {
+    "step": 1,
+    "call": "server.database.post_item",
+    "result": {
+      "namespace": "string",
+      "key": "string",
+      "value": {
+        "general": {
+          "printerName": "string",
+          "darkMode": "bool"
+        },
+        "theme": {
+          "color": "string"
+        }
+      }
+    }
+  },
+  {
+    "step": 2,
+    "call": "server.database.post_item",
+    "result": {
+      "namespace": "string",
+      "key": "string",
+      "value": "number"
+    }
+  },
+  {
+    "step": 3,
+    "call": "server.database.post_item",
+    "result": {
+      "namespace": "string",
+      "key": "string",
+      "value": "number"
+    }
+  },
+  {
+    "step": 4,
+    "call": "server.database.post_item",
+    "result": {
+      "namespace": "string",
+      "key": "string",
+      "value": "number"
+    }
+  },
+  {
+    "step": 5,
+    "call": "server.database.post_item",
+    "result": {
+      "namespace": "string",
+      "key": "string",
+      "value": "bool"
+    }
+  },
+  {
+    "step": 6,
+    "call": "server.database.post_item",
+    "result": {
+      "namespace": "string",
+      "key": "string",
+      "value": "string"
+    }
+  },
+  {
+    "step": 7,
+    "call": "server.database.post_item",
+    "result": {
+      "namespace": "string",
+      "key": "string",
+      "value": [
+        "number"
+      ]
+    }
+  },
+  {
+    "step": 8,
+    "call": "server.database.post_item",
+    "result": {
+      "namespace": "string",
+      "key": "string",
+      "value": "string"
+    }
+  },
+  {
+    "step": 9,
+    "call": "server.webcams.post_item",
+    "result": {
+      "webcam": {
+        "name": "string",
+        "enabled": "bool",
+        "icon": "string",
+        "aspect_ratio": "string",
+        "target_fps": "number",
+        "target_fps_idle": "number",
+        "location": "string",
+        "service": "string",
+        "stream_url": "string",
+        "snapshot_url": "string",
+        "flip_horizontal": "bool",
+        "flip_vertical": "bool",
+        "rotation": "number",
+        "source": "string",
+        "extra_data": {},
+        "uid": "string"
+      }
+    }
+  },
+  {
+    "step": 16,
+    "call": "server.history.list",
+    "result": {
+      "count": "number",
+      "jobs": [
+        {
+          "job_id": "string",
+          "user": "string",
+          "filename": "string",
+          "status": "string",
+          "start_time": "number",
+          "end_time": "number",
+          "print_duration": "number",
+          "total_duration": "number",
+          "filament_used": "number",
+          "metadata": {
+            "size": "number",
+            "modified": "number",
+            "uuid": "string",
+            "file_processors": [],
+            "slicer": "string",
+            "slicer_version": "string"
+          },
+          "auxiliary_data": [],
+          "exists": "bool"
+        }
+      ]
+    }
+  },
+  {
+    "step": 17,
+    "call": "access.post_user",
+    "result": {
+      "username": "string",
+      "token": "string",
+      "source": "string",
+      "refresh_token": "string",
+      "action": "string"
+    }
+  },
+  {
+    "step": 18,
+    "call": "access.post_user",
+    "result": {
+      "username": "string",
+      "token": "string",
+      "source": "string",
+      "refresh_token": "string",
+      "action": "string"
+    }
+  }
+]

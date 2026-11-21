@@ -74,8 +74,17 @@ pub struct Report {
     pub totals: Counts,
     /// Files whose link to their last print was copied from Moonraker's metadata.
     pub linked_files: usize,
-    /// Users in the source, which aren't imported: orrery has no user logins yet.
-    pub users: usize,
+    /// Moonraker's users: added, or already imported and left as they are, since orrery may have
+    /// changed them since (a new password hash, a logout).
+    pub users: Counts,
+    /// The names of the users the source has, imported now or before.
+    pub user_names: Vec<String>,
+    /// Users that orrery has of its own, with the same name, which the import leaves alone.
+    pub kept_users: Vec<String>,
+    /// Users who log in with LDAP, which needs an agent orrery doesn't have yet.
+    pub ldap_users: Vec<String>,
+    /// Users that can't be imported, and why.
+    pub skipped_users: Vec<(String, String)>,
     /// Moonraker's API key was copied, as orrery's `moonraker` key.
     pub api_key: bool,
     /// Rows from earlier imports removed by `--replace`.
@@ -113,6 +122,7 @@ pub fn run(store: &Database, source: &Path, options: Options) -> Result<Report> 
         let mut history = tx.open_table(database::JOB_HISTORY)?;
         let mut totals = tx.open_table(database::JOB_TOTALS)?;
         let mut local = tx.open_table(database::LOCAL)?;
+        let mut stored_users = tx.open_table(crate::users::USERS)?;
 
         if options.replace {
             let keys: Vec<String> =
@@ -124,6 +134,7 @@ pub fn run(store: &Database, source: &Path, options: Options) -> Result<Report> 
                     "ns" => namespaces.remove((s(1), s(2)))?.is_some(),
                     "job" => history.remove((s(1), parts.get(2).and_then(Value::as_u64).unwrap_or(0)))?.is_some(),
                     "total" => totals.remove((s(1), s(2), s(3)))?.is_some(),
+                    "user" => stored_users.remove(s(1))?.is_some(),
                     _ => false,
                 };
                 report.replaced += usize::from(removed);
@@ -222,7 +233,33 @@ pub fn run(store: &Database, source: &Path, options: Options) -> Result<Report> 
 
         // Moonraker keeps its API key as the password of `_API_KEY_USER_`.
         let users = file.table_rows("authorized_users")?;
-        report.users = users.iter().filter(|u| u["username"] != json!(API_KEY_USER)).count();
+        for row in users.iter().filter(|u| u["username"] != json!(API_KEY_USER)) {
+            let name = row["username"].as_str().unwrap_or_default().to_owned();
+            let user = match crate::users::Users::from_moonraker(row) {
+                Ok(user) => user,
+                Err(e) => {
+                    report.skipped_users.push((name, format!("{e:#}")));
+                    continue;
+                }
+            };
+            let mark = json!(["user", name]).to_string();
+            if stored_users.get(name.as_str())?.is_some() {
+                if imported.get(mark.as_str())?.is_some() {
+                    report.users.unchanged += 1;
+                    report.user_names.push(name);
+                } else {
+                    report.kept_users.push(name);
+                }
+                continue;
+            }
+            if user.source == "ldap" {
+                report.ldap_users.push(name.clone());
+            }
+            stored_users.insert(name.as_str(), serde_json::to_string(&user)?.as_str())?;
+            imported.insert(mark.as_str(), ())?;
+            report.users.added += 1;
+            report.user_names.push(name);
+        }
         if let Some(key) =
             users.iter().find(|u| u["username"] == json!(API_KEY_USER)).and_then(|u| u["password"].as_str())
         {
@@ -341,6 +378,36 @@ mod tests {
     }
 
     #[test]
+    fn imported_users_keep_their_passwords() {
+        use crate::users::{Users, check_password};
+        let dir = tempfile::tempdir().unwrap();
+        let db = store(dir.path());
+        // orrery's own bob stays, and Moonraker's bob isn't imported.
+        let config = Config::default();
+        let users = Users::new(&config, |_| false, &db).unwrap();
+        users.store(&db, Users::new_local("bob", crate::users::hash_password("mine").unwrap())).unwrap();
+        drop(users);
+        let report = run(&db, &seed(), Options::default()).unwrap();
+        assert_eq!(report.users, Counts { added: 1, updated: 0, unchanged: 0 });
+        assert_eq!((report.user_names, report.kept_users), (vec!["alice".to_owned()], vec!["bob".to_owned()]));
+
+        let users = Users::new(&config, |_| false, &db).unwrap();
+        let alice = users.get("alice").unwrap();
+        assert_eq!(alice.source, "local");
+        assert_eq!(check_password("secret1", alice.password.as_deref().unwrap()), (true, true));
+        // Moonraker's signing key stays behind, so alice logs in again for new tokens.
+        assert_eq!((alice.jwt_secret, alice.jwk_id), (None, None));
+        assert!(check_password("mine", users.get("bob").unwrap().password.as_deref().unwrap()).0);
+
+        // Again: alice is left as orrery has her, since orrery may have changed her since.
+        let again = run(&db, &seed(), Options::default()).unwrap();
+        assert_eq!(again.users, Counts { added: 0, updated: 0, unchanged: 1 });
+        // --replace removes only what imports wrote, so orrery's bob stays.
+        let replaced = run(&db, &seed(), Options { replace: true, ..Options::default() }).unwrap();
+        assert_eq!((replaced.users.added, replaced.kept_users), (1, vec!["bob".to_owned()]));
+    }
+
+    #[test]
     fn imports_seed_database() {
         let dir = tempfile::tempdir().unwrap();
         let db = store(dir.path());
@@ -348,13 +415,14 @@ mod tests {
         assert_eq!(report.settings, Counts { added: 9, updated: 0, unchanged: 0 });
         assert_eq!(report.history, Counts { added: 2, updated: 0, unchanged: 0 });
         assert_eq!(report.totals.added, 6);
-        assert_eq!(report.users, 0);
+        assert_eq!(report.users, Counts { added: 2, updated: 0, unchanged: 0 });
+        assert_eq!(report.user_names, ["alice", "bob"]);
         assert!(report.api_key);
         use redb::ReadableDatabase;
         let tx = db.raw().begin_read().unwrap();
         let table = tx.open_table(crate::keys::CREDENTIALS).unwrap();
         let key = table.get(crate::keys::MOONRAKER_KEY).unwrap().unwrap();
-        assert_eq!(key.value(), "3982d50739f646c59463090d4179102d");
+        assert_eq!(key.value(), "fc3fdeddc5d741b0842ee77747e5a15c");
         assert_eq!(
             report.skipped_namespaces,
             [("database".to_owned(), 3), ("gcode_metadata".to_owned(), 2), ("moonraker".to_owned(), 4)]
@@ -397,7 +465,8 @@ mod tests {
 
         // --replace removes the imported rows, then imports them again; orrery's job stays.
         let replaced = run(&db, &seed(), Options { dry_run: false, replace: true }).unwrap();
-        assert_eq!(replaced.replaced, 17);
+        // 17 rows, and the 2 users.
+        assert_eq!(replaced.replaced, 19);
         assert_eq!(replaced.history.added, 2);
         assert!(replaced.moved_jobs.is_empty());
         assert_eq!(db.history_get(3).unwrap().unwrap(), own);

@@ -319,6 +319,41 @@ impl Users {
         }
     }
 
+    /// A user from a row of Moonraker's `authorized_users` table, with its password hash.
+    /// Moonraker's signing key isn't copied: the user logs in again, and gets a new one (user,
+    /// 2026-11-21). Moonraker's local source becomes `local`; `ldap` stays, for an agent to
+    /// provide later.
+    pub fn from_moonraker(row: &serde_json::Map<String, serde_json::Value>) -> Result<User> {
+        let text = |k: &str| row.get(k).and_then(serde_json::Value::as_str).filter(|s| !s.is_empty());
+        let name = text("username").context("the row has no username")?;
+        check_name(name)?;
+        let is_hex = |s: &str, len: usize| s.len() == len && s.bytes().all(|b| b.is_ascii_hexdigit());
+        let source = match text("source") {
+            Some("moonraker") | None => LOCAL_SOURCE,
+            Some("ldap") => "ldap",
+            Some(other) => bail!("{name}: Moonraker's source {other:?} isn't one orrery knows"),
+        };
+        // Moonraker: PBKDF2-SHA256, 100,000 rounds, a 32-byte salt, all in hex
+        // (`authorization.py:537`). LDAP users have no password.
+        let password = match (text("password"), text("salt")) {
+            (Some(hash), Some(salt)) if source == LOCAL_SOURCE => {
+                if !is_hex(hash, 64) || !is_hex(salt, 64) {
+                    bail!("{name}: the password hash isn't Moonraker's PBKDF2 form");
+                }
+                Some(format!("pbkdf2-sha256$100000${}${}", salt.to_lowercase(), hash.to_lowercase()))
+            }
+            _ => None,
+        };
+        Ok(User {
+            username: name.to_owned(),
+            source: source.to_owned(),
+            created_on: row.get("created_on").and_then(serde_json::Value::as_f64).unwrap_or_else(now_secs),
+            password,
+            jwt_secret: None,
+            jwk_id: None,
+        })
+    }
+
     /// Gives a user a signing key if they have none, and makes their tokens.
     pub fn log_in(&self, db: &Database, name: &str) -> Result<Tokens> {
         let mut user = self.get(name).with_context(|| format!("no user {name}"))?;
@@ -606,6 +641,33 @@ mod tests {
         drop(db);
         let (users, _db) = setup("", "", dir.path());
         assert_eq!(users.get("sami").unwrap().source, "local");
+    }
+
+    #[test]
+    fn moonraker_rows_become_users() {
+        let row = |v: serde_json::Value| v.as_object().unwrap().clone();
+        let hex64 = "ab".repeat(32);
+        let user = Users::from_moonraker(&row(serde_json::json!({
+            "username": "alice", "source": "moonraker", "created_on": 1795304429.25,
+            "password": hex64, "salt": "01".repeat(32), "jwt_secret": "CD".repeat(32), "jwk_id": "kid1",
+        })))
+        .unwrap();
+        assert_eq!(user.source, LOCAL_SOURCE);
+        assert_eq!(user.password.unwrap(), format!("pbkdf2-sha256$100000${}${hex64}", "01".repeat(32)));
+        assert_eq!((user.jwt_secret, user.jwk_id), (None, None));
+        assert_eq!(user.created_on, 1795304429.25);
+        let ldap = Users::from_moonraker(&row(serde_json::json!({
+            "username": "lena", "source": "ldap", "created_on": 1.0, "password": "", "salt": "", "jwt_secret": null,
+        })))
+        .unwrap();
+        assert_eq!((ldap.source.as_str(), ldap.password), ("ldap", None));
+        for bad in [
+            serde_json::json!({"username": "_TRUSTED_USER_", "source": "moonraker"}),
+            serde_json::json!({"username": "x", "source": "oidc"}),
+            serde_json::json!({"username": "x", "source": "moonraker", "password": "short", "salt": "01"}),
+        ] {
+            assert!(Users::from_moonraker(&row(bad)).is_err());
+        }
     }
 
     #[test]
