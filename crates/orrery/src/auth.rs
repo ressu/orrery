@@ -159,7 +159,6 @@ pub fn need(app: &App, endpoint: &str, kind: RequestType, args: &Args) -> Need {
         | "/machine/system_info"
         | "/machine/proc_stats"
         | "/server/extensions/list"
-        | "/access/users/list"
         | "/access/oneshot_token"
         | "/server/history/list"
         | "/server/history/totals"
