@@ -487,9 +487,34 @@ what helps an admin and leaves out what repeats.
 - whether the `moonraker` key is on;
 - keys that orrery made or dropped because their table was added or removed.
 
+**An audit line for each request that changes something** (user, 2026-11-21). The request
+dispatch writes it, for HTTP, the websocket, and the unix socket, so a handler can't forget it
+and a new endpoint is covered once it's in the roles table. Its target is `orrery::audit`:
+
+```
+127.0.0.1 (admin, network 127.0.0.0/8) asked to delete users (username "nobody"), which failed: No user named nobody
+```
+
+- **Who asked comes first,** with the client's full address, its role, and where the role came
+  from: the network, the key's name, the agent, or the user. The address is often all orrery
+  knows about a person, so the network alone isn't enough (user, 2026-11-21). This is
+  `Access::requester()`, which refusals use too.
+- **What it asked for** is the same description refusals use, then the arguments that say what
+  it touched: the root, path, user name, service, and so on. Each value is cut at 80
+  characters. Passwords and tokens are never among them.
+- **When it failed,** the line ends with the error.
+- **The level depends on the role the request needs,** to spare the SD card. Requests that
+  need `admin`, or reach what an agent owns, log at info. The rest log at debug, since Fluidd
+  writes its own settings to the database often.
+- **Not logged here:** reading requests; endpoints anyone may call, such as logging in, which log
+  their own outcome; and refusals, which have their own line.
+- **Handlers log only what the dispatch can't see,** such as the name the old Klipper log got.
+  The power actions also name who asked before calling logind, since the log may not get
+  another chance.
+
 **When something changes:**
 
-- A key is rotated: its name, and who rotated it.
+- A key is rotated: its name. The audit line says who rotated it.
 - A connection opens: the role it got, and why, such as the key's name or the network.
   orrery already logs one line per connection (`describe_peer`,
   `crates/orrery/src/web.rs:72`); this adds to that line instead of adding a new one.

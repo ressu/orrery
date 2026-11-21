@@ -125,8 +125,18 @@ pub async fn upload(
     let Some(filename) = filename.filter(|f| !f.trim().is_empty()) else {
         return error_response(400, "Multipart filename omitted");
     };
-    tracing::info!("Processing Uploaded File: {filename}");
-    let result = match finalize_upload(&app, &access, &fields, &filename, &temp.0).await {
+    let result = finalize_upload(&app, &access, &fields, &filename, &temp.0).await;
+    let root = fields.get("root").and_then(Value::as_str).filter(|r| !r.is_empty()).unwrap_or("gcodes").to_lowercase();
+    let path = fields.get("path").and_then(Value::as_str).unwrap_or_default().trim_matches('/');
+    let path = if path.is_empty() { filename.clone() } else { format!("{path}/{filename}") };
+    let args =
+        crate::api::Args([("root".to_owned(), json!(root)), ("path".to_owned(), json!(path))].into_iter().collect());
+    // A refusal was logged as one already.
+    if !matches!(&result, Err(e) if e.status == 403 || e.status == 401) {
+        let outcome = result.as_ref().map(|_| ()).map_err(|e| e.message.as_str());
+        crate::auth::audit(&app, &access, "/server/files/upload", crate::api::RequestType::Post, &args, outcome);
+    }
+    let result = match result {
         Ok(r) => r,
         Err(e) => return api_error(e),
     };

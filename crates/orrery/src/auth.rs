@@ -177,6 +177,65 @@ pub fn authorize(app: &App, access: &Access, endpoint: &str, kind: RequestType, 
     Err(ApiError::new(403, format!("{who} can {action}. {}", what_it_has(access, role))))
 }
 
+/// Arguments an audit line shows, when a request has them. Never a password or a token.
+const AUDIT_ARGS: &[&str] = &[
+    "root",
+    "path",
+    "source",
+    "dest",
+    "filename",
+    "name",
+    "username",
+    "service",
+    "namespace",
+    "key",
+    "agent",
+    "script",
+];
+
+/// Logs one line for a request that changes something: who asked, what for, and whether it
+/// failed (docs/design/2026-11-20-authorization.md, "Logging"). Requests that need `admin`, or
+/// reach what an agent owns, log at info; the rest at debug, since Fluidd writes its own state
+/// often and the log is on an SD card. Reading requests aren't logged, nor endpoints that need
+/// nothing, such as logging in: those log their own outcome. Refusals are logged by
+/// [`Auth::log_refusal`] instead.
+pub fn audit(app: &App, access: &Access, endpoint: &str, kind: RequestType, args: &Args, outcome: Result<(), &str>) {
+    if kind == RequestType::Get {
+        return;
+    }
+    let important = match need(app, endpoint, kind, args) {
+        Need::Anyone => return,
+        Need::Role(role) => role == Role::Admin,
+        Need::Owner(_) => true,
+        Need::Call(agent) => app.agents.call_role(&agent) == Role::Admin,
+    };
+    let mut line = format!("{} asked to {}", access.requester(), action(app, endpoint, kind, args));
+    let shown: Vec<String> = AUDIT_ARGS
+        .iter()
+        .filter_map(|k| {
+            let v = args.get(k)?;
+            let text = v.as_str().map_or_else(|| v.to_string(), str::to_owned);
+            let text = if text.chars().count() > 80 {
+                format!("{}…", text.chars().take(80).collect::<String>())
+            } else {
+                text
+            };
+            Some(format!("{k} {text:?}"))
+        })
+        .collect();
+    if !shown.is_empty() {
+        line.push_str(&format!(" ({})", shown.join(", ")));
+    }
+    if let Err(e) = outcome {
+        line.push_str(&format!(", which failed: {e}"));
+    }
+    if important {
+        tracing::info!(target: "orrery::audit", "{line}");
+    } else {
+        tracing::debug!(target: "orrery::audit", "{line}");
+    }
+}
+
 fn plural(role: Role) -> &'static str {
     match role {
         Role::Viewer => "a viewer, operator, or admin",

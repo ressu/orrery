@@ -241,6 +241,22 @@ async fn http_request(
             }
         }
         if let Some(resp) = crate::files::http::file_request(&app, &method, uri.path(), &headers).await {
+            if method == Method::DELETE
+                && let Some(rest) = uri.path().strip_prefix("/server/files/")
+            {
+                let rest = percent_encoding::percent_decode_str(rest).decode_utf8_lossy().into_owned();
+                let args = Args([("path".to_owned(), json!(rest))].into_iter().collect());
+                let failed = format!("status {}", resp.status().as_u16());
+                let outcome = if resp.status().is_success() { Ok(()) } else { Err(failed.as_str()) };
+                crate::auth::audit(
+                    &app,
+                    &access,
+                    &format!("/server/files/{rest}"),
+                    RequestType::Delete,
+                    &args,
+                    outcome,
+                );
+            }
             return resp;
         }
         return error_response(404, "Not Found");
@@ -264,9 +280,15 @@ async fn http_request(
         app.auth.log_refusal(&access, &format!("{method} {}", uri.path()), &e);
         return error_response(e.status, &e.message);
     }
+    let audit = (kind != RequestType::Get).then(|| (args.clone(), access.clone()));
     let req =
         Request { endpoint: endpoint.endpoint.clone(), kind, args, transport: Transport::Http, conn: None, access };
-    match (endpoint.handler)(app, req).await {
+    let result = (endpoint.handler)(app.clone(), req).await;
+    if let Some((args, access)) = audit {
+        let outcome = result.as_ref().map(|_| ()).map_err(|e| e.message.as_str());
+        crate::auth::audit(&app, &access, &endpoint.endpoint, kind, &args, outcome);
+    }
+    match result {
         Ok(result) => {
             let body = json!({"result": result});
             ([(header::CONTENT_TYPE, "application/json; charset=UTF-8")], body.to_string()).into_response()

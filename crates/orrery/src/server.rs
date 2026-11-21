@@ -404,15 +404,21 @@ impl App {
         let mut refused = false;
         let result = match crate::auth::authorize(self, &access, &endpoint.endpoint, kind, &args) {
             Ok(()) => {
+                let audit_args = (kind != RequestType::Get).then(|| args.clone());
                 let req = Request {
                     endpoint: endpoint.endpoint.clone(),
                     kind,
                     args,
                     transport: Transport::Websocket,
                     conn,
-                    access,
+                    access: access.clone(),
                 };
-                (endpoint.handler)(self.clone(), req).await
+                let result = (endpoint.handler)(self.clone(), req).await;
+                if let Some(args) = audit_args {
+                    let outcome = result.as_ref().map(|_| ()).map_err(|e| e.message.as_str());
+                    crate::auth::audit(self, &access, &endpoint.endpoint, kind, &args, outcome);
+                }
+                result
             }
             Err(e) => {
                 self.auth.log_refusal(&access, method, &e);
@@ -522,8 +528,7 @@ async fn server_config(app: Arc<App>, _req: Request) -> ApiResult {
 
 /// Restarts orrery, as Moonraker's `server.restart`: it answers first, then shuts down as for
 /// SIGTERM and starts its program again in the same process.
-async fn server_restart(app: Arc<App>, req: Request) -> ApiResult {
-    tracing::info!("Restarting, as {} asked", req.access.requester());
+async fn server_restart(app: Arc<App>, _req: Request) -> ApiResult {
     tokio::spawn(async move {
         // Time for the answer to reach the client before the connections close.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -546,7 +551,7 @@ async fn logs_rollover(app: Arc<App>, req: Request) -> ApiResult {
     if apps.contains(&"moonraker") {
         match tokio::task::spawn_blocking(crate::logfile::rollover).await {
             Ok(Some(Ok(()))) => {
-                tracing::info!("Started a new log file, as {} asked", req.access.requester());
+                tracing::info!("Started a new log file");
                 rolled_over.push("moonraker");
             }
             Ok(Some(Err(e))) => drop(failed.insert("moonraker".into(), json!(e.to_string()))),
@@ -555,7 +560,7 @@ async fn logs_rollover(app: Arc<App>, req: Request) -> ApiResult {
         }
     }
     if apps.contains(&"klipper") {
-        match crate::services::rollover_klipper_log(&app, &req.access.requester()).await {
+        match crate::services::rollover_klipper_log(&app).await {
             Ok(()) => rolled_over.push("klipper"),
             Err(e) => drop(failed.insert("klipper".into(), json!(e))),
         }

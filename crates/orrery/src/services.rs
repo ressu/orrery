@@ -264,7 +264,8 @@ async fn power_action(app: Arc<App>, req: Request) -> ApiResult {
         _ if services.shutdown_action == "halt" => ("Halt", "halt"),
         _ => ("PowerOff", "power off"),
     };
-    // Before the call: the log may not get another chance.
+    // Before the call, and naming who asked, as the audit line would: the log may not get
+    // another chance.
     tracing::info!("Asking logind to {doing} the machine, as {} asked", req.access.requester());
     let call = Call {
         destination: "org.freedesktop.login1",
@@ -324,7 +325,7 @@ const KLIPPER_STOP_WAIT: std::time::Duration = std::time::Duration::from_secs(30
 /// service, renames `klippy.log` to `klippy.log.<time>`, and starts the service again. Unlike
 /// Moonraker, orrery waits for Klipper to stop before the rename, refuses while a print is
 /// paused as well as while it prints, and starts Klipper again when the rename fails.
-pub async fn rollover_klipper_log(app: &App, who: &str) -> Result<(), String> {
+pub async fn rollover_klipper_log(app: &App) -> Result<(), String> {
     let services = &app.machine.services;
     let unit = services.klipper_unit.lock().expect("unit lock").clone().filter(|_| services.enabled);
     let Some(unit) = unit else {
@@ -362,7 +363,7 @@ pub async fn rollover_klipper_log(app: &App, who: &str) -> Result<(), String> {
     let started = bus.call(job("StartUnit")).await.map_err(|e| format!("systemd can't start {service} again: {e}"));
     renamed?;
     started?;
-    tracing::info!("Started a new Klipper log, as {who} asked: the old one is {}", name.to_string_lossy());
+    tracing::info!("Started a new Klipper log: the old one is {}", name.to_string_lossy());
     Ok(())
 }
 
@@ -398,7 +399,6 @@ async fn service_action(app: Arc<App>, req: Request) -> ApiResult {
         if action != "restart" {
             return Err(ApiError::bad_request(format!("Service action '{action}' not available for {name}")));
         }
-        tracing::info!("Restarting, as {} asked", req.access.requester());
         tokio::spawn(async move {
             // Time for the answer to reach the client before the connections close.
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -424,10 +424,7 @@ async fn service_action(app: Arc<App>, req: Request) -> ApiResult {
     // `replace` takes the place of a job that's already waiting for the unit, as systemctl does.
     let args = vec![Value::str(&svc.unit), Value::str("replace")];
     match bus.call(manager(member, args)).await {
-        Ok(_) => {
-            tracing::info!("Asked systemd to {action} {}, as {} asked", svc.name, req.access.requester());
-            Ok(json!("ok"))
-        }
+        Ok(_) => Ok(json!("ok")),
         Err(dbus::Error::Remote { name: error, message }) if is_refusal(&error) => {
             Err(ApiError::new(403, format!("polkit doesn't allow orrery to {action} {name}: {message}")))
         }
