@@ -10,7 +10,7 @@ steps:
   - call: server.connection.identify
     only: [ws]
     params: {client_name: spoolman, version: "0.1", type: agent, url: "https://example.invalid"}
-    expect_error: {code: 400, message: "Agent 'spoolman' is configured in orrery.toml, so it must connect over the unix socket"}
+    expect_error: {code: 400, message: "Agent 'spoolman' is configured in orrery.toml, so it must connect over the unix socket, or send its key"}
   - call: server.connection.identify
     only: [unix]
     params: {client_name: spoolman, version: "0.1", type: agent, url: "https://example.invalid"}

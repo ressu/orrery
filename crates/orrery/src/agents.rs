@@ -383,14 +383,38 @@ pub fn start(app: &Arc<App>) {
     }
 }
 
-/// Checks that a connection may use an agent name. Configured names need the unix socket, the
-/// configured user when there is one, and a process in the agent's unit when it has one.
+/// Checks that a connection may use an agent name. A connection that sent the agent's key may,
+/// from anywhere. Otherwise a configured name needs the unix socket, the configured user when
+/// there is one, and the process orrery started, or a process in the agent's unit. A connection
+/// from another user than orrery's then gets the agent's rights.
 pub async fn check_claim(app: &App, name: &str, conn: ConnId) -> Result<(), ApiError> {
     let Some(config) = app.agents.get(name) else { return Ok(()) };
+    let access = app.client_access(conn);
+    if access.agent.as_deref() == Some(name) {
+        return Ok(());
+    }
+    check_process(app, name, config, conn).await?;
+    if access.role.is_none() {
+        let peer = app.client_peer(conn);
+        let uid = peer.uid.map_or_else(|| "unknown".to_owned(), |u| u.to_string());
+        let access = crate::auth::Access {
+            role: Some(config.role),
+            agent: Some(name.to_owned()),
+            source: format!("agent {name}, unix socket, user {uid}"),
+            ..crate::auth::Access::default()
+        };
+        tracing::info!(target: "orrery::auth", "Connection {conn} is agent {name}: {}", access.describe());
+        app.set_client_access(conn, access);
+    }
+    Ok(())
+}
+
+/// The process checks for a configured agent name, without a key.
+async fn check_process(app: &App, name: &str, config: &AgentConfig, conn: ConnId) -> Result<(), ApiError> {
     let peer = app.client_peer(conn);
     if !peer.unix {
         return Err(ApiError::bad_request(format!(
-            "Agent '{name}' is configured in orrery.toml, so it must connect over the unix socket"
+            "Agent '{name}' is configured in orrery.toml, so it must connect over the unix socket, or send its key"
         )));
     }
     if let Some(user) = config.user

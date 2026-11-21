@@ -432,7 +432,15 @@ async fn call(
         (Transport::Unix, _) => ctx.unix.as_ref().expect("unix client").call(method, params.cloned()).await,
         (Transport::Http, Some(h)) => {
             let body = h.body.as_ref().map(|b| substitute(b, &ctx.vars));
-            ctx.http.request(&h.verb, &h.path, h.query.as_deref(), body.as_ref()).await
+            let headers: Vec<(String, String)> = h
+                .headers
+                .iter()
+                .map(|(k, v)| {
+                    let v = substitute(v, &ctx.vars);
+                    (k.clone(), v.as_str().map_or_else(|| v.to_string(), str::to_owned))
+                })
+                .collect();
+            ctx.http.request(&h.verb, &h.path, h.query.as_deref(), body.as_ref(), &headers).await
         }
         (Transport::Http, None) => ctx.http.call(method, params).await,
     }

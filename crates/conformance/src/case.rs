@@ -157,6 +157,9 @@ pub struct HttpOverride {
     pub query: Option<String>,
     #[serde(default)]
     pub body: Option<Value>,
+    /// Request headers, such as `X-Api-Key: ${key}` or `Origin`. Values may use saved values.
+    #[serde(default)]
+    pub headers: Map<String, Value>,
 }
 
 /// Waits for a websocket notification whose `params` match.

@@ -1,0 +1,19 @@
+name: proxy headers from a trusted proxy name the client that's judged
+klippy: none
+transports: [http]
+config: |
+  [authorization]
+  trusted_clients:
+    127.0.0.0/8
+    192.168.1.0/24
+steps:
+  # The runner connects from 127.0.0.1, a trusted address, so it counts as a trusted proxy.
+  - call: server.info
+    http: {verb: GET, path: /server/info, headers: {X-Real-Ip: 10.1.1.1}}
+    expect_error: {code: 401}
+  - call: server.info
+    http: {verb: GET, path: /server/info, headers: {X-Real-Ip: 192.168.1.5}}
+    expect: {klippy_connected: false}
+  - call: server.info
+    http: {verb: GET, path: /server/info, headers: {X-Forwarded-For: 10.1.1.1}}
+    expect_error: {code: 401}

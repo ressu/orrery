@@ -48,6 +48,12 @@ pub async fn start(app: &Arc<App>, path: &Path) -> Result<Option<UnixSocket>> {
         std::fs::remove_file(path).with_context(|| format!("removing the old socket {}", path.display()))?;
     }
     let listener = UnixListener::bind(path).with_context(|| format!("creating the unix socket {}", path.display()))?;
+    // orrery's user and group may connect, whatever the umask. Other users than orrery's own
+    // get only what a key or an agent table gives them, so an agent that runs as another user
+    // can connect once that user is in orrery's group.
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o660))
+        .with_context(|| format!("making the unix socket {} orrery's own", path.display()))?;
     let app = app.clone();
     tokio::spawn(async move {
         loop {

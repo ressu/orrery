@@ -199,8 +199,9 @@ impl Server {
             if let Some(status) = self.child.try_wait()? {
                 bail!("{} exited during startup ({status})", self.kind.as_str());
             }
+            // A 401 means it's up, but doesn't trust the runner: cases about authorization.
             if let Ok(resp) = client.get(format!("{}/server/info", self.base_url())).send().await
-                && resp.status().is_success()
+                && (resp.status().is_success() || resp.status() == reqwest::StatusCode::UNAUTHORIZED)
             {
                 return Ok(());
             }

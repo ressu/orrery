@@ -54,6 +54,10 @@ impl Database {
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
         let path = dir.join("orrery.redb");
         let db = redb::Database::create(&path).with_context(|| format!("opening {}", path.display()))?;
+        // It holds the API keys, so only orrery's own user may read it. Backups copy the mode.
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("making {} readable by orrery's user only", path.display()))?;
         let tx = db.begin_write()?;
         tx.open_table(NAMESPACES)?;
         tx.open_table(LOCAL)?;

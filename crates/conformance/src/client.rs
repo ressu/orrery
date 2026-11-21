@@ -272,7 +272,14 @@ impl HttpClient {
     }
 
     /// Sends an explicit request (`http:` override in a case).
-    pub async fn request(&self, verb: &str, path: &str, query: Option<&str>, body: Option<&Value>) -> Result<Outcome> {
+    pub async fn request(
+        &self,
+        verb: &str,
+        path: &str,
+        query: Option<&str>,
+        body: Option<&Value>,
+        headers: &[(String, String)],
+    ) -> Result<Outcome> {
         let mut url = format!("{}{path}", self.base);
         if let Some(q) = query {
             url.push('?');
@@ -280,6 +287,9 @@ impl HttpClient {
         }
         let verb = reqwest::Method::from_bytes(verb.as_bytes()).context("bad HTTP verb")?;
         let mut req = self.client.request(verb, url);
+        for (name, value) in headers {
+            req = req.header(name.as_str(), value.as_str());
+        }
         if let Some(body) = body {
             req = req.json(body);
         }

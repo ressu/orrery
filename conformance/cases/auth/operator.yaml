@@ -1,0 +1,37 @@
+name: a trusted network with the operator role prints, but can't change config or the machine
+targets: [orrery]
+klippy: ready
+transports: [ws, http]
+files:
+  config/orrery.toml: |
+    [authorization.trusted_clients]
+    "127.0.0.0/8" = "operator"
+  config/printer.cfg: "[printer]\n"
+  gcodes/cube.gcode: "G28\n"
+steps:
+  - call: access.info
+    expect: {trusted: true}
+  - call: server.files.list
+    params: {root: config}
+    expect: {$contains: [{path: printer.cfg}]}
+  - call: server.files.delete_file
+    only: [ws]
+    params: {path: config/printer.cfg}
+    expect_error: {code: 403}
+  - call: server.files.delete_file
+    only: [ws]
+    params: {path: gcodes/../config/printer.cfg}
+    expect_error: {code: 403}
+  - call: server.files.copy
+    params: {source: gcodes/cube.gcode, dest: config/cube.cfg}
+    expect_error: {code: 403}
+  - call: server.files.copy
+    params: {source: gcodes/cube.gcode, dest: gcodes/copy.gcode}
+    expect: {item: {path: copy.gcode}}
+  - call: machine.reboot
+    expect_error: {code: 403, message: "$regex:needs the admin role"}
+  - call: access.get_api_key
+    expect_error: {code: 403}
+  - call: server.database.post_item
+    params: {namespace: fluidd, key: theme, value: dark}
+    expect: {namespace: fluidd}

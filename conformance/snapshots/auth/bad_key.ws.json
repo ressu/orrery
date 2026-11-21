@@ -1,0 +1,9 @@
+[
+  {
+    "step": 1,
+    "call": "server.connection.identify",
+    "error": {
+      "code": -32602
+    }
+  }
+]

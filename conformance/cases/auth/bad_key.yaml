@@ -1,0 +1,7 @@
+name: a wrong key in server.connection.identify is refused
+klippy: none
+transports: [ws]
+steps:
+  - call: server.connection.identify
+    params: {client_name: test, version: "0.1", type: web, url: "https://example.invalid", api_key: orr_notakey}
+    expect_error: {code: -32602, message: Invalid API Key}

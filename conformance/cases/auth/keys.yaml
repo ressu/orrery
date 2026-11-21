@@ -1,0 +1,51 @@
+name: keys declared in orrery.toml, with their roles, rotation, and the Origin check
+targets: [orrery]
+klippy: ready
+transports: [http]
+files:
+  config/orrery.toml: |
+    [key.dashboard]
+    role = "viewer"
+    [key.homeassistant]
+    role = "operator"
+steps:
+  # The runner is on a trusted network with admin, so it can read keys.
+  - call: orrery.access.key.get
+    http: {verb: GET, path: /orrery/access/key/get, query: "name=dashboard"}
+    expect: {name: dashboard, key: "$regex:^orr_[a-z2-7]{32}$"}
+    save: {viewer: key}
+  - call: orrery.access.key.get
+    http: {verb: GET, path: /orrery/access/key/get, query: "name=nobody"}
+    expect_error: {code: 404}
+  - call: access.get_api_key
+    expect: "$regex:^[0-9a-f]{32}$"
+  # A page on another site gets nothing from the trusted network...
+  - call: server.info
+    http: {verb: GET, path: /server/info, headers: {Origin: "http://evil.example"}}
+    expect_error: {code: 401, message: Unauthorized}
+  # ...but a key still works, and its role decides.
+  - call: server.info
+    http: {verb: GET, path: /server/info, headers: {Origin: "http://evil.example", X-Api-Key: "${viewer}"}}
+    expect: {klippy_connected: true}
+  - call: access.get_user
+    http: {verb: GET, path: /access/user, headers: {X-Api-Key: "${viewer}"}}
+    expect: {username: _API_KEY_USER_}
+  - call: printer.print.pause
+    http: {verb: POST, path: /printer/print/pause, headers: {X-Api-Key: "${viewer}"}}
+    expect_error: {code: 403, message: "$regex:needs the operator role"}
+  - call: printer.gcode.script
+    http: {verb: POST, path: /printer/gcode/script, query: "script=G28", headers: {X-Api-Key: "${viewer}"}}
+    expect_error: {code: 403}
+  - call: server.info
+    http: {verb: GET, path: /server/info, headers: {X-Api-Key: "orr_notakey"}}
+    expect_error: {code: 401, message: Invalid API Key}
+  # After a rotation, the old key fails and the new one works.
+  - call: orrery.access.key.rotate
+    http: {verb: POST, path: /orrery/access/key/rotate, body: {name: dashboard}}
+    save: {rotated: key}
+  - call: server.info
+    http: {verb: GET, path: /server/info, headers: {X-Api-Key: "${viewer}"}}
+    expect_error: {code: 401, message: Invalid API Key}
+  - call: server.info
+    http: {verb: GET, path: /server/info, headers: {X-Api-Key: "${rotated}"}}
+    expect: {klippy_connected: true}

@@ -1,0 +1,21 @@
+[
+  {
+    "step": 1,
+    "call": "access.info",
+    "result": {
+      "default_source": "string",
+      "available_sources": [
+        "string"
+      ],
+      "login_required": "bool",
+      "trusted": "bool"
+    }
+  },
+  {
+    "step": 2,
+    "call": "server.info",
+    "error": {
+      "code": -32602
+    }
+  }
+]

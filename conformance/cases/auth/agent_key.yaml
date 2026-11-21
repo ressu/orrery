@@ -1,0 +1,33 @@
+name: an agent's key lets it claim its name over the websocket, with the agent role
+targets: [orrery]
+klippy: none
+transports: [ws]
+files:
+  config/orrery.toml: |
+    [agent.helper]
+    [agent.other]
+steps:
+  # The runner is admin on its trusted network, so it can read the agent's key.
+  - call: orrery.access.key.get
+    params: {name: agent.helper}
+    save: {key: key}
+  - call: server.database.post_item
+    params: {namespace: other, key: secret, value: 1}
+    expect: {namespace: other}
+  # Identifying with the key gives this connection the agent's rights, and its name.
+  - call: server.connection.identify
+    params: {client_name: helper, version: "0.1", type: agent, url: "https://example.invalid", api_key: "${key}"}
+    expect: {connection_id: $type:number}
+  - call: server.extensions.list
+    expect: {agents: [{name: helper}]}
+  - call: server.database.post_item
+    params: {namespace: helper, key: state, value: 1}
+    expect: {namespace: helper}
+  - call: server.database.get_item
+    params: {namespace: other, key: secret}
+    expect_error: {code: 403}
+  - call: server.database.post_item
+    params: {namespace: fluidd, key: theme, value: dark}
+    expect_error: {code: 403, message: "$regex:needs the operator role"}
+  - call: printer.print.pause
+    expect_error: {code: 403}

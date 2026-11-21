@@ -78,8 +78,9 @@ orrery protects against these:
 - **Web pages in the user's browser.** A page on another site can make the browser send
   requests to the printer. The browser comes from a trusted address, so Moonraker would accept
   them. See [Browser requests](#browser-requests).
-- **Other users on the printer's computer.** The unix socket and the database are readable only
-  by orrery's user (see [The unix socket](#the-unix-socket)).
+- **Other users on the printer's computer.** The database is readable only by orrery's user,
+  and on the unix socket another user gets only what a key or an agent table gives it (see
+  [The unix socket](#the-unix-socket)).
 - **A leaked key.** A key has only its role's rights, so a leaked Home Assistant key can't
   reboot the printer.
 - **Guessed keys.** A key has 160 random bits, which can't be guessed by trying.
@@ -300,9 +301,10 @@ know, so the check would mostly get in the way.
 
 - **orrery's own user and root are `admin`.** That's as in Moonraker, which skips authorization
   on its unix socket entirely (`moonraker/common.py:353,438`).
-- **orrery sets the socket's mode to `0600`,** readable by its own user only, instead of
-  depending on the umask. Today it depends on the umask (`crates/orrery/src/unix_socket.rs:50`).
-  The database gets `0600` too.
+- **orrery sets the socket's mode to `0660`,** for its own user and group, instead of
+  depending on the umask. Rights are checked by user id anyway, so an agent that runs as
+  another user can connect once that user is in orrery's group. The database gets `0600`, for
+  orrery's user only, because it holds the keys; its backups copy that mode.
 - **Another user who can connect** gets only what a key or a configured agent grants: the
   `agent` role, for an agent whose table names that user with `user =`. Moonraker would give
   that user full rights. This is a difference, and goes in `docs/regressions.md`.
