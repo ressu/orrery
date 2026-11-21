@@ -417,9 +417,8 @@ note carry over to it:
 - **`access.users.list` needs `admin`,** since it names every key. Moonraker lets any
   authorized client read it.
 
-Until logins are built, `access.login` and the user endpoints return an error that says logins
-aren't there yet. `access.oneshot_token` hands out tokens that orrery doesn't check, so Fluidd
-on a network with a role can build download links.
+The logins note has the rest: local users, tokens, one-shot tokens, `force_logins`, and the
+lockout are built (2026-11-21).
 
 ## Moonraker compatibility
 

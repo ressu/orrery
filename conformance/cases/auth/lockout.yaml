@@ -1,0 +1,26 @@
+name: failed logins lock out the address they came from, and only that address
+targets: [orrery]
+klippy: none
+transports: [http]
+config: |
+  [authorization]
+  trusted_clients:
+    127.0.0.0/8
+  max_login_attempts: 2
+steps:
+  - call: access.post_user
+    params: {username: alice, password: secret1}
+    expect: {username: alice}
+  - call: access.login
+    http: {verb: POST, path: /access/login, headers: {X-Forwarded-For: 10.1.1.1}, body: {username: alice, password: wrong}}
+    expect_error: {code: 401, message: Wrong user name or password}
+  - call: access.login
+    http: {verb: POST, path: /access/login, headers: {X-Forwarded-For: 10.1.1.1}, body: {username: nobody, password: wrong}}
+    expect_error: {code: 401, message: Wrong user name or password}
+  # Now even the right password is refused from that address.
+  - call: access.login
+    http: {verb: POST, path: /access/login, headers: {X-Forwarded-For: 10.1.1.1}, body: {username: alice, password: secret1}}
+    expect_error: {code: 401, message: "Too many failed logins from this address. Try again in 15 minutes."}
+  - call: access.login
+    http: {verb: POST, path: /access/login, headers: {X-Forwarded-For: 10.2.2.2}, body: {username: alice, password: secret1}}
+    expect: {username: alice}

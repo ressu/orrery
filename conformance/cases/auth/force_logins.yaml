@@ -1,0 +1,22 @@
+name: with force_logins, networks give no role, but the unix socket keeps its rights
+targets: [orrery]
+klippy: none
+transports: [ws, http, unix]
+config: |
+  [authorization]
+  force_logins: True
+  trusted_clients:
+    127.0.0.0/8
+steps:
+  - call: access.info
+    only: [ws, http]
+    expect: {login_required: true, trusted: false}
+  - call: server.info
+    only: [ws]
+    expect_error: {code: -32602, message: Unauthorized}
+  - call: server.info
+    only: [http]
+    expect_error: {code: 401}
+  - call: server.info
+    only: [unix]
+    expect: {klippy_connected: false}

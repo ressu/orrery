@@ -1,0 +1,49 @@
+name: a one-shot token gives one download its rights, from the same address, once
+targets: [orrery]
+klippy: none
+transports: [http]
+config: |
+  [authorization]
+  trusted_clients:
+    127.0.0.0/8
+files:
+  gcodes/cube.gcode: "G28\n"
+steps:
+  # The runner connects from 127.0.0.1, which also makes it a trusted proxy, so X-Forwarded-For
+  # names a client that has no rights from its network.
+  - call: access.post_user
+    params: {username: alice, password: secret1}
+    expect: {username: alice}
+  - call: access.login
+    http: {verb: POST, path: /access/login, headers: {X-Forwarded-For: 10.1.1.1}, body: {username: alice, password: secret1}}
+    expect: {username: alice}
+    save: {jwt: token}
+  - download: gcodes/cube.gcode
+    headers: {X-Forwarded-For: 10.1.1.1}
+    expect_status: 401
+  - call: access.oneshot_token
+    http: {verb: GET, path: /access/oneshot_token, headers: {X-Forwarded-For: 10.1.1.1, Authorization: "Bearer ${jwt}"}}
+    expect: "$regex:^[A-Z2-7]{32}$"
+    save: {once: ""}
+  - download: gcodes/cube.gcode?token=${once}
+    headers: {X-Forwarded-For: 10.1.1.1}
+    expect_body: "G28\n"
+  # Used up.
+  - download: gcodes/cube.gcode?token=${once}
+    headers: {X-Forwarded-For: 10.1.1.1}
+    expect_status: 401
+  # From another address.
+  - call: access.oneshot_token
+    http: {verb: GET, path: /access/oneshot_token, headers: {X-Forwarded-For: 10.1.1.1, Authorization: "Bearer ${jwt}"}}
+    save: {other: ""}
+  - download: gcodes/cube.gcode?token=${other}
+    headers: {X-Forwarded-For: 10.2.2.2}
+    expect_status: 401
+  # Expired after 5 seconds.
+  - call: access.oneshot_token
+    http: {verb: GET, path: /access/oneshot_token, headers: {X-Forwarded-For: 10.1.1.1, Authorization: "Bearer ${jwt}"}}
+    save: {late: ""}
+  - sleep_ms: 5500
+  - download: gcodes/cube.gcode?token=${late}
+    headers: {X-Forwarded-For: 10.1.1.1}
+    expect_status: 401

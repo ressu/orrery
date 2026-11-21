@@ -33,9 +33,11 @@ change how safe or complete orrery is to run.
   missing or different:
   - Proxy logins and login sources that are agents, such as LDAP, aren't built yet.
     `access.login` with another `source` than `moonraker` is refused, and `[ldap]` is ignored.
-  - `force_logins` and `max_login_attempts` are ignored, for now.
-  - `access.oneshot_token` hands out tokens that orrery doesn't check yet: a download link
-    works only for a client that has rights without it.
+  - `force_logins` applies whenever it's set. Moonraker applies it only once a user exists.
+  - After `max_login_attempts` failed logins, an address is locked out for `login_lockout`
+    minutes, 15 by default, with 401 "Too many failed logins from this address. Try again in
+    15 minutes." Moonraker's lockout lasts until a restart, with 401 "Unauthorized, Maximum
+    Login Attempts Reached".
   - A failed login says "Wrong user name or password", with 401, whatever was wrong. Moonraker
     says "Unregistered User" or "Invalid Password", with 400, which tells a guesser which
     names exist.
@@ -55,7 +57,8 @@ change how safe or complete orrery is to run.
   - Passwords are hashed with Argon2id. Moonraker's PBKDF2 hashes are checked, and replaced at
     the next login.
 - **Why:** see `docs/design/2026-11-21-logins.md`.
-- **Cases:** `auth/login` (both servers), `auth/users` and `auth/compat` (orrery only), and `access/trusted`.
+- **Cases:** `auth/login` (both servers); `auth/users`, `auth/compat`, `auth/oneshot`,
+  `auth/lockout`, and `auth/force_logins` (orrery only); and `access/trusted`.
 
 ### auth-roles: rights come in roles, and some requests need more than Moonraker asks
 

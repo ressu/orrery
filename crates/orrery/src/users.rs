@@ -10,8 +10,8 @@
 //! - Tokens are Moonraker's JWTs, signed with EdDSA, with a signing key per user.
 
 use std::collections::HashMap;
-use std::sync::RwLock;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{Mutex, RwLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use base64::Engine;
@@ -92,6 +92,15 @@ pub struct Users {
     /// How long a refresh token lasts: `login_timeout` days.
     refresh_secs: u64,
     users: RwLock<HashMap<String, User>>,
+    /// `force_logins`: networks give no role.
+    pub force_logins: bool,
+    /// `max_login_attempts`: failed logins from one address before its lockout.
+    max_logins: Option<u32>,
+    /// `login_lockout`: how long a lockout lasts.
+    lockout: Duration,
+    /// Failed logins by client address, and when its lockout ends. Not stored: a restart
+    /// clears it.
+    failed: Mutex<HashMap<String, (u32, Option<Instant>)>>,
 }
 
 impl Users {
@@ -113,6 +122,23 @@ impl Users {
         };
         // orrery's own option: read only when it's set, so server.config shows only Moonraker's.
         let local_logins = !section.has("local_logins") || section.get_bool("local_logins", true)?;
+        let max_logins = match section.has("max_login_attempts") {
+            true => {
+                let n = section.get_int("max_login_attempts", 0)?;
+                Some(u32::try_from(n).ok().filter(|n| *n > 0).with_context(|| {
+                    format!(
+                        "[authorization] max_login_attempts: {n} isn't a number of logins. Use 1 or more, such as 5"
+                    )
+                })?)
+            }
+            false => None,
+        };
+        // orrery's own option, like local_logins.
+        let minutes = if section.has("login_lockout") { section.get_int("login_lockout", 15)? } else { 15 };
+        if minutes < 1 {
+            bail!("[authorization] login_lockout: {minutes} isn't a number of minutes. Use 1 or more, such as 15");
+        }
+        let force_logins = section.get_bool("force_logins", false)?;
         let days = section.get_int("login_timeout", 90)?;
         if days < 1 {
             bail!("[authorization] login_timeout: {days} isn't a number of days. Use 1 or more, such as 90");
@@ -136,6 +162,10 @@ impl Users {
         }
         tx.commit()?;
         Ok(Self {
+            force_logins,
+            max_logins,
+            lockout: Duration::from_secs(minutes as u64 * 60),
+            failed: Mutex::new(HashMap::new()),
             roles,
             default_role,
             local_logins,
@@ -170,6 +200,58 @@ impl Users {
         } else {
             tracing::info!(target: "orrery::auth", "Logins: local passwords are off (local_logins = false)");
         }
+        if self.force_logins {
+            tracing::info!(target: "orrery::auth", "Logins: force_logins is on, so networks give no role");
+            if !self.local_logins {
+                tracing::warn!(
+                    target: "orrery::auth",
+                    "force_logins is on, but local_logins is off, so browsers have no way to log in. Only keys and the unix socket have rights."
+                );
+            }
+        }
+        if let Some(max) = self.max_logins {
+            tracing::info!(
+                target: "orrery::auth",
+                "Logins: {max} failed logins from one address lock it out for {} minutes",
+                self.lockout.as_secs() / 60
+            );
+        }
+    }
+
+    /// Refuses a login from an address that's locked out.
+    pub fn check_lockout(&self, client: &str) -> Result<(), ApiError> {
+        let mut failed = self.failed.lock().expect("failed logins lock");
+        let Some((_, Some(until))) = failed.get(client).copied() else { return Ok(()) };
+        let now = Instant::now();
+        if now >= until {
+            failed.remove(client);
+            return Ok(());
+        }
+        let minutes = (until - now).as_secs().div_ceil(60);
+        let unit = if minutes == 1 { "minute" } else { "minutes" };
+        Err(ApiError::new(401, format!("Too many failed logins from this address. Try again in {minutes} {unit}.")))
+    }
+
+    /// Counts a failed login, and starts a lockout at `max_login_attempts`.
+    pub fn login_failed(&self, client: &str) {
+        let Some(max) = self.max_logins else { return };
+        let mut failed = self.failed.lock().expect("failed logins lock");
+        let entry = failed.entry(client.to_owned()).or_insert((0, None));
+        entry.0 += 1;
+        if entry.0 >= max && entry.1.is_none() {
+            entry.1 = Some(Instant::now() + self.lockout);
+            tracing::warn!(
+                target: "orrery::auth",
+                "Locked out logins from {client} for {} minutes, after {} failed logins",
+                self.lockout.as_secs() / 60,
+                entry.0
+            );
+        }
+    }
+
+    /// A successful login clears the address's count.
+    pub fn login_succeeded(&self, client: &str) {
+        self.failed.lock().expect("failed logins lock").remove(client);
     }
 
     /// A user's role, from the config.
@@ -524,6 +606,30 @@ mod tests {
         drop(db);
         let (users, _db) = setup("", "", dir.path());
         assert_eq!(users.get("sami").unwrap().source, "local");
+    }
+
+    #[test]
+    fn lockouts_count_per_address_and_end() {
+        let dir = tempfile::tempdir().unwrap();
+        let (users, _db) = setup("[authorization]\nmax_login_attempts: 2\n", "", dir.path());
+        users.login_failed("10.1.1.1");
+        assert!(users.check_lockout("10.1.1.1").is_ok());
+        users.login_failed("10.1.1.1");
+        let e = users.check_lockout("10.1.1.1").unwrap_err();
+        assert_eq!(e.message, "Too many failed logins from this address. Try again in 15 minutes.");
+        assert!(users.check_lockout("10.2.2.2").is_ok());
+        // Once the lockout has ended, the address starts again from zero.
+        users.failed.lock().unwrap().get_mut("10.1.1.1").unwrap().1 = Some(Instant::now());
+        assert!(users.check_lockout("10.1.1.1").is_ok());
+        users.login_failed("10.1.1.1");
+        assert!(users.check_lockout("10.1.1.1").is_ok());
+        // Without max_login_attempts, nothing is counted.
+        let dir = tempfile::tempdir().unwrap();
+        let (users, _db) = setup("", "", dir.path());
+        for _ in 0..10 {
+            users.login_failed("10.1.1.1");
+        }
+        assert!(users.check_lockout("10.1.1.1").is_ok());
     }
 
     #[test]

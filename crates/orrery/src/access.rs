@@ -266,7 +266,24 @@ async fn users_list(app: Arc<App>, _req: Request) -> ApiResult {
 }
 
 /// `access.login`: checks a local user's password, and logs the connection in.
+/// `access.login`, with the lockout around it: a wrong name, password, or source counts as a
+/// failed login, as in Moonraker, and so does a login that's locked out.
 async fn login(app: Arc<App>, req: Request) -> ApiResult {
+    let client = describe_client(&req);
+    if let Err(e) = app.users.check_lockout(&client) {
+        tracing::info!(target: "orrery::auth", "Refused a login from {client}: it's locked out");
+        return Err(e);
+    }
+    let result = try_login(&app, &req).await;
+    match &result {
+        Ok(_) => app.users.login_succeeded(&client),
+        Err(e) if e.status == 401 => app.users.login_failed(&client),
+        Err(_) => {}
+    }
+    result
+}
+
+async fn try_login(app: &Arc<App>, req: &Request) -> ApiResult {
     let name = req.args.str("username")?;
     let password = req.args.str("password")?;
     // orrery's name for local users and Moonraker's both work.
@@ -274,7 +291,7 @@ async fn login(app: Arc<App>, req: Request) -> ApiResult {
         Some(name) => app.compat.parse_source(&name.to_lowercase()),
         None => LOCAL_SOURCE.to_owned(),
     };
-    let client = describe_client(&req);
+    let client = describe_client(req);
     let refuse = |why: &str| {
         tracing::info!(target: "orrery::auth", "Refused a login as {name} from {client}: {why}");
         ApiError::new(401, "Wrong user name or password")
@@ -434,12 +451,14 @@ fn describe_client(req: &Request) -> String {
     if req.access.client.is_empty() { req.access.source.clone() } else { req.access.client.clone() }
 }
 
-async fn oneshot_token(_app: Arc<App>, _req: Request) -> ApiResult {
-    // Moonraker: base32 of 20 random bytes.
-    let mut bytes = [0u8; 20];
-    bytes[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
-    bytes[16..].copy_from_slice(&uuid::Uuid::new_v4().as_bytes()[..4]);
-    Ok(json!(base32(&bytes)))
+/// `access.oneshot_token`: a token for one HTTP request in the next 5 seconds, from the same
+/// address, with this connection's rights, as in Moonraker. Fluidd adds it to download and
+/// upload links when its connection isn't trusted.
+async fn oneshot_token(app: Arc<App>, req: Request) -> ApiResult {
+    // Moonraker's form: base32 of 20 random bytes.
+    let token = base32(&crate::keys::random_bytes::<20>()?);
+    app.auth.issue_oneshot(token.clone(), req.access.clone());
+    Ok(json!(token))
 }
 
 async fn info(app: Arc<App>, req: Request) -> ApiResult {
@@ -448,7 +467,7 @@ async fn info(app: Arc<App>, req: Request) -> ApiResult {
     Ok(json!({
         "default_source": local,
         "available_sources": sources,
-        "login_required": false,
+        "login_required": app.users.force_logins,
         "trusted": req.access.trusted,
     }))
 }

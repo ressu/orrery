@@ -312,7 +312,12 @@ async fn run_step(ctx: &mut Ctx, step: &Step, index: usize, result: &mut RunResu
             Ok(())
         }
         Step::Download(d) => {
-            let (status, content_type, body) = ctx.http.download(&d.download).await?;
+            let path = match substitute(&Value::String(d.download.clone()), &ctx.vars) {
+                Value::String(p) => p,
+                other => other.to_string(),
+            };
+            let headers: Vec<(String, String)> = d.headers.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            let (status, content_type, body) = ctx.http.download(&path, &headers).await?;
             result.transcript.push(json!({"step": index + 1, "download": d.download, "status": status}));
             if status != d.expect_status {
                 return Err(anyhow!("download {}: expected status {}, got {status}", d.download, d.expect_status));

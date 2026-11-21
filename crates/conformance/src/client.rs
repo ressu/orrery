@@ -315,9 +315,13 @@ impl HttpClient {
 
     /// Downloads a file. Returns the status and body.
     /// Returns the status, the `Content-Type` header, and the body.
-    pub async fn download(&self, path: &str) -> Result<(u16, String, Vec<u8>)> {
+    pub async fn download(&self, path: &str, headers: &[(String, String)]) -> Result<(u16, String, Vec<u8>)> {
         let url = format!("{}/server/files/{path}", self.base);
-        let resp = self.client.get(url).timeout(CALL_TIMEOUT).send().await?;
+        let mut req = self.client.get(url).timeout(CALL_TIMEOUT);
+        for (name, value) in headers {
+            req = req.header(name, value);
+        }
+        let resp = req.send().await?;
         let status = resp.status().as_u16();
         let content_type = resp
             .headers()

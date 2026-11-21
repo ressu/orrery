@@ -71,6 +71,7 @@ async fn websocket(
         access
     };
     let base = base_access(&app, peer, &headers).unwrap_or_else(refused);
+    let base = with_oneshot(&app, base, query.as_deref());
     let user = token_user(&app, &headers, query.as_deref()).unwrap_or_else(|e| {
         refused(e);
         None
@@ -87,11 +88,22 @@ pub fn request_access(
     headers: &HeaderMap,
     query: Option<&str>,
 ) -> Result<crate::auth::Access, ApiError> {
-    let base = base_access(app, peer, headers)?;
+    let base = with_oneshot(app, base_access(app, peer, headers)?, query);
     Ok(match token_user(app, headers, query)? {
         Some((name, role)) => base.with_user(&name, role),
         None => base,
     })
+}
+
+/// A request's access, or a one-shot token's when `?token=` gives more, as in Moonraker. A
+/// token that isn't one is ignored, as in Moonraker: the request keeps its own rights.
+fn with_oneshot(app: &App, access: crate::auth::Access, query: Option<&str>) -> crate::auth::Access {
+    let token = form_urlencoded::parse(query.unwrap_or_default().as_bytes())
+        .filter(|(k, _)| k == "token")
+        .last()
+        .map(|(_, v)| v.into_owned());
+    let Some(granted) = token.and_then(|t| app.auth.use_oneshot(t.trim(), &access.client)) else { return access };
+    if granted.role > access.role { granted } else { access }
 }
 
 /// A request's access without its token.

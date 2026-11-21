@@ -312,8 +312,12 @@ pub struct UploadStep {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DownloadStep {
-    /// `<root>/<path>`, for example `gcodes/dir/cube.gcode`.
+    /// `<root>/<path>`, for example `gcodes/dir/cube.gcode`. It can end in a query, such as
+    /// `?token=${token}`, with saved values.
     pub download: String,
+    /// Headers to send, such as `X-Forwarded-For`.
+    #[serde(default)]
+    pub headers: std::collections::BTreeMap<String, String>,
     /// The HTTP status to expect. Defaults to 200.
     #[serde(default = "default_status")]
     pub expect_status: u16,

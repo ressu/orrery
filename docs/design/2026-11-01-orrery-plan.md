@@ -356,8 +356,9 @@ Tiers, in order:
 In order, as of 2026-11-21:
 
 1. **Authorization: user logins.** Roles, trusted networks and proxies, and API keys are in
-   (see [2026-11-20-authorization.md](2026-11-20-authorization.md)). Logins, JWTs, and one-shot
-   tokens are next: see [2026-11-21-logins.md](2026-11-21-logins.md).
+   (see [2026-11-20-authorization.md](2026-11-20-authorization.md)). Local logins, JWTs, one-shot
+   tokens, `force_logins`, and the lockout are in too. The import of Moonraker's users and proxy
+   logins are next: see [2026-11-21-logins.md](2026-11-21-logins.md).
 2. **A real print on bluev2,** to check job state, history, and Spoolman's usage end to end.
 3. **The thumbnail memory check.**
 4. **`sudo orrery setup`,** which writes `orrery.service`, an `orrery-admin` group, and a polkit

@@ -13,7 +13,7 @@
 //!   request whose `Origin` isn't allowed gets nothing from its network.
 //! - A key, sent as `X-Api-Key` or as `api_key` in `server.connection.identify`.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::net::IpAddr;
 use std::sync::Mutex;
@@ -599,7 +599,20 @@ pub struct Auth {
     logged: Mutex<HashSet<String>>,
     /// Refusals since the last hourly total, and when that total was logged.
     refusals: Mutex<(u64, Instant)>,
+    /// `force_logins`: networks give no role, so browsers have to log in.
+    force_logins: bool,
+    /// One-shot tokens: the rights of the connection that asked, and when each expires.
+    oneshots: Mutex<HashMap<String, Oneshot>>,
 }
+
+/// A one-shot token's rights, for one request from the same address.
+struct Oneshot {
+    access: Access,
+    expires: Instant,
+}
+
+/// How long a one-shot token lasts, as in Moonraker (`ONESHOT_TIMEOUT`).
+const ONESHOT_LIFETIME: std::time::Duration = std::time::Duration::from_secs(5);
 
 impl Auth {
     /// Reads the settings. Returns warnings for entries orrery skips.
@@ -691,6 +704,8 @@ impl Auth {
                 own_uid,
                 logged: Mutex::new(HashSet::new()),
                 refusals: Mutex::new((0, Instant::now())),
+                force_logins: section.get_bool("force_logins", false)?,
+                oneshots: Mutex::new(HashMap::new()),
             },
             warnings,
         ))
@@ -828,7 +843,37 @@ impl Auth {
         if !origin_ok {
             return Access::none(format!("{client} is in network {network}, but the request's Origin isn't allowed"));
         }
+        if self.force_logins {
+            return Access::none(format!("{client} is in network {network}, but force_logins is on"));
+        }
         Access { role: Some(*role), trusted: true, source: format!("network {network}"), ..Access::default() }
+    }
+
+    /// Keeps a one-shot token with the rights of the connection that asked for it.
+    pub fn issue_oneshot(&self, token: String, access: Access) {
+        let now = Instant::now();
+        let mut oneshots = self.oneshots.lock().expect("one-shot lock");
+        oneshots.retain(|_, o| o.expires > now);
+        oneshots.insert(token, Oneshot { access, expires: now + ONESHOT_LIFETIME });
+    }
+
+    /// A one-shot token's rights, used up. `None` for a token that isn't one, has expired, or
+    /// was issued to another address.
+    pub fn use_oneshot(&self, token: &str, client: &str) -> Option<Access> {
+        let oneshot = self.oneshots.lock().expect("one-shot lock").remove(token)?;
+        if oneshot.expires <= Instant::now() {
+            tracing::debug!(target: "orrery::auth", "A one-shot token from {client} had expired");
+            return None;
+        }
+        if oneshot.access.client != client {
+            tracing::info!(
+                target: "orrery::auth",
+                "Refused a one-shot token from {client}: it was issued to {}",
+                oneshot.access.client
+            );
+            return None;
+        }
+        Some(oneshot.access)
     }
 
     /// Access over the unix socket, by the peer's user id.
