@@ -4,7 +4,8 @@
 //! - `[authorization.keys]`, which lists the keys for each role, such as
 //!   `operator = ["homeassistant"]`. Each key's name is the one listed.
 //! - Each `[agent.<name>]`, with the agent's rights. Its name is `agent.<name>`.
-//! - `moonraker`: Fluidd's API key, with the admin role, unless `enable_api_key` is off.
+//! - `moonraker`: Moonraker's one API key, which Fluidd shows, with the role
+//!   `[moonraker_compat] legacy_api_key` gives it ([`crate::compat`]).
 //!
 //! orrery makes each key's secret on startup, and keeps the secrets in a redb table of their
 //! own, which `server.database.*` can't reach. A secret whose key is gone from the config is
@@ -21,6 +22,7 @@ use sha2::{Digest, Sha256};
 
 use crate::agents::Agents;
 use crate::auth::{Access, Role};
+use crate::compat::MoonrakerCompat;
 use crate::config::Config;
 use crate::database::Database;
 
@@ -60,8 +62,8 @@ pub struct Keys {
 impl Keys {
     /// Reads the declared keys, makes the missing secrets, and deletes the secrets of keys that
     /// are gone.
-    pub fn new(config: &Config, agents: &Agents, db: &Database) -> Result<Self> {
-        let specs = specs(config, agents)?;
+    pub fn new(config: &Config, agents: &Agents, compat: &MoonrakerCompat, db: &Database) -> Result<Self> {
+        let specs = specs(config, agents, compat)?;
         let tx = db.raw().begin_write()?;
         let mut secrets = HashMap::new();
         {
@@ -172,7 +174,7 @@ fn describe_role(spec: &Spec) -> String {
 }
 
 /// The keys the config declares.
-fn specs(config: &Config, agents: &Agents) -> Result<Vec<Spec>> {
+fn specs(config: &Config, agents: &Agents, compat: &MoonrakerCompat) -> Result<Vec<Spec>> {
     let mut specs = Vec::new();
     if let Some(section) = config.section_names("key ").first() {
         bail!(
@@ -201,8 +203,8 @@ fn specs(config: &Config, agents: &Agents) -> Result<Vec<Spec>> {
             }
             if name == MOONRAKER_KEY {
                 bail!(
-                    "[authorization.keys] {role_name}: the name moonraker is for Fluidd's API key, which orrery \
-                     makes itself"
+                    "[authorization.keys] {role_name}: the name moonraker is for Moonraker's API key, which \
+                     [moonraker_compat] legacy_api_key sets"
                 );
             }
             if let Some(other) = specs.iter().find(|s: &&Spec| s.name == name) {
@@ -217,8 +219,8 @@ fn specs(config: &Config, agents: &Agents) -> Result<Vec<Spec>> {
     for agent in agents.configs() {
         specs.push(Spec { name: format!("agent.{}", agent.name), role: agent.role, agent: Some(agent.name.clone()) });
     }
-    if config.section("authorization").get_bool("enable_api_key", true)? {
-        specs.push(Spec { name: MOONRAKER_KEY.into(), role: Role::Admin, agent: None });
+    if let Some(role) = compat.api_key {
+        specs.push(Spec { name: MOONRAKER_KEY.into(), role, agent: None });
     }
     Ok(specs)
 }
@@ -270,7 +272,7 @@ mod tests {
         let toml = "[authorization.keys]\noperator = [\"homeassistant\"]\n[agent.spoolman]\ncall_role = \"admin\"\n";
         let (config, db) = setup("", toml, dir.path());
         let (agents, _) = Agents::new(&config, None).unwrap();
-        let keys = Keys::new(&config, &agents, &db).unwrap();
+        let keys = Keys::new(&config, &agents, &MoonrakerCompat::new(&config).unwrap(), &db).unwrap();
         let ha = keys.get("homeassistant").unwrap();
         assert!(ha.len() == 32 && ha.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()), "{ha}");
         assert_eq!(keys.get(MOONRAKER_KEY).unwrap().len(), 32);
@@ -290,10 +292,10 @@ mod tests {
 
         // Secrets survive a restart; a key removed from the config is deleted. orrery.toml can
         // turn the moonraker key off as well as moonraker.conf can.
-        let toml = "[authorization]\nenable_api_key = false\n[authorization.keys]\noperator = \"homeassistant\"\n";
+        let toml = "[moonraker_compat]\nlegacy_api_key = false\n[authorization.keys]\noperator = \"homeassistant\"\n";
         let (config, db) = setup("", toml, dir.path());
         let (agents, _) = Agents::new(&config, None).unwrap();
-        let keys = Keys::new(&config, &agents, &db).unwrap();
+        let keys = Keys::new(&config, &agents, &MoonrakerCompat::new(&config).unwrap(), &db).unwrap();
         assert_eq!(keys.get("homeassistant").as_deref(), Some(new.as_str()));
         assert!(keys.get("agent.spoolman").is_none());
         assert!(keys.get(MOONRAKER_KEY).is_none());
@@ -311,7 +313,7 @@ mod tests {
         ] {
             let (config, db) = setup("", toml, dir.path());
             let (agents, _) = Agents::new(&config, None).unwrap();
-            assert!(Keys::new(&config, &agents, &db).is_err(), "{toml}");
+            assert!(Keys::new(&config, &agents, &MoonrakerCompat::new(&config).unwrap(), &db).is_err(), "{toml}");
         }
     }
 }

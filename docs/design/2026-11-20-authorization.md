@@ -190,13 +190,12 @@ role = "agent"   # the default, which a table can raise
   - In the CLI: `orrery key list`, `orrery key show <name>`, and `orrery key rotate <name>`. The CLI talks to the
     running orrery over the unix socket, so it's `admin` by its user id. It can't open the
     database itself, because redb locks the file while orrery runs.
-- **Fluidd's API key is the built-in key `moonraker`,** with the `admin` role. Fluidd's
-  `access.get_api_key` and `access.post_api_key` get and rotate it. `enable_api_key` turns it
-  on or off, as in Moonraker (`authorization.py:133`), and it's on by default. To turn it off
-  once every client has its own key or login, set `enable_api_key = false` in `orrery.toml`'s
-  `[authorization]`. From a trusted
-  network with `operator`, Fluidd's API key dialog shows an error, because reading the key needs
-  `admin`.
+- **Moonraker's one API key is the built-in key `moonraker`,** which Fluidd shows. Fluidd's
+  `access.get_api_key` and `access.post_api_key` get and rotate it. It's part of Moonraker
+  compatibility, not a key like the others: clients find it through Fluidd, not through
+  `orrery.toml`. So `[moonraker_compat] legacy_api_key` sets it (user, 2026-11-21; see
+  [Moonraker compatibility](#moonraker-compatibility)). From a trusted network with
+  `operator`, Fluidd's API key dialog shows an error, because reading the key needs `admin`.
 - **Format:** Moonraker's, 32 lowercase hex characters, for every key (user, 2026-11-21).
   orrery fills them with 128 random bits; Moonraker uses a UUID without dashes
   (`authorization.py:155`). Clients check the format: Home Assistant's integration accepts
@@ -422,6 +421,33 @@ Until logins are built, `access.login` and the user endpoints return an error th
 aren't there yet. `access.oneshot_token` hands out tokens that orrery doesn't check, so Fluidd
 on a network with a role can build download links.
 
+## Moonraker compatibility
+
+`[moonraker_compat]` in `orrery.toml` holds what orrery does only so that clients written for
+Moonraker work (user, 2026-11-21). OctoPrint's compatibility will get a section of its own.
+
+```toml
+[moonraker_compat]
+enabled = true              # the default with a moonraker.conf, or with this section
+legacy_api_key = "admin"    # the moonraker key's role; false: no Moonraker API key
+user_source_fix = true      # Moonraker's replies call local users' source "moonraker"
+```
+
+- **Compatibility is on when orrery reads a `moonraker.conf`, or `orrery.toml` has the
+  section.** `enabled = false` turns every feature off. Each feature can also be turned off on
+  its own.
+- **`legacy_api_key`** gives the `moonraker` key a role, `admin` by default, as in Moonraker.
+  The name says what it is: Moonraker's one key, kept for clients that use it, while every
+  other key is declared in `[authorization.keys]` (user, 2026-11-21). Without it,
+  `moonraker.conf`'s `enable_api_key` decides, so a migrated printer keeps its key. Set
+  `legacy_api_key = false` once every client has its own key or login.
+- **`user_source_fix`** makes Moonraker's replies call local users' source `moonraker`. orrery
+  calls them `local`, wherever they came from, since orrery owns them (user, 2026-11-21). Fluidd
+  offers to delete a user or change a password only for the source `moonraker`
+  (`fluidd/src/components/settings/auth/AuthSettings.vue:61`,
+  `src/components/layout/AppUserMenu.vue:38`), so the fix is on by default. orrery's own
+  endpoints and the CLI always say `local`.
+
 ## Config and migration
 
 How each of Moonraker's `[authorization]` options (`authorization.py:128-200`) maps over:
@@ -430,7 +456,7 @@ How each of Moonraker's `[authorization]` options (`authorization.py:128-200`) m
 |---|---|
 | `trusted_clients` | As in Moonraker, with `admin`. `[authorization.networks]` in `orrery.toml` replaces it, with a role per network |
 | `cors_domains` | As in Moonraker, and also checked on the websocket and for trusted requests |
-| `enable_api_key` | Turns the `moonraker` key on or off |
+| `enable_api_key` | The default of `[moonraker_compat] legacy_api_key`: `False` means no `moonraker` key. In `orrery.toml`, it's an error that names `legacy_api_key` |
 | `[server] use_xheaders` | As in Moonraker: `false` turns proxy headers off |
 | `trusted_proxies` | orrery's own, in `orrery.toml`. Not set: none, or the hosts in `trusted_clients` when `[authorization.networks]` isn't set |
 | `force_logins` | Ignored until logins; orrery logs that it ignores it |

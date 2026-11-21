@@ -8,6 +8,7 @@ pub mod agent_process;
 mod agents;
 mod api;
 mod auth;
+mod compat;
 pub mod config;
 mod data_store;
 pub mod database;

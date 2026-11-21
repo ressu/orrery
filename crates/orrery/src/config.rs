@@ -208,6 +208,11 @@ impl Config {
         Some(out)
     }
 
+    /// Whether `orrery.toml` sets an option, leaving `moonraker.conf` out.
+    pub fn toml_has(&self, section: &str, key: &str) -> bool {
+        self.typed.iter().any(|(n, o)| n == section && o.iter().any(|(k, _)| k == key))
+    }
+
     /// The names of sections that start with `prefix`, such as every `[webcam <name>]`, from
     /// both files.
     pub fn section_names(&self, prefix: &str) -> Vec<String> {
@@ -263,6 +268,11 @@ impl Config {
     }
 
     /// `server.config`'s `files`: each file's name relative to the main file's folder.
+    /// Whether a `moonraker.conf` was read, besides `orrery.toml`.
+    pub fn read_moonraker_conf(&self) -> bool {
+        self.files.iter().any(|(path, _)| Some(path) != self.toml_file.as_ref())
+    }
+
     pub fn files(&self) -> Value {
         let base = self.files.first().and_then(|(p, _)| p.parent()).map(Path::to_path_buf).unwrap_or_default();
         let list: Vec<Value> = self

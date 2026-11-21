@@ -103,6 +103,7 @@ pub struct App {
     pub auth: crate::auth::Auth,
     pub keys: crate::keys::Keys,
     pub users: crate::users::Users,
+    pub compat: crate::compat::MoonrakerCompat,
     pub extensions: crate::extensions::Extensions,
     pub agents: crate::agents::Agents,
     warnings: Mutex<Vec<String>>,
@@ -151,7 +152,9 @@ impl App {
             tracing::warn!("{w}");
         }
         warnings.extend(agent_warnings);
-        let keys = crate::keys::Keys::new(&config, &agents, &database)?;
+        let compat = crate::compat::MoonrakerCompat::new(&config)?;
+        compat.log_settings();
+        let keys = crate::keys::Keys::new(&config, &agents, &compat, &database)?;
         keys.log_settings();
         let users = crate::users::Users::new(&config, |name| keys.exists(name), &database)?;
         users.log_settings();
@@ -178,6 +181,7 @@ impl App {
             auth,
             keys,
             users,
+            compat,
             extensions: crate::extensions::Extensions::default(),
             agents,
             warnings: Mutex::new(warnings),

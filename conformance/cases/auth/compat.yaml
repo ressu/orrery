@@ -1,0 +1,27 @@
+name: "[moonraker_compat] can drop the legacy API key and the user source fix"
+targets: [orrery]
+klippy: none
+transports: [ws, http]
+files:
+  config/orrery.toml: |
+    [moonraker_compat]
+    legacy_api_key = false
+    user_source_fix = false
+steps:
+  - call: access.get_api_key
+    expect_error: {code: 400, message: "orrery has no Moonraker API key: [moonraker_compat] legacy_api_key is off"}
+  - call: access.info
+    expect: {default_source: local, available_sources: [local]}
+  - call: access.post_user
+    params: {username: alice, password: secret1}
+    expect: {username: alice, source: local}
+  - call: access.users.list
+    expect: {users: [{username: alice, source: local}]}
+  - call: access.login
+    params: {username: alice, password: secret1, source: local}
+    expect: {username: alice, source: local}
+  # With Moonraker's name for local users turned off, it isn't a source.
+  - call: access.login
+    only: [http]
+    params: {username: alice, password: secret1, source: moonraker}
+    expect_error: {code: 401, message: orrery has no moonraker login source}

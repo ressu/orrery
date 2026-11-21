@@ -3,7 +3,8 @@
 //! - Roles come from the config: `[authorization.users]` lists the users for each role, such
 //!   as `admin = ["sami"]`. A user who isn't listed gets `default_role`, or nothing. Without the
 //!   list, local users are admin, as every Moonraker user is.
-//! - Local users (source `moonraker`) live in a redb table of their own, with their password
+//! - Local users (source `local`, which Moonraker's replies call `moonraker`; see
+//!   [`crate::compat`]) live in a redb table of their own, with their password
 //!   hash and signing key. New passwords are hashed with Argon2id; Moonraker's PBKDF2 hashes,
 //!   from an import, are checked and replaced at the next login.
 //! - Tokens are Moonraker's JWTs, signed with EdDSA, with a signing key per user.
@@ -29,9 +30,7 @@ use crate::keys::{constant_time_eq, hex, random_bytes};
 /// `user name -> user`, as JSON.
 pub(crate) const USERS: TableDefinition<&str, &str> = TableDefinition::new("users");
 
-/// The source of users with a password that orrery checks. Moonraker's name, which Fluidd
-/// sends and imported users have.
-pub const LOCAL_SOURCE: &str = "moonraker";
+pub use crate::compat::LOCAL_SOURCE;
 
 /// Names Moonraker keeps for itself.
 const RESERVED: &[&str] = &["_API_KEY_USER_", "_TRUSTED_USER_"];
@@ -126,8 +125,12 @@ impl Users {
             let table = tx.open_table(USERS)?;
             for entry in table.iter()? {
                 let (name, value) = entry?;
-                let user: User = serde_json::from_str(value.value())
+                let mut user: User = serde_json::from_str(value.value())
                     .with_context(|| format!("the stored user {} can't be read", name.value()))?;
+                // Users stored before 2026-11-21 have Moonraker's name for the source.
+                if user.source == "moonraker" {
+                    user.source = LOCAL_SOURCE.to_owned();
+                }
                 users.insert(name.value().to_owned(), user);
             }
         }
@@ -520,7 +523,7 @@ mod tests {
         drop(users);
         drop(db);
         let (users, _db) = setup("", "", dir.path());
-        assert_eq!(users.get("sami").unwrap().source, "moonraker");
+        assert_eq!(users.get("sami").unwrap().source, "local");
     }
 
     #[test]

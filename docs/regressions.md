@@ -48,10 +48,14 @@ change how safe or complete orrery is to run.
   - `access.users.list` also lists the keys, with source `orrery`, the `moonraker` key
     among them. Moonraker lists only users, and hides its API key user.
   - Changing a password ends the user's other sessions. Moonraker keeps their tokens valid.
+  - orrery calls local users' source `local`. Moonraker's replies say `moonraker`, as Moonraker
+    does, unless `[moonraker_compat] user_source_fix = false`. Moonraker's API key is set by
+    `[moonraker_compat] legacy_api_key`, which can also give it a lower role; `enable_api_key` in
+    `moonraker.conf` is its default.
   - Passwords are hashed with Argon2id. Moonraker's PBKDF2 hashes are checked, and replaced at
     the next login.
 - **Why:** see `docs/design/2026-11-21-logins.md`.
-- **Cases:** `auth/login` (both servers), `auth/users` (orrery only), and `access/trusted`.
+- **Cases:** `auth/login` (both servers), `auth/users` and `auth/compat` (orrery only), and `access/trusted`.
 
 ### auth-roles: rights come in roles, and some requests need more than Moonraker asks
 

@@ -323,8 +323,11 @@ fn key_command(socket: &Path, action: &KeyAction) -> ExitCode {
                 .iter()
                 .map(|k| {
                     let name = k["name"].as_str().unwrap_or_default();
-                    let note =
-                        if name == "moonraker" { "Fluidd's API key; enable_api_key = false turns it off" } else { "" };
+                    let note = if name == "moonraker" {
+                        "Moonraker's API key; [moonraker_compat] legacy_api_key = false turns it off"
+                    } else {
+                        ""
+                    };
                     vec![name.to_owned(), k["role"].as_str().unwrap_or_default().to_owned(), note.to_owned()]
                 })
                 .collect();

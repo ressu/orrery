@@ -107,7 +107,7 @@ pub fn register_endpoints(app: &Arc<App>) {
 async fn api_key(app: Arc<App>, req: Request) -> ApiResult {
     let name = crate::keys::MOONRAKER_KEY;
     if !app.keys.exists(name) {
-        return Err(ApiError::bad_request("The API key is off: [authorization] enable_api_key is False"));
+        return Err(ApiError::bad_request("orrery has no Moonraker API key: [moonraker_compat] legacy_api_key is off"));
     }
     if req.kind == RequestType::Post {
         return rotate(&app, &req, name);
@@ -183,7 +183,7 @@ fn get_user(app: &App, req: &Request) -> ApiResult {
     if let Some(user) = req.access.user.as_deref().and_then(|name| app.users.get(name)) {
         return Ok(json!({
             "username": user.username,
-            "source": user.source,
+            "source": app.compat.source_name(&user.source),
             "created_on": user.created_on,
         }));
     }
@@ -223,7 +223,7 @@ async fn post_user(app: Arc<App>, req: Request) -> ApiResult {
     Ok(json!({
         "username": name,
         "token": tokens.token,
-        "source": LOCAL_SOURCE,
+        "source": app.compat.source_name(LOCAL_SOURCE),
         "refresh_token": tokens.refresh_token,
         "action": "user_created",
     }))
@@ -258,7 +258,7 @@ async fn users_list(app: Arc<App>, _req: Request) -> ApiResult {
         .users
         .list()
         .into_iter()
-        .map(|u| json!({"username": u.username, "source": u.source, "created_on": u.created_on}))
+        .map(|u| json!({"username": u.username, "source": app.compat.source_name(&u.source), "created_on": u.created_on}))
         .collect();
     let since = *TRUSTED_SINCE.get_or_init(crate::users::now_secs);
     for name in app.keys.names() {
@@ -271,7 +271,11 @@ async fn users_list(app: Arc<App>, _req: Request) -> ApiResult {
 async fn login(app: Arc<App>, req: Request) -> ApiResult {
     let name = req.args.str("username")?;
     let password = req.args.str("password")?;
-    let source = req.args.opt_str("source")?.unwrap_or_else(|| LOCAL_SOURCE.to_owned()).to_lowercase();
+    // orrery's name for local users and Moonraker's both work.
+    let source = match req.args.opt_str("source")? {
+        Some(name) => app.compat.parse_source(&name.to_lowercase()),
+        None => LOCAL_SOURCE.to_owned(),
+    };
     let client = describe_client(&req);
     let refuse = |why: &str| {
         tracing::info!(target: "orrery::auth", "Refused a login as {name} from {client}: {why}");
@@ -284,7 +288,10 @@ async fn login(app: Arc<App>, req: Request) -> ApiResult {
     local_logins_on(&app.users)?;
     let Some(user) = app.users.get(&name) else { return Err(refuse("no such user")) };
     if user.source != LOCAL_SOURCE {
-        return Err(ApiError::new(401, format!("The user {name} logs in with the {} source", user.source)));
+        return Err(ApiError::new(
+            401,
+            format!("The user {name} logs in with the {} source", app.compat.source_name(&user.source)),
+        ));
     }
     let Some(stored) = user.password.clone() else { return Err(refuse("the user has no password")) };
     let checked = {
@@ -314,7 +321,7 @@ async fn login(app: Arc<App>, req: Request) -> ApiResult {
     Ok(json!({
         "username": name,
         "token": tokens.token,
-        "source": LOCAL_SOURCE,
+        "source": app.compat.source_name(LOCAL_SOURCE),
         "refresh_token": tokens.refresh_token,
         "action": "user_logged_in",
     }))
@@ -342,7 +349,9 @@ async fn refresh_jwt(app: Arc<App>, req: Request) -> ApiResult {
     })?;
     let token = app.users.access_token(&name).map_err(|_| ApiError::new(401, "User not logged in"))?;
     let source = app.users.get(&name).map(|u| u.source).unwrap_or_default();
-    Ok(json!({"username": name, "token": token, "source": source, "action": "user_jwt_refresh"}))
+    Ok(
+        json!({"username": name, "token": token, "source": app.compat.source_name(&source), "action": "user_jwt_refresh"}),
+    )
 }
 
 /// `access.user.password`: a user changes their own password. Their other sessions end; this
@@ -437,9 +446,10 @@ async fn oneshot_token(_app: Arc<App>, _req: Request) -> ApiResult {
 }
 
 async fn info(app: Arc<App>, req: Request) -> ApiResult {
-    let sources: Vec<&str> = if app.users.local_logins { vec![LOCAL_SOURCE] } else { vec![] };
+    let local = app.compat.source_name(LOCAL_SOURCE);
+    let sources: Vec<&str> = if app.users.local_logins { vec![local] } else { vec![] };
     Ok(json!({
-        "default_source": LOCAL_SOURCE,
+        "default_source": local,
         "available_sources": sources,
         "login_required": false,
         "trusted": req.access.trusted,
