@@ -371,3 +371,7 @@ In order, as of 2026-11-21:
 8. **How Fluidd's login flows are triggered,** to learn which kinds of login orrery can offer
    without changing Fluidd, OIDC above all. See "OIDC (later)" in
    [2026-11-21-logins.md](2026-11-21-logins.md).
+9. **Patches for the frontends,** from the entries in
+   [frontend-issues.md](../frontend-issues.md), to send upstream. The first is
+   `fluidd-login-error`: Fluidd's login form hides the server's reason, so a locked-out user
+   isn't told to wait.

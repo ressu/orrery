@@ -46,6 +46,23 @@ filed, add its link; when it's fixed upstream, remove the entry.
 - **Fix:** load the list and the key only when the section is opened, and hide the parts the
   server refuses.
 
+### fluidd-login-error: a refused login always says "Invalid credentials"
+
+- **Frontend:** Fluidd 1.38.1, from its source and on bluev2, 2026-11-21.
+- **What happens:** when orrery locks an address out after `max_login_attempts`, Fluidd still
+  says "Invalid credentials". orrery's reason, "Too many failed logins from this address. Try
+  again in 15 minutes.", never shows, so the user doesn't know they're locked out or for how
+  long. The same goes for every other reason, such as a user that `orrery.toml` gives no role.
+- **Cause:** the login form catches any error and shows a fixed text
+  (`src/components/common/Login.vue:24-28,149-150`). Fluidd's error toasts show a server's
+  message only once the connection is ready (`src/store/socket/actions.ts:297-308`), and at
+  the login screen it isn't. So no reply from orrery can reach the user.
+- **Fix:** show the server's message in the login form's alert, at least for a lockout. orrery
+  keeps "Wrong user name or password" for a wrong name or password, so the message tells a
+  guesser nothing more.
+- **Upstream:** not filed yet. It waits until we start sending orrery's patches upstream
+  (user, 2026-11-21).
+
 ### fluidd-save-error: a refused save shows no error
 
 - **Frontend:** Fluidd 1.38.1, with orrery on bluev2, 2026-11-21.
