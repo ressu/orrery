@@ -76,6 +76,9 @@ pub struct Access {
     pub key: Option<String>,
     /// Why, for the log: "network 192.168.1.0/24", "key homeassistant", and so on.
     pub source: String,
+    /// Who the client is, for the log: its address as orrery judged it, such as
+    /// "192.168.1.157", or "process 1234, user 1000" on the unix socket.
+    pub client: String,
 }
 
 impl Access {
@@ -648,12 +651,16 @@ impl Auth {
     /// Logs a refused request: the first time for each client and reason, and after that an
     /// hourly total while refusals keep coming.
     pub fn log_refusal(&self, access: &Access, method: &str, error: &ApiError) {
-        let first =
-            self.logged.lock().expect("logged lock").insert(format!("refused {} {}", access.source, error.message));
+        let who = if access.client.is_empty() {
+            access.source.clone()
+        } else {
+            format!("{} ({})", access.client, access.source)
+        };
+        let first = self.logged.lock().expect("logged lock").insert(format!("refused {who} {}", error.message));
         if first {
             // The client is told only the kind of source; the log names it, for the admin.
             let message = error.message.trim_end_matches('.');
-            tracing::warn!(target: "orrery::auth", "Refused {method} from {}: {message}. Later refusals like it are only counted.", access.source);
+            tracing::warn!(target: "orrery::auth", "Refused {method} from {who}: {message}. Later refusals like it are only counted.");
             return;
         }
         let mut refusals = self.refusals.lock().expect("refusals lock");

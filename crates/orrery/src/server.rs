@@ -237,14 +237,21 @@ impl App {
         for (id, c) in self.clients.lock().expect("clients lock").iter_mut() {
             if c.access.key.as_deref() == Some(name) {
                 tracing::info!(target: "orrery::auth", "Connection {id} loses the rights of key {name}, which was rotated");
-                c.access = crate::auth::Access::none(format!("key {name} was rotated"));
+                c.access = crate::auth::Access {
+                    client: c.access.client.clone(),
+                    ..crate::auth::Access::none(format!("key {name} was rotated"))
+                };
             }
         }
     }
 
     /// Gives a connection new rights: from a key it sent, or an agent name it claimed.
-    pub fn set_client_access(&self, id: ConnId, access: crate::auth::Access) {
+    /// Gives a connection new rights. It's still the same client, so the log keeps naming it.
+    pub fn set_client_access(&self, id: ConnId, mut access: crate::auth::Access) {
         if let Some(c) = self.clients.lock().expect("clients lock").get_mut(&id) {
+            if access.client.is_empty() {
+                access.client = c.access.client.clone();
+            }
             c.access = access;
         }
     }

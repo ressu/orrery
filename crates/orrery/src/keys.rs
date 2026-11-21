@@ -123,6 +123,7 @@ impl Keys {
             trusted: false,
             key: Some(spec.name.clone()),
             source: format!("key {}", spec.name),
+            client: String::new(),
         })
     }
 

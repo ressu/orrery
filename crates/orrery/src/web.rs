@@ -65,7 +65,7 @@ async fn websocket(
     let from = describe_peer(peer, app.auth.client_address(peer.ip(), &headers), &headers);
     // As in Moonraker, a websocket with a wrong key still opens, with no rights.
     let access = request_access(&app, peer, &headers).unwrap_or_else(|e| {
-        let access = crate::auth::Access::none(format!("{from}: {e}"));
+        let access = refused_access(&app, peer, &headers);
         app.auth.log_refusal(&access, "the websocket", &e);
         access
     });
@@ -76,10 +76,20 @@ async fn websocket(
 /// network's, by the client's address, as long as a browser's `Origin` is allowed. A key that
 /// isn't one is an error, as in Moonraker.
 pub fn request_access(app: &App, peer: SocketAddr, headers: &HeaderMap) -> Result<crate::auth::Access, ApiError> {
-    if let Some(key) = headers.get("x-api-key").and_then(|v| v.to_str().ok()).filter(|k| !k.trim().is_empty()) {
-        return app.keys.lookup(key.trim()).ok_or_else(|| ApiError::new(401, "Invalid API Key"));
+    let mut access = match headers.get("x-api-key").and_then(|v| v.to_str().ok()).filter(|k| !k.trim().is_empty()) {
+        Some(key) => app.keys.lookup(key.trim()).ok_or_else(|| ApiError::new(401, "Invalid API Key"))?,
+        None => network_access(app, peer, headers),
+    };
+    access.client = app.auth.client_address(peer.ip(), headers).to_string();
+    Ok(access)
+}
+
+/// No rights, for a request whose key isn't one, with the client named for the log.
+pub fn refused_access(app: &App, peer: SocketAddr, headers: &HeaderMap) -> crate::auth::Access {
+    crate::auth::Access {
+        client: app.auth.client_address(peer.ip(), headers).to_string(),
+        ..crate::auth::Access::none("a wrong API key")
     }
-    Ok(network_access(app, peer, headers))
 }
 
 fn network_access(app: &App, peer: SocketAddr, headers: &HeaderMap) -> crate::auth::Access {
@@ -162,7 +172,7 @@ async fn http_request(
     let access = match request_access(&app, peer, &headers) {
         Ok(a) => a,
         Err(e) => {
-            let access = crate::auth::Access::none(peer.ip().to_string());
+            let access = refused_access(&app, peer, &headers);
             app.auth.log_refusal(&access, &format!("{method} {}", uri.path()), &e);
             return error_response(e.status, &e.message);
         }
