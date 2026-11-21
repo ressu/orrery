@@ -46,9 +46,11 @@ change how safe or complete orrery is to run.
   and the API key are `admin`, so they work as before. The differences:
   - Keys are declared in `orrery.toml`, as `[key.<name>]` with a role, and each agent table
     has a key. orrery makes the secrets. `access.get_api_key`, `access.post_api_key`, and
-    `access.users.list` need `admin`; Moonraker allows any authorized client. So Fluidd on an
-    `operator` network can show two errors when it connects, and an empty user list, and works
-    otherwise.
+    `access.users.list` need `admin`; Moonraker allows any authorized client.
+  - orrery doesn't report the `authorization` component in `server.info`, so Fluidd hides
+    its Authentication settings, with the users and the API key, and doesn't ask for them
+    when it connects. Fluidd's link to the section still shows; see `fluidd-auth-nav` in
+    `docs/frontend-issues.md`.
   - A browser request from a network with a role whose `Origin` is neither its own `Host` nor in
     `cors_domains` gets no rights. Moonraker checks `Origin` only on the websocket, so a page on
     another site can send gcode with a form post.
