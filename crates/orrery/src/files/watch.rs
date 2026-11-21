@@ -605,7 +605,14 @@ async fn announce_changes(app: Arc<App>, mut rx: mpsc::UnboundedReceiver<Change>
             }
             Change::Away { .. } => continue,
         };
-        tracing::info!("Changed outside orrery: {action} {root}/{}", app.files.relative_path(&root, &path));
+        // Other programs change files all day, and logs all the time, so these lines would
+        // mostly wear the SD card: `-v` shows them, and RUST_LOG=trace the logs folder's too.
+        let rel = app.files.relative_path(&root, &path);
+        if root == "logs" {
+            tracing::trace!("Changed outside orrery: {action} {root}/{rel}");
+        } else {
+            tracing::debug!("Changed outside orrery: {action} {root}/{rel}");
+        }
     }
 }
 
