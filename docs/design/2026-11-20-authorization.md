@@ -153,27 +153,34 @@ that isn't listed needs `admin`.
   agent's table can change that with `call_role` (see [Agents](#agents)).
 
 `server.config` shows the contents of `moonraker.conf` and `orrery.toml`, at `viewer`, because
-Fluidd reads it on every connection. That's another reason secrets never go in those files: key
-tables hold a name and a role, and the secret is in the database.
+Fluidd reads it on every connection. That's another reason secrets never go in those files: the
+config holds only key names and roles, and the secrets are in the database.
 
 ## Keys
 
-A key is declared in `orrery.toml`, as an agent is, with the same `role` setting:
+Keys are listed by role in `orrery.toml`, as networks are (user, 2026-11-21). A key has
+only a role, so a table for each key would be more to write than it holds. An agent's key comes
+from its own table, with the agent's `role`:
 
 ```toml
-[key.homeassistant]
-role = "operator"
+[authorization.keys]
+operator = ["homeassistant", "mobileraker"]
+viewer = "dashboard"
 
 [agent.spoolman]
 command = "~/orrery/agents/orrery-spoolman"
 role = "agent"   # the default, which a table can raise
 ```
 
-- **orrery makes the secrets.** On startup it generates one for each `[key.<name>]` and
-  `[agent.<name>]` table that has none. Removing a table removes its key: orrery deletes the
-  secret on the next start. So the config is the full list of keys, and anyone who reads it sees
-  every key and its role. A `[key.<name>]` key is named `<name>`, and an agent's key is named
-  `agent.<name>`, such as `agent.spoolman`. A rotated key's open connections lose its rights.
+- **orrery makes the secrets.** On startup it generates one for each key in
+  `[authorization.keys]` and each `[agent.<name>]` table that has none. Removing a key from the
+  config removes it: orrery deletes the secret on the next start. So the config is the full list
+  of keys, and anyone who reads it sees every key and its role. A key in `[authorization.keys]`
+  is named as listed, and an agent's key is named `agent.<name>`, such as `agent.spoolman`.
+- **A name may be listed under only one role.** A name listed twice, a name that isn't a role,
+  and the reserved name `moonraker` stop orrery at startup. The old `[key.<name>]` tables do
+  too, with an error that shows the new form. If keys get settings beyond a role later, such as
+  scopes, a table per key can come back then. A rotated key's open connections lose its rights.
 - **Get and rotate, nothing else.** An admin can read a key again, or replace it with a new
   one. To create or delete a key, edit `orrery.toml`.
   - Over the API: `orrery.access.key.get {name}` and `orrery.access.key.rotate {name}`, at
@@ -400,8 +407,8 @@ Out of scope for now, along with LDAP. These are what they'll need, so keys don'
 - User management, because Fluidd has it: listing, adding, and deleting users, changing your
   own password, and showing and rotating the API key (`fluidd/src/components/settings/auth/`).
 - **Keys appear in `access.users.list`** (user, 2026-11-21), with the source `orrery`: each
-  `[key.<name>]` as `<name>`, and each agent as `agent.<name>`. The `moonraker` key stays out
-  of the list, as Moonraker hides `_API_KEY_USER_`. These users have keys, not passwords, so
+  key in `[authorization.keys]` under its name, and each agent as `agent.<name>`. The
+  `moonraker` key stays out of the list, as Moonraker hides `_API_KEY_USER_`. These users have keys, not passwords, so
   logging in, changing a password, and deleting are refused, with an error that points to
   `orrery.toml`. A local user can't take a key's name.
   - Fluidd greys out the delete button for any source but `moonraker`, which suits keys.

@@ -130,7 +130,7 @@ fn rotate(app: &App, req: &Request, name: &str) -> ApiResult {
 }
 
 fn no_key(name: &str) -> ApiError {
-    ApiError::not_found(format!("No key named {name}: keys are declared in orrery.toml, as [key.<name>]"))
+    ApiError::not_found(format!("No key named {name}: keys are listed by role in orrery.toml's [authorization.keys]"))
 }
 
 async fn user(_app: Arc<App>, req: Request) -> ApiResult {

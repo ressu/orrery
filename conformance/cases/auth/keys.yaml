@@ -4,10 +4,9 @@ klippy: ready
 transports: [http]
 files:
   config/orrery.toml: |
-    [key.dashboard]
-    role = "viewer"
-    [key.homeassistant]
-    role = "operator"
+    [authorization.keys]
+    viewer = ["dashboard"]
+    operator = ["homeassistant"]
 steps:
   # The runner is on a trusted network with admin, so it can read keys.
   - call: orrery.access.key.get

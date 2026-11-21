@@ -44,7 +44,7 @@ change how safe or complete orrery is to run.
 - **orrery:** each client has a role, `viewer`, `operator`, or `admin`, and each endpoint needs
   one; see `docs/design/2026-11-20-authorization.md`. With a `moonraker.conf`, trusted networks
   and the API key are `admin`, so they work as before. The differences:
-  - Keys are declared in `orrery.toml`, as `[key.<name>]` with a role, and each agent table
+  - Keys are listed by role in `orrery.toml`'s `[authorization.keys]`, and each agent table
     has a key. orrery makes the secrets. `access.get_api_key`, `access.post_api_key`, and
     `access.users.list` need `admin`; Moonraker allows any authorized client.
   - orrery doesn't report the `authorization` component in `server.info`, so Fluidd hides

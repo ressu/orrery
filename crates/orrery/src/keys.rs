@@ -1,8 +1,8 @@
 //! API keys (docs/design/2026-11-20-authorization.md, "Keys").
 //!
 //! The config is the list of keys:
-//! - `[key.<name>]` with a `role`, such as `[key.homeassistant] role = "operator"`. Its name is
-//!   `<name>`.
+//! - `[authorization.keys]`, which lists the keys for each role, such as
+//!   `operator = ["homeassistant"]`. Each key's name is the one listed.
 //! - Each `[agent.<name>]`, with the agent's rights. Its name is `agent.<name>`.
 //! - `moonraker`: Fluidd's API key, with the admin role, unless `enable_api_key` is off.
 //!
@@ -16,6 +16,7 @@ use std::sync::RwLock;
 
 use anyhow::{Result, bail};
 use redb::{ReadableTable, TableDefinition};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::agents::Agents;
@@ -162,22 +163,45 @@ fn describe_role(spec: &Spec) -> String {
 /// The keys the config declares.
 fn specs(config: &Config, agents: &Agents) -> Result<Vec<Spec>> {
     let mut specs = Vec::new();
-    for section in config.section_names("key ") {
-        let name = section["key ".len()..].to_owned();
-        if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
-            bail!("[{section}]: a key name may use letters, digits, '_' and '-'");
-        }
-        if name == MOONRAKER_KEY {
-            bail!("[{section}]: the name moonraker is for Fluidd's API key, which orrery makes itself");
-        }
-        let s = config.section(&section);
-        let Some(role) = s.get_opt_str("role") else {
-            bail!("[{section}]: a key needs a role: \"viewer\", \"operator\", or \"admin\"");
+    if let Some(section) = config.section_names("key ").first() {
+        bail!(
+            "[{section}]: keys are now listed by role in [authorization.keys], such as \
+             operator = [\"homeassistant\"]. Move the key there."
+        );
+    }
+    // The keys for each role, such as operator = ["homeassistant", "mobileraker"].
+    for (role_name, list) in config.section_json("authorization keys").unwrap_or_default() {
+        let Some(role) = Role::parse(&role_name) else {
+            bail!(
+                "[authorization.keys]: {role_name} isn't a role. Use viewer, operator, or admin, such as \
+                 operator = [\"homeassistant\"]"
+            );
         };
-        let Some(role) = Role::parse(&role) else {
-            bail!("[{section}] role: expected \"viewer\", \"operator\", or \"admin\", got {role:?}");
+        let names: Vec<&Value> = match &list {
+            Value::Array(items) => items.iter().collect(),
+            other => vec![other],
         };
-        specs.push(Spec { name, role, agent: None });
+        for name in names {
+            let Some(name) = name.as_str() else {
+                bail!("[authorization.keys] {role_name}: {name} isn't a key name in quotes");
+            };
+            if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+                bail!("[authorization.keys] {role_name}: {name:?}: a key name may use letters, digits, '_' and '-'");
+            }
+            if name == MOONRAKER_KEY {
+                bail!(
+                    "[authorization.keys] {role_name}: the name moonraker is for Fluidd's API key, which orrery \
+                     makes itself"
+                );
+            }
+            if let Some(other) = specs.iter().find(|s: &&Spec| s.name == name) {
+                bail!(
+                    "[authorization.keys]: the key {name} is listed under both {} and {role_name}. Keep one of them.",
+                    other.role
+                );
+            }
+            specs.push(Spec { name: name.to_owned(), role, agent: None });
+        }
     }
     for agent in agents.configs() {
         specs.push(Spec { name: format!("agent.{}", agent.name), role: agent.role, agent: Some(agent.name.clone()) });
@@ -222,7 +246,7 @@ mod tests {
     #[test]
     fn keys_follow_the_config() {
         let dir = tempfile::tempdir().unwrap();
-        let toml = "[key.homeassistant]\nrole = \"operator\"\n[agent.spoolman]\ncall_role = \"admin\"\n";
+        let toml = "[authorization.keys]\noperator = [\"homeassistant\"]\n[agent.spoolman]\ncall_role = \"admin\"\n";
         let (config, db) = setup("", toml, dir.path());
         let (agents, _) = Agents::new(&config, None).unwrap();
         let keys = Keys::new(&config, &agents, &db).unwrap();
@@ -245,7 +269,7 @@ mod tests {
 
         // Secrets survive a restart; a key removed from the config is deleted.
         let moonraker = "[authorization]\nenable_api_key: False\n";
-        let (config, db) = setup(moonraker, "[key.homeassistant]\nrole = \"operator\"\n", dir.path());
+        let (config, db) = setup(moonraker, "[authorization.keys]\noperator = \"homeassistant\"\n", dir.path());
         let (agents, _) = Agents::new(&config, None).unwrap();
         let keys = Keys::new(&config, &agents, &db).unwrap();
         assert_eq!(keys.get("homeassistant").as_deref(), Some(new.as_str()));
@@ -254,9 +278,15 @@ mod tests {
     }
 
     #[test]
-    fn key_tables_need_a_role() {
+    fn key_lists_are_checked() {
         let dir = tempfile::tempdir().unwrap();
-        for toml in ["[key.ha]\n", "[key.ha]\nrole = \"agent\"\n", "[key.moonraker]\nrole = \"admin\"\n"] {
+        for toml in [
+            "[key.ha]\nrole = \"operator\"\n",
+            "[authorization.keys]\nagent = [\"ha\"]\n",
+            "[authorization.keys]\nadmin = [\"moonraker\"]\n",
+            "[authorization.keys]\nadmin = [\"ha\"]\nviewer = [\"ha\"]\n",
+            "[authorization.keys]\nviewer = [\"agent.spoolman\"]\n",
+        ] {
             let (config, db) = setup("", toml, dir.path());
             let (agents, _) = Agents::new(&config, None).unwrap();
             assert!(Keys::new(&config, &agents, &db).is_err(), "{toml}");
