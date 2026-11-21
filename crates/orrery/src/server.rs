@@ -66,6 +66,7 @@ struct Client {
     tx: mpsc::UnboundedSender<String>,
     identity: Option<Value>,
     peer: Peer,
+    access: crate::auth::Access,
 }
 
 /// What orrery knows about the other end of a connection.
@@ -97,6 +98,8 @@ pub struct App {
     pub webcams: crate::webcam::Webcams,
     pub history: crate::history::History,
     pub cors: crate::access::Cors,
+    pub auth: crate::auth::Auth,
+    pub keys: crate::keys::Keys,
     pub extensions: crate::extensions::Extensions,
     pub agents: crate::agents::Agents,
     warnings: Mutex<Vec<String>>,
@@ -134,13 +137,18 @@ impl App {
         let data_store = DataStore::new(&config)?;
         let webcams = crate::webcam::Webcams::new(&config, &paths)?;
         let job_queue = crate::job_queue::JobQueue::new(&config)?;
-        let (cors, mut warnings) = crate::access::Cors::new(&config);
+        let (auth, mut warnings) = crate::auth::Auth::new(&config)?;
+        let (cors, cors_warnings) = crate::access::Cors::new(&config, auth.trusted_networks());
+        warnings.extend(cors_warnings);
+        auth.log_settings();
         let exe = std::env::current_exe().ok();
         let (agents, agent_warnings) = crate::agents::Agents::new(&config, exe.as_deref().and_then(Path::parent))?;
         for w in &agent_warnings {
             tracing::warn!("{w}");
         }
         warnings.extend(agent_warnings);
+        let keys = crate::keys::Keys::new(&config, &agents, &database)?;
+        keys.log_settings();
         // Connection ids look like Moonraker's (Python object ids): large numbers.
         let base = 0x7f00_0000_0000 + (std::process::id() as u64) * 0x1000;
         let app = Arc::new(Self {
@@ -161,6 +169,8 @@ impl App {
             webcams,
             history: crate::history::History::default(),
             cors,
+            auth,
+            keys,
             extensions: crate::extensions::Extensions::default(),
             agents,
             warnings: Mutex::new(warnings),
@@ -211,10 +221,32 @@ impl App {
 
     // *** Websocket clients ***
 
-    pub fn add_client(&self, tx: mpsc::UnboundedSender<String>, peer: Peer) -> ConnId {
+    pub fn add_client(&self, tx: mpsc::UnboundedSender<String>, peer: Peer, access: crate::auth::Access) -> ConnId {
         let id = self.next_conn.fetch_add(1, Ordering::Relaxed);
-        self.clients.lock().expect("clients lock").insert(id, Client { tx, identity: None, peer });
+        self.clients.lock().expect("clients lock").insert(id, Client { tx, identity: None, peer, access });
         id
+    }
+
+    /// What a connection may do.
+    pub fn client_access(&self, id: ConnId) -> crate::auth::Access {
+        self.clients.lock().expect("clients lock").get(&id).map(|c| c.access.clone()).unwrap_or_default()
+    }
+
+    /// Takes away the rights a key gave, from every connection that used it: after a rotation.
+    pub fn revoke_key(&self, name: &str) {
+        for (id, c) in self.clients.lock().expect("clients lock").iter_mut() {
+            if c.access.key.as_deref() == Some(name) {
+                tracing::info!(target: "orrery::auth", "Connection {id} loses the rights of key {name}, which was rotated");
+                c.access = crate::auth::Access::none(format!("key {name} was rotated"));
+            }
+        }
+    }
+
+    /// Gives a connection new rights: from a key it sent, or an agent name it claimed.
+    pub fn set_client_access(&self, id: ConnId, access: crate::auth::Access) {
+        if let Some(c) = self.clients.lock().expect("clients lock").get_mut(&id) {
+            c.access = access;
+        }
     }
 
     pub fn client_peer(&self, id: ConnId) -> Peer {
@@ -323,14 +355,26 @@ impl App {
             Some(Value::Object(m)) => m.clone(),
             Some(_) => return Some(rpc_error(-32602, "Invalid params:", id)),
         };
-        let req = Request {
-            endpoint: endpoint.endpoint.clone(),
-            kind,
-            args: Args(args),
-            transport: Transport::Websocket,
-            conn,
+        let args = Args(args);
+        let access = conn.map(|c| self.client_access(c)).unwrap_or_default();
+        let need = crate::auth::need(self, &endpoint.endpoint, kind, &args);
+        let result = match crate::auth::check(self, &access, &need) {
+            Ok(()) => {
+                let req = Request {
+                    endpoint: endpoint.endpoint.clone(),
+                    kind,
+                    args,
+                    transport: Transport::Websocket,
+                    conn,
+                    access,
+                };
+                (endpoint.handler)(self.clone(), req).await
+            }
+            Err(e) => {
+                self.auth.log_refusal(&access, method, &e);
+                Err(e)
+            }
         };
-        let result = (endpoint.handler)(self.clone(), req).await;
         if id.is_null() {
             return None;
         }
@@ -476,6 +520,20 @@ async fn connection_identify(app: Arc<App>, req: Request) -> ApiResult {
     let url = req.args.str("url")?;
     if !CLIENT_TYPES.contains(&client_type.as_str()) {
         return Err(ApiError::bad_request(format!("Invalid Client Type: {client_type}")));
+    }
+    // A key sent here gives the connection the key's rights, as Moonraker's `authenticate`.
+    if let Some(key) = req.args.opt_str("api_key")?.filter(|k| !k.trim().is_empty()) {
+        match app.keys.lookup(&key) {
+            Some(access) => {
+                tracing::info!(target: "orrery::auth", "Connection {conn} identified with a key: {}", access.describe());
+                app.set_client_access(conn, access);
+            }
+            None => {
+                let e = ApiError::new(401, "Invalid API Key");
+                app.auth.log_refusal(&req.access, "server.connection.identify", &e);
+                return Err(e);
+            }
+        }
     }
     let identity = json!({"name": name, "version": version, "type": client_type, "url": url});
     {

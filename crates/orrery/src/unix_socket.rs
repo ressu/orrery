@@ -66,20 +66,20 @@ async fn serve(app: Arc<App>, stream: UnixStream) {
     let cred = stream.peer_cred().ok();
     let (reader, mut writer) = stream.into_split();
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+    let uid = cred.map(|c| c.uid());
+    let access = app.auth.unix_access(uid);
     let conn = app.add_client(
         tx.clone(),
-        crate::server::Peer {
-            unix: true,
-            uid: cred.map(|c| c.uid()),
-            pid: cred.and_then(|c| c.pid()).and_then(|p| u32::try_from(p).ok()),
-        },
+        crate::server::Peer { unix: true, uid, pid: cred.and_then(|c| c.pid()).and_then(|p| u32::try_from(p).ok()) },
+        access.clone(),
     );
     let opened = std::time::Instant::now();
     tracing::info!(
-        "Unix Socket Opened - Client ID: {conn}, Process ID: {}, User ID: {}, Group ID: {}",
+        "Unix Socket Opened - Client ID: {conn}, Process ID: {}, User ID: {}, Group ID: {}, Access: {}",
         cred.and_then(|c| c.pid()).map_or("unknown".into(), |p| p.to_string()),
         cred.map_or("unknown".into(), |c| c.uid().to_string()),
         cred.map_or("unknown".into(), |c| c.gid().to_string()),
+        access.describe(),
     );
     let write_task = tokio::spawn(async move {
         while let Some(text) = rx.recv().await {
@@ -140,6 +140,37 @@ async fn read_messages(
                 let _ = tx.send(reply.to_string());
             }
         });
+    }
+}
+
+/// Sends one JSON-RPC request to a running orrery over its unix socket and returns the result,
+/// for the `orrery` command line. Blocking: the command line has no runtime.
+pub fn call(path: &Path, method: &str, params: serde_json::Value) -> Result<serde_json::Value> {
+    use std::io::{BufRead, Write};
+    let mut stream = std::os::unix::net::UnixStream::connect(path).with_context(|| {
+        format!("can't reach orrery at {}. Is it running? A different socket can be given with -u.", path.display())
+    })?;
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(10)))?;
+    let request = serde_json::json!({"jsonrpc": "2.0", "method": method, "params": params, "id": 1});
+    let mut data = request.to_string().into_bytes();
+    data.push(ETX);
+    stream.write_all(&data)?;
+    let mut reader = std::io::BufReader::new(stream);
+    loop {
+        let mut message = Vec::new();
+        reader.read_until(ETX, &mut message)?;
+        if message.pop() != Some(ETX) {
+            anyhow::bail!("orrery closed the connection without answering");
+        }
+        let reply: serde_json::Value = serde_json::from_slice(&message)?;
+        // Notifications come too; the answer is the message with our id.
+        if reply["id"] != 1 {
+            continue;
+        }
+        if let Some(error) = reply.get("error") {
+            anyhow::bail!("{}", error["message"].as_str().unwrap_or("orrery refused the request"));
+        }
+        return Ok(reply["result"].clone());
     }
 }
 

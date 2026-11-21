@@ -23,6 +23,7 @@ use anyhow::{Result, bail};
 use serde_json::{Value, json};
 
 use crate::api::{Alias, ApiError, ApiResult, ConnId, Request, RequestType, Transports, handler};
+use crate::auth::Role;
 use crate::config::Config;
 use crate::server::App;
 
@@ -42,6 +43,10 @@ pub struct AgentConfig {
     pub command: Command,
     /// `systemd_unit`: the service the agent runs as.
     pub unit: Option<Unit>,
+    /// `role`: what the agent may do beyond its own things. `agent`, the default, is viewer.
+    pub role: Role,
+    /// `call_role`: what a client needs to call the agent. The default is operator.
+    pub call_role: Role,
 }
 
 /// A systemd service that runs an agent.
@@ -93,6 +98,35 @@ impl Agents {
 
     fn get(&self, name: &str) -> Option<&AgentConfig> {
         self.configs.iter().find(|c| c.name == name)
+    }
+
+    /// Whether `[agent.<name>]` exists, or a built-in agent of that name is on.
+    pub fn is_configured(&self, name: &str) -> bool {
+        self.get(name).is_some()
+    }
+
+    /// The configured agent tables.
+    pub fn configs(&self) -> &[AgentConfig] {
+        &self.configs
+    }
+
+    /// What a client needs to call an agent: its `call_role`, or operator for an agent that
+    /// isn't configured.
+    pub fn call_role(&self, name: &str) -> Role {
+        self.get(name).map_or(Role::Operator, |c| c.call_role)
+    }
+
+    /// The agent whose unit a service name, as clients see it, refers to: `orrery-spoolman`
+    /// for a system unit, `user/orrery-spoolman` for a user unit.
+    pub fn agent_of_service(&self, service: &str) -> Option<String> {
+        self.units().find_map(|(name, unit)| {
+            let short = unit.name.strip_suffix(".service").unwrap_or(&unit.name);
+            let listed = match unit.scope {
+                Scope::System => short.to_owned(),
+                Scope::User => format!("user/{short}"),
+            };
+            (listed == service).then(|| name.to_owned())
+        })
     }
 
     /// Records the process orrery started for an agent, or that it exited.
@@ -217,7 +251,29 @@ fn parse_section(config: &Config, section: &str, name: &str) -> Result<AgentConf
         }
         Some(other) => bail!("[{section}] maps: expected a table, got {other}"),
     }
-    Ok(AgentConfig { name: name.to_owned(), component, methods, notifications, history_fields, user, command, unit })
+    let role = match s.get_str("role", "agent").as_str() {
+        "agent" => Role::Viewer,
+        other => match Role::parse(other) {
+            Some(r @ (Role::Operator | Role::Admin)) => r,
+            _ => bail!("[{section}] role: expected \"agent\", \"operator\", or \"admin\", got {other:?}"),
+        },
+    };
+    let call_role = s.get_str("call_role", "operator");
+    let call_role = Role::parse(&call_role).ok_or_else(|| {
+        anyhow::anyhow!("[{section}] call_role: expected \"viewer\", \"operator\", or \"admin\", got {call_role:?}")
+    })?;
+    Ok(AgentConfig {
+        name: name.to_owned(),
+        component,
+        methods,
+        notifications,
+        history_fields,
+        user,
+        command,
+        unit,
+        role,
+        call_role,
+    })
 }
 
 /// The built-in Spoolman agent. It's off until `[spoolman]` has a `server`, in `moonraker.conf`
@@ -252,6 +308,8 @@ fn builtin_spoolman(
                 user: None,
                 command: Command::Unset,
                 unit: None,
+                role: Role::Viewer,
+                call_role: Role::Operator,
             });
             configs.last_mut().expect("just pushed")
         }
@@ -578,6 +636,8 @@ command = ["~/bin/orrery-spoolman", "-v"]
                 user: Some(1000),
                 command: Command::Run(vec!["~/bin/orrery-spoolman".into(), "-v".into()]),
                 unit: None,
+                role: Role::Viewer,
+                call_role: Role::Operator,
             })
         );
         assert_eq!(a.notification("spoolman", "active_spool_set"), Some("active_spool_set"));

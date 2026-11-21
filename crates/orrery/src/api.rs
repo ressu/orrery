@@ -112,6 +112,8 @@ pub struct Request {
     pub transport: Transport,
     /// The websocket the request came over, or the one an HTTP request named.
     pub conn: Option<ConnId>,
+    /// What the client may do. The request has passed its endpoint's check already.
+    pub access: crate::auth::Access,
 }
 
 /// Request arguments with Moonraker's conversions (`WebRequest.get_str`, `get_int`, ...).

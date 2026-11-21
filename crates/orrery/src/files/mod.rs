@@ -923,7 +923,7 @@ async fn move_copy(app: Arc<App>, req: Request) -> ApiResult {
 }
 
 /// `items` as a list, from JSON or a comma-separated string.
-fn string_list(v: &Value) -> Vec<String> {
+pub fn string_list(v: &Value) -> Vec<String> {
     match v {
         Value::Array(a) => a.iter().map(|i| i.as_str().map(str::to_owned).unwrap_or_else(|| i.to_string())).collect(),
         Value::String(s) => s.split(',').map(|p| p.trim().to_owned()).filter(|p| !p.is_empty()).collect(),

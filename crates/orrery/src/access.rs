@@ -1,7 +1,8 @@
-//! The parts of Moonraker's `authorization.py` that frontends need when nobody logs in. orrery
-//! has no authorization yet, so every client gets what Moonraker gives a trusted client: the
-//! `_TRUSTED_USER_`. Oneshot tokens are handed out so frontends can build download links, and
-//! they aren't checked. CORS follows `[authorization] cors_domains` and `trusted_clients`.
+//! The parts of Moonraker's `authorization.py` that frontends need when nobody logs in: the
+//! `access.*` endpoints, and CORS. Who may do what is in [`crate::auth`]. orrery has no user
+//! logins yet, so a client is the `_TRUSTED_USER_`, or the `_API_KEY_USER_` with a key.
+//! Oneshot tokens are handed out so frontends can build download links, and they aren't
+//! checked. CORS follows `[authorization] cors_domains` and the trusted networks.
 
 use std::net::IpAddr;
 use std::sync::{Arc, OnceLock};
@@ -11,10 +12,12 @@ use regex::Regex;
 use serde_json::json;
 
 use crate::api::{ApiError, ApiResult, Request, RequestType, Transports, handler};
+use crate::auth::Network;
 use crate::config::Config;
 use crate::server::App;
 
 pub const TRUSTED_USER: &str = "_TRUSTED_USER_";
+pub const API_KEY_USER: &str = "_API_KEY_USER_";
 
 /// When the trusted user was first seen, as Moonraker records it.
 static TRUSTED_SINCE: OnceLock<f64> = OnceLock::new();
@@ -22,13 +25,14 @@ static TRUSTED_SINCE: OnceLock<f64> = OnceLock::new();
 /// Which browser origins may call the API, after Moonraker's `check_cors`.
 pub struct Cors {
     domains: Vec<Regex>,
-    /// Trusted IPs and networks, as an address and prefix length.
-    trusted: Vec<(IpAddr, u8)>,
+    /// Trusted networks: an origin whose host is a trusted address is allowed too.
+    trusted: Vec<Network>,
 }
 
 impl Cors {
-    /// Reads `[authorization]`. Returns the warnings Moonraker gives for options it skips.
-    pub fn new(config: &Config) -> (Self, Vec<String>) {
+    /// Reads `[authorization] cors_domains`. Returns the warnings Moonraker gives for domains
+    /// it skips.
+    pub fn new(config: &Config, trusted: Vec<Network>) -> (Self, Vec<String>) {
         let section = config.section("authorization");
         let mut warnings = Vec::new();
         let mut domains = Vec::new();
@@ -56,7 +60,6 @@ impl Cors {
                 }
             }
         }
-        let trusted = section.get_list("trusted_clients").iter().filter_map(|c| parse_network(c)).collect();
         (Self { domains, trusted }, warnings)
     }
 
@@ -71,36 +74,7 @@ impl Cors {
         // An origin whose host is a trusted IP is allowed too.
         let host = origin.strip_prefix("https://").or_else(|| origin.strip_prefix("http://"));
         let host = host.map(|h| h.split(['/', ':']).next().unwrap_or_default());
-        host.and_then(|h| h.parse::<IpAddr>().ok()).is_some_and(|ip| self.trusts(ip))
-    }
-
-    fn trusts(&self, ip: IpAddr) -> bool {
-        self.trusted.iter().any(|&(net, len)| in_network(ip, net, len))
-    }
-}
-
-/// `10.0.0.0/8` or `127.0.0.1`. Host names, which Moonraker also accepts, are skipped.
-fn parse_network(text: &str) -> Option<(IpAddr, u8)> {
-    let (addr, len) = match text.split_once('/') {
-        Some((a, l)) => (a.parse::<IpAddr>().ok()?, Some(l.parse::<u8>().ok()?)),
-        None => (text.parse::<IpAddr>().ok()?, None),
-    };
-    let max = if addr.is_ipv4() { 32 } else { 128 };
-    let len = len.unwrap_or(max);
-    (len <= max).then_some((addr, len))
-}
-
-fn in_network(ip: IpAddr, net: IpAddr, len: u8) -> bool {
-    match (ip, net) {
-        (IpAddr::V4(ip), IpAddr::V4(net)) => {
-            let mask = u32::MAX.checked_shl(32 - u32::from(len)).unwrap_or(0);
-            u32::from(ip) & mask == u32::from(net) & mask
-        }
-        (IpAddr::V6(ip), IpAddr::V6(net)) => {
-            let mask = u128::MAX.checked_shl(128 - u32::from(len)).unwrap_or(0);
-            u128::from(ip) & mask == u128::from(net) & mask
-        }
-        _ => false,
+        host.and_then(|h| h.parse::<IpAddr>().ok()).is_some_and(|ip| self.trusted.iter().any(|n| n.contains(ip)))
     }
 }
 
@@ -115,15 +89,59 @@ pub fn register_endpoints(app: &Arc<App>) {
     r.register("/access/users/list", &[RequestType::Get], Transports::All, handler(users_list));
     r.register("/access/oneshot_token", &[RequestType::Get], Transports::All, handler(oneshot_token));
     r.register("/access/info", &[RequestType::Get], Transports::All, handler(info));
+    r.register("/access/api_key", &[RequestType::Get, RequestType::Post], Transports::All, handler(api_key));
+    r.register("/orrery/access/key/get", &[RequestType::Get], Transports::All, handler(key_get));
+    r.register("/orrery/access/key/rotate", &[RequestType::Post], Transports::All, handler(key_rotate));
+}
+
+/// Fluidd's API key: `access.get_api_key` reads it and `access.post_api_key` makes a new one,
+/// as in Moonraker. It's the `moonraker` key.
+async fn api_key(app: Arc<App>, req: Request) -> ApiResult {
+    let name = crate::keys::MOONRAKER_KEY;
+    if !app.keys.exists(name) {
+        return Err(ApiError::bad_request("The API key is off: [authorization] enable_api_key is False"));
+    }
+    if req.kind == RequestType::Post {
+        return rotate(&app, &req, name);
+    }
+    Ok(json!(app.keys.get(name)))
+}
+
+/// `orrery.access.key.get {name}`: a key's secret.
+async fn key_get(app: Arc<App>, req: Request) -> ApiResult {
+    let name = req.args.str("name")?;
+    app.keys.get(&name).map(|s| json!({"name": name, "key": s})).ok_or_else(|| no_key(&name))
+}
+
+/// `orrery.access.key.rotate {name}`: gives a key a new secret, and returns it.
+async fn key_rotate(app: Arc<App>, req: Request) -> ApiResult {
+    let name = req.args.str("name")?;
+    if !app.keys.exists(&name) {
+        return Err(no_key(&name));
+    }
+    rotate(&app, &req, &name).map(|key| json!({"name": name, "key": key}))
+}
+
+fn rotate(app: &App, req: &Request, name: &str) -> ApiResult {
+    let secret = app.keys.rotate(&app.database, name)?;
+    tracing::info!(target: "orrery::auth", "Rotated the key {name}, as {} asked", req.access.describe());
+    app.revoke_key(name);
+    Ok(json!(secret))
+}
+
+fn no_key(name: &str) -> ApiError {
+    ApiError::not_found(format!("No key named {name}: keys are declared in orrery.toml, as [key.<name>]"))
 }
 
 async fn user(_app: Arc<App>, req: Request) -> ApiResult {
     if req.kind != RequestType::Get {
-        return Err(ApiError::bad_request("User accounts aren't available: orrery has no authorization yet"));
+        return Err(ApiError::bad_request("User accounts aren't available: orrery has no user logins yet"));
     }
     let since =
         *TRUSTED_SINCE.get_or_init(|| SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs_f64());
-    Ok(json!({"username": TRUSTED_USER, "source": "moonraker", "created_on": since}))
+    // As in Moonraker: a key's client is the API key user, everyone else the trusted user.
+    let name = if req.access.key.is_some() { API_KEY_USER } else { TRUSTED_USER };
+    Ok(json!({"username": name, "source": "moonraker", "created_on": since}))
 }
 
 async fn users_list(_app: Arc<App>, _req: Request) -> ApiResult {
@@ -138,17 +156,17 @@ async fn oneshot_token(_app: Arc<App>, _req: Request) -> ApiResult {
     Ok(json!(base32(&bytes)))
 }
 
-async fn info(_app: Arc<App>, _req: Request) -> ApiResult {
+async fn info(_app: Arc<App>, req: Request) -> ApiResult {
     Ok(json!({
         "default_source": "moonraker",
         "available_sources": ["moonraker"],
         "login_required": false,
-        "trusted": true,
+        "trusted": req.access.trusted,
     }))
 }
 
 /// RFC 4648 base32 for input whose length is a multiple of 5, so no padding is needed.
-fn base32(bytes: &[u8]) -> String {
+pub fn base32(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
     let mut out = String::with_capacity(bytes.len() * 8 / 5);
     for chunk in bytes.chunks(5) {
@@ -165,7 +183,9 @@ mod tests {
     use super::*;
 
     fn cors(text: &str) -> Cors {
-        let (cors, warnings) = Cors::new(&Config::parse(text).unwrap());
+        let config = Config::parse(text).unwrap();
+        let (auth, _) = crate::auth::Auth::new(&config).unwrap();
+        let (cors, warnings) = Cors::new(&config, auth.trusted_networks());
         assert!(warnings.is_empty(), "{warnings:?}");
         cors
     }
@@ -186,8 +206,10 @@ mod tests {
         assert!(!c.allows("http://10.1.2.4"));
         // Without cors_domains, Moonraker sends no CORS headers at all.
         assert!(!cors("[authorization]\ntrusted_clients:\n  192.168.1.0/24\n").allows("http://192.168.1.50"));
-        let (_, warnings) =
-            Cors::new(&Config::parse("[authorization]\ncors_domains:\n  http://a.*\n  http://b.lan/\n").unwrap());
+        let (_, warnings) = Cors::new(
+            &Config::parse("[authorization]\ncors_domains:\n  http://a.*\n  http://b.lan/\n").unwrap(),
+            Vec::new(),
+        );
         assert_eq!(warnings.len(), 2);
     }
 

@@ -90,8 +90,11 @@ fn print_report(r: &Report, dry_run: bool, store: &str) {
     if r.linked_files > 0 {
         println!("Linked {} files to their last print.", r.linked_files);
     }
+    if r.api_key {
+        println!("API key: copied. Clients that use Moonraker's API key keep working.");
+    }
     if r.users > 0 {
-        println!("Users: {} not imported, because orrery has no authorization yet.", r.users);
+        println!("Users: {} not imported, because orrery has no user logins yet.", r.users);
     }
     if dry_run {
         println!("Nothing was written, because of --dry-run.");

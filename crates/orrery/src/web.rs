@@ -63,7 +63,34 @@ async fn websocket(
     ws: WebSocketUpgrade,
 ) -> Response {
     let from = describe_peer(peer, &headers);
-    ws.on_upgrade(move |socket| serve_socket(app, socket, from))
+    // As in Moonraker, a websocket with a wrong key still opens, with no rights.
+    let access = request_access(&app, peer, &headers).unwrap_or_else(|e| {
+        let access = crate::auth::Access::none(format!("{from}: {e}"));
+        app.auth.log_refusal(&access, "the websocket", &e);
+        access
+    });
+    ws.on_upgrade(move |socket| serve_socket(app, socket, from, access))
+}
+
+/// What a TCP request may do: a key's rights, when it sends `X-Api-Key`, or else a trusted
+/// network's, by the client's address, as long as a browser's `Origin` is allowed. A key that
+/// isn't one is an error, as in Moonraker.
+pub fn request_access(app: &App, peer: SocketAddr, headers: &HeaderMap) -> Result<crate::auth::Access, ApiError> {
+    if let Some(key) = headers.get("x-api-key").and_then(|v| v.to_str().ok()).filter(|k| !k.trim().is_empty()) {
+        return app.keys.lookup(key.trim()).ok_or_else(|| ApiError::new(401, "Invalid API Key"));
+    }
+    Ok(network_access(app, peer, headers))
+}
+
+fn network_access(app: &App, peer: SocketAddr, headers: &HeaderMap) -> crate::auth::Access {
+    let client = app.auth.client_address(peer.ip(), headers);
+    let origin_ok = crate::auth::origin_allowed(headers, &app.cors);
+    if !origin_ok && let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
+        app.auth.log_once(format!("origin {origin}"), || {
+            format!("A request from a page at {origin} gets no rights from a trusted network: the origin isn't the printer's own address or in cors_domains")
+        });
+    }
+    app.auth.network_access(client, origin_ok)
 }
 
 /// Where a connection comes from, for the log: the client's address, the proxy's address when a
@@ -82,12 +109,13 @@ fn describe_peer(peer: SocketAddr, headers: &HeaderMap) -> String {
     from
 }
 
-async fn serve_socket(app: Arc<App>, socket: WebSocket, from: String) {
+async fn serve_socket(app: Arc<App>, socket: WebSocket, from: String, access: crate::auth::Access) {
     let (mut sink, mut stream) = socket.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-    let conn = app.add_client(tx.clone(), crate::server::Peer::default());
+    let described = access.describe();
+    let conn = app.add_client(tx.clone(), crate::server::Peer::default(), access);
     let opened = Instant::now();
-    tracing::info!("Websocket Opened: ID: {conn}, From: {from}");
+    tracing::info!("Websocket Opened: ID: {conn}, From: {from}, Access: {described}");
     let writer = tokio::spawn(async move {
         while let Some(text) = rx.recv().await {
             if sink.send(Message::Text(text.into())).await.is_err() {
@@ -125,6 +153,7 @@ pub fn error_response(status: u16, message: &str) -> Response {
 
 async fn http_request(
     State(app): State<Arc<App>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     method: Method,
     uri: Uri,
     RawQuery(query): RawQuery,
@@ -132,7 +161,24 @@ async fn http_request(
     body: Bytes,
 ) -> Response {
     let found = app.registry.read().expect("registry lock").by_path(uri.path());
+    let access = match request_access(&app, peer, &headers) {
+        Ok(a) => a,
+        Err(e) => {
+            let access = crate::auth::Access::none(peer.ip().to_string());
+            app.auth.log_refusal(&access, &format!("{method} {}", uri.path()), &e);
+            return error_response(e.status, &e.message);
+        }
+    };
     let Some(endpoint) = found.filter(|e| e.http) else {
+        if let Some(rest) = uri.path().strip_prefix("/server/files/") {
+            let kind = if method == Method::DELETE { RequestType::Delete } else { RequestType::Get };
+            let rest = percent_encoding::percent_decode_str(rest).decode_utf8_lossy().into_owned();
+            let need = crate::auth::need(&app, &format!("/server/files/{rest}"), kind, &Args::default());
+            if let Err(e) = crate::auth::check(&app, &access, &need) {
+                app.auth.log_refusal(&access, &format!("{method} {}", uri.path()), &e);
+                return error_response(e.status, &e.message);
+            }
+        }
         if let Some(resp) = crate::files::http::file_request(&app, &method, uri.path(), &headers).await {
             return resp;
         }
@@ -152,8 +198,14 @@ async fn http_request(
     if is_json && let Ok(Value::Object(body)) = serde_json::from_slice::<Value>(&body) {
         args.extend(body);
     }
+    let args = Args(args);
+    let need = crate::auth::need(&app, &endpoint.endpoint, kind, &args);
+    if let Err(e) = crate::auth::check(&app, &access, &need) {
+        app.auth.log_refusal(&access, &format!("{method} {}", uri.path()), &e);
+        return error_response(e.status, &e.message);
+    }
     let req =
-        Request { endpoint: endpoint.endpoint.clone(), kind, args: Args(args), transport: Transport::Http, conn: None };
+        Request { endpoint: endpoint.endpoint.clone(), kind, args, transport: Transport::Http, conn: None, access };
     match (endpoint.handler)(app, req).await {
         Ok(result) => {
             let body = json!({"result": result});

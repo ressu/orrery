@@ -37,6 +37,26 @@ struct Cli {
     /// Log more detail.
     #[arg(short = 'v', long)]
     verbose: bool,
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(clap::Subcommand)]
+enum Command {
+    /// Show or rotate the API keys that orrery.toml declares. orrery must be running: the
+    /// command asks it over the unix socket.
+    Key {
+        #[command(subcommand)]
+        action: KeyAction,
+    },
+}
+
+#[derive(clap::Subcommand)]
+enum KeyAction {
+    /// Print a key, such as homeassistant, agent.spoolman, or moonraker.
+    Show { name: String },
+    /// Give a key a new secret, and print it. The old secret stops working at once.
+    Rotate { name: String },
 }
 
 fn resolve_paths(cli: &Cli) -> Result<Paths> {
@@ -235,6 +255,9 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    if let Some(Command::Key { action }) = &cli.command {
+        return key_command(&socket_path, action);
+    }
     let (_log_guard, log_warning) = init_logging(&cli, &paths);
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(r) => r,
@@ -253,6 +276,25 @@ fn main() -> ExitCode {
         Ok(false) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("orrery can't start: {e:#}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// `orrery key show` and `orrery key rotate`: one request to the running orrery, over the unix
+/// socket, where orrery's own user is admin.
+fn key_command(socket: &Path, action: &KeyAction) -> ExitCode {
+    let (method, name) = match action {
+        KeyAction::Show { name } => ("orrery.access.key.get", name),
+        KeyAction::Rotate { name } => ("orrery.access.key.rotate", name),
+    };
+    match unix_socket::call(socket, method, serde_json::json!({"name": name})) {
+        Ok(result) => {
+            println!("{}", result["key"].as_str().unwrap_or_default());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("orrery key: {e:#}");
             ExitCode::FAILURE
         }
     }

@@ -339,6 +339,12 @@ impl Section<'_> {
         anyhow::anyhow!("{}: [{}] {key}: {what}, got {got}", file.display(), self.name)
     }
 
+    /// Whether the option is set, in either file. Unlike the getters, it doesn't list the
+    /// option in `server.config`: for orrery's own options, which Moonraker doesn't have.
+    pub fn has(&self, key: &str) -> bool {
+        self.typed(key).is_some() || self.raw(key).is_some()
+    }
+
     /// An option's value as JSON: from `orrery.toml` as it's typed there, or the text from
     /// `moonraker.conf`. For options that hold a table or a list, such as an agent's `maps`.
     pub fn get_value(&self, key: &str) -> Option<Value> {

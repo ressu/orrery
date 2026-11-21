@@ -8,7 +8,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use axum::body::Body;
-use axum::extract::{Multipart, State};
+use std::net::SocketAddr;
+
+use axum::extract::{ConnectInfo, Multipart, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
@@ -43,7 +45,23 @@ impl Drop for TempUpload {
     }
 }
 
-pub async fn upload(State(app): State<Arc<App>>, headers: HeaderMap, mut form: Multipart) -> Response {
+pub async fn upload(
+    State(app): State<Arc<App>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    mut form: Multipart,
+) -> Response {
+    // A client with no rights at all is turned away before it sends the file. The root is
+    // checked once its field has arrived.
+    let access = match crate::web::request_access(&app, peer, &headers) {
+        Ok(a) => a,
+        Err(e) => return api_error(e),
+    };
+    if access.role.is_none() {
+        let e = ApiError::new(401, "Unauthorized");
+        app.auth.log_refusal(&access, "POST /server/files/upload", &e);
+        return api_error(e);
+    }
     let n = UPLOAD_COUNT.fetch_add(1, Ordering::Relaxed);
     let temp = TempUpload(std::env::temp_dir().join(format!("orrery.upload-{}-{n}.mru", std::process::id())));
     let mut fields: Map<String, Value> = Map::new();
@@ -107,7 +125,7 @@ pub async fn upload(State(app): State<Arc<App>>, headers: HeaderMap, mut form: M
         return error_response(400, "Multipart filename omitted");
     };
     tracing::info!("Processing Uploaded File: {filename}");
-    let result = match finalize_upload(&app, &fields, &filename, &temp.0).await {
+    let result = match finalize_upload(&app, &access, &fields, &filename, &temp.0).await {
         Ok(r) => r,
         Err(e) => return api_error(e),
     };
@@ -125,6 +143,7 @@ pub async fn upload(State(app): State<Arc<App>>, headers: HeaderMap, mut form: M
 
 async fn finalize_upload(
     app: &Arc<App>,
+    access: &crate::auth::Access,
     fields: &Map<String, Value>,
     filename: &str,
     temp: &Path,
@@ -133,6 +152,12 @@ async fn finalize_upload(
     let _guard = fm.op_lock.lock().await;
     let field = |k: &str| fields.get(k).and_then(Value::as_str).unwrap_or_default();
     let root = if field("root").is_empty() { "gcodes".to_owned() } else { field("root").to_lowercase() };
+    let args = crate::api::Args([("root".to_owned(), json!(root))].into_iter().collect());
+    let need = crate::auth::need(app, "/server/files/upload", crate::api::RequestType::Post, &args);
+    if let Err(e) = crate::auth::check(app, access, &need) {
+        app.auth.log_refusal(access, "POST /server/files/upload", &e);
+        return Err(e);
+    }
     let root_path = fm
         .root(&root)
         .map(|r| r.path.clone())

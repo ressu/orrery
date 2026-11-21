@@ -72,8 +72,10 @@ pub struct Report {
     pub totals: Counts,
     /// Files whose link to their last print was copied from Moonraker's metadata.
     pub linked_files: usize,
-    /// Users in the source, which aren't imported.
+    /// Users in the source, which aren't imported: orrery has no user logins yet.
     pub users: usize,
+    /// Moonraker's API key was copied, as orrery's `moonraker` key.
+    pub api_key: bool,
     /// Rows from earlier imports removed by `--replace`.
     pub replaced: usize,
 }
@@ -85,6 +87,9 @@ pub struct Options {
     /// Remove every row earlier imports wrote, then import.
     pub replace: bool,
 }
+
+/// Moonraker's user for its API key (`authorization.py:69`).
+const API_KEY_USER: &str = "_API_KEY_USER_";
 
 pub fn run(store: &Database, source: &Path, options: Options) -> Result<Report> {
     let file = SqliteFile::open(source)?;
@@ -213,7 +218,15 @@ pub fn run(store: &Database, source: &Path, options: Options) -> Result<Report> 
             report.linked_files += usize::from(link_metadata(&mut local, &path, &md)?);
         }
 
-        report.users = file.table_rows("authorized_users")?.len();
+        // Moonraker keeps its API key as the password of `_API_KEY_USER_`.
+        let users = file.table_rows("authorized_users")?;
+        report.users = users.iter().filter(|u| u["username"] != json!(API_KEY_USER)).count();
+        if let Some(key) =
+            users.iter().find(|u| u["username"] == json!(API_KEY_USER)).and_then(|u| u["password"].as_str())
+        {
+            tx.open_table(crate::keys::CREDENTIALS)?.insert(crate::keys::MOONRAKER_KEY, key)?;
+            report.api_key = true;
+        }
 
         if !options.dry_run {
             let mut imports = tx.open_table(IMPORTS)?;
@@ -333,7 +346,13 @@ mod tests {
         assert_eq!(report.settings, Counts { added: 9, updated: 0, unchanged: 0 });
         assert_eq!(report.history, Counts { added: 2, updated: 0, unchanged: 0 });
         assert_eq!(report.totals.added, 6);
-        assert_eq!(report.users, 1);
+        assert_eq!(report.users, 0);
+        assert!(report.api_key);
+        use redb::ReadableDatabase;
+        let tx = db.raw().begin_read().unwrap();
+        let table = tx.open_table(crate::keys::CREDENTIALS).unwrap();
+        let key = table.get(crate::keys::MOONRAKER_KEY).unwrap().unwrap();
+        assert_eq!(key.value(), "3982d50739f646c59463090d4179102d");
         assert_eq!(
             report.skipped_namespaces,
             [("database".to_owned(), 3), ("gcode_metadata".to_owned(), 2), ("moonraker".to_owned(), 4)]
