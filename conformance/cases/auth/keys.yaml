@@ -32,7 +32,7 @@ steps:
     expect: {username: _API_KEY_USER_}
   - call: printer.print.pause
     http: {verb: POST, path: /printer/print/pause, headers: {X-Api-Key: "${viewer}"}}
-    expect_error: {code: 403, message: "$regex:needs the operator role"}
+    expect_error: {code: 403, message: "Only an operator or admin can pause the print. This connection has the viewer role, from its API key, so it can watch the printer but can't control it."}
   - call: printer.gcode.script
     http: {verb: POST, path: /printer/gcode/script, query: "script=G28", headers: {X-Api-Key: "${viewer}"}}
     expect_error: {code: 403}

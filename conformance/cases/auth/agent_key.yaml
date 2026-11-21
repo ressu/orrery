@@ -28,6 +28,6 @@ steps:
     expect_error: {code: 403}
   - call: server.database.post_item
     params: {namespace: fluidd, key: theme, value: dark}
-    expect_error: {code: 403, message: "$regex:needs the operator role"}
+    expect_error: {code: 403, message: "Only an operator or admin can change the database namespace fluidd. This connection has the viewer role, from its API key, so it can watch the printer and change only its own agent's data."}
   - call: printer.print.pause
     expect_error: {code: 403}

@@ -71,8 +71,12 @@ change how safe or complete orrery is to run.
     that has a role. Leave a proxy on another host out of `[authorization.networks]`.
   - An agent's database namespace is the agent's own: other clients need `admin` to read or
     write it.
-  - A refused request gets 403 when the client has a role, but not the one needed. Without
-    any rights, it's 401, as in Moonraker.
+  - A refused request gets 403 when the client has a role, but not the one needed. The
+    message says what the request would do, who may do it, the client's role and whether it
+    came from its network or a key, and what that role allows: "Only an admin can reboot the
+    printer's computer. This connection has the operator role, from its network, so it can
+    print but can't change the printer's setup." Without any rights, it's 401
+    "Unauthorized", as in Moonraker.
 - **Why:** Moonraker gives every trusted device full control, which now includes rebooting
   the machine.
 - **Cases:** `auth/untrusted`, `auth/proxy`, and `auth/bad_key` (both servers); `auth/keys`,

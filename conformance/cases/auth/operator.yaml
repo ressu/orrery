@@ -29,7 +29,7 @@ steps:
     params: {source: gcodes/cube.gcode, dest: gcodes/copy.gcode}
     expect: {item: {path: copy.gcode}}
   - call: machine.reboot
-    expect_error: {code: 403, message: "$regex:needs the admin role"}
+    expect_error: {code: 403, message: "Only an admin can reboot the printer's computer. This connection has the operator role, from its network, so it can print but can't change the printer's setup."}
   - call: access.get_api_key
     expect_error: {code: 403}
   - call: server.database.post_item

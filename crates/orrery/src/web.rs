@@ -173,8 +173,8 @@ async fn http_request(
         if let Some(rest) = uri.path().strip_prefix("/server/files/") {
             let kind = if method == Method::DELETE { RequestType::Delete } else { RequestType::Get };
             let rest = percent_encoding::percent_decode_str(rest).decode_utf8_lossy().into_owned();
-            let need = crate::auth::need(&app, &format!("/server/files/{rest}"), kind, &Args::default());
-            if let Err(e) = crate::auth::check(&app, &access, &need) {
+            let path = format!("/server/files/{rest}");
+            if let Err(e) = crate::auth::authorize(&app, &access, &path, kind, &Args::default()) {
                 app.auth.log_refusal(&access, &format!("{method} {}", uri.path()), &e);
                 return error_response(e.status, &e.message);
             }
@@ -199,8 +199,7 @@ async fn http_request(
         args.extend(body);
     }
     let args = Args(args);
-    let need = crate::auth::need(&app, &endpoint.endpoint, kind, &args);
-    if let Err(e) = crate::auth::check(&app, &access, &need) {
+    if let Err(e) = crate::auth::authorize(&app, &access, &endpoint.endpoint, kind, &args) {
         app.auth.log_refusal(&access, &format!("{method} {}", uri.path()), &e);
         return error_response(e.status, &e.message);
     }

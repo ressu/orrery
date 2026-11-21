@@ -462,6 +462,23 @@ what helps an admin and leaves out what repeats.
   orrery already logs one line per connection (`describe_peer`,
   `crates/orrery/src/web.rs:72`); this adds to that line instead of adding a new one.
 
+**What a refused client is told** (user, 2026-11-21). A frontend shows the message to someone
+who may not know the roles, apart from the click that caused it. So it says what the request
+would do, who may do it, the client's role, and what that role allows:
+
+> Only an admin can reboot the printer's computer. This connection has the operator role,
+> from its network, so it can print but can't change the printer's setup.
+
+- **The action** comes from a table of descriptions, such as "restart the klipper service" or
+  "delete files in the config folder". A request the table doesn't describe is named by its
+  method: "call server.webcams.test".
+- **Where the role came from** is only the kind: "from its network", "from its API key", or
+  "as the agent spoolman". The network and the key's name stay out of the message, because
+  they tell anyone at the screen how the printer is set up. The log names them, for the admin.
+
+A client with no rights gets Moonraker's 401 "Unauthorized", because frontends react to that
+code by asking for a login.
+
 **Refusals and warnings, at most once per source:**
 
 - A request refused for lack of rights: once per address and reason, such as "unknown key" or

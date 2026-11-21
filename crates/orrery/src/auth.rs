@@ -109,35 +109,142 @@ pub enum Need {
     Call(String),
 }
 
-/// Checks a request's access against what its endpoint needs.
-pub fn check(app: &App, access: &Access, need: &Need) -> Result<(), ApiError> {
-    if *need == Need::Anyone {
+/// Checks a request against what its endpoint needs. A refusal says what the request would
+/// have done, who may do it, and what the client's role allows, without naming the network or
+/// key that gave the role: a frontend shows the message to anyone at the screen.
+pub fn authorize(app: &App, access: &Access, endpoint: &str, kind: RequestType, args: &Args) -> Result<(), ApiError> {
+    let need = need(app, endpoint, kind, args);
+    if need == Need::Anyone {
         return Ok(());
     }
     let Some(role) = access.role else {
         return Err(ApiError::new(401, "Unauthorized"));
     };
-    let needed = match need {
+    let (needed, who) = match &need {
         Need::Anyone => return Ok(()),
-        Need::Role(r) => *r,
+        Need::Role(r) => (*r, format!("Only {}", plural(*r))),
         Need::Owner(agent) => {
             if access.agent.as_deref() == Some(agent.as_str()) {
                 return Ok(());
             }
-            Role::Admin
+            (Role::Admin, format!("Only the agent {agent} or an admin"))
         }
-        Need::Call(agent) => app.agents.call_role(agent),
+        Need::Call(agent) => {
+            let r = app.agents.call_role(agent);
+            (r, format!("Only {}", plural(r)))
+        }
     };
     if role >= needed {
-        Ok(())
+        return Ok(());
+    }
+    let action = action(app, endpoint, kind, args);
+    Err(ApiError::new(403, format!("{who} can {action}. {}", what_it_has(access, role))))
+}
+
+fn plural(role: Role) -> &'static str {
+    match role {
+        Role::Viewer => "a viewer, operator, or admin",
+        Role::Operator => "an operator or admin",
+        Role::Admin => "an admin",
+    }
+}
+
+/// What the client has, and what that lets it do: "This connection has the viewer role, from
+/// its network, so it can watch the printer but can't control it."
+fn what_it_has(access: &Access, role: Role) -> String {
+    let from = if access.key.is_some() {
+        "from its API key".to_owned()
+    } else if access.trusted {
+        "from its network".to_owned()
+    } else if let Some(agent) = &access.agent {
+        format!("as the agent {agent}")
     } else {
-        Err(ApiError::new(403, format!("Forbidden: this needs the {needed} role, and the client has {role}")))
+        "from the unix socket".to_owned()
+    };
+    let can = match (role, &access.agent) {
+        (Role::Viewer, Some(_)) => "it can watch the printer and change only its own agent's data",
+        (Role::Viewer, None) => "it can watch the printer but can't control it",
+        (Role::Operator, _) => "it can print but can't change the printer's setup",
+        (Role::Admin, _) => "it can do anything",
+    };
+    format!("This connection has the {role} role, {from}, so {can}.")
+}
+
+/// What a request would do, for a refusal: "reboot the printer's computer". Requests without a
+/// description here are named by their method: "call server.history.delete_job".
+fn action(app: &App, endpoint: &str, kind: RequestType, args: &Args) -> String {
+    use RequestType::*;
+    let arg = |k: &str| str_arg(args, k).unwrap_or_default();
+    let folder = |path: &str| format!("the {} folder", root_of(path));
+    if let Some(rest) = endpoint.strip_prefix("/server/files/") {
+        let described = match (rest, kind) {
+            ("list", _) => Some(format!("list {}", folder(&str_arg(args, "root").unwrap_or_else(|| "gcodes".into())))),
+            ("upload", _) => {
+                Some(format!("upload files to {}", folder(&str_arg(args, "root").unwrap_or_else(|| "gcodes".into()))))
+            }
+            ("directory", Get) => Some(format!("list {}", folder(&arg("path")))),
+            ("directory", Post) => Some(format!("make folders in {}", folder(&arg("path")))),
+            ("directory", Delete) => Some(format!("delete folders in {}", folder(&arg("path")))),
+            ("delete_file", _) => Some(format!("delete files in {}", folder(&arg("path")))),
+            ("move", _) => Some(format!("move files from {} to {}", folder(&arg("source")), folder(&arg("dest")))),
+            ("copy", _) => Some(format!("copy files from {} to {}", folder(&arg("source")), folder(&arg("dest")))),
+            ("zip", _) => Some("make zip files".to_owned()),
+            ("metascan", _) => Some("scan files for their metadata".to_owned()),
+            ("klippy.log" | "moonraker.log", _) => Some("download logs".to_owned()),
+            (_, _) if !rest.contains('/') && !rest.contains('.') => None,
+            (path, Delete) => Some(format!("delete files in {}", folder(path))),
+            (path, _) => Some(format!("download files from {}", folder(path))),
+        };
+        if let Some(d) = described {
+            return d;
+        }
+    }
+    if endpoint.starts_with("/agent/") || endpoint == "/server/extensions/request" {
+        let agent = match endpoint.strip_prefix("/agent/") {
+            Some(rest) => rest.split('/').next().unwrap_or_default().to_owned(),
+            None => arg("agent"),
+        };
+        return format!("use the agent {agent}");
+    }
+    if let Some(verb) = endpoint.strip_prefix("/machine/services/") {
+        return format!("{verb} the {} service", arg("service"));
+    }
+    let described = match (endpoint, kind) {
+        ("/server/database/item", Get) => Some(format!("read the database namespace {}", arg("namespace"))),
+        ("/server/database/item", _) => Some(format!("change the database namespace {}", arg("namespace"))),
+        ("/machine/reboot", _) => Some("reboot the printer's computer".to_owned()),
+        ("/machine/shutdown", _) => Some("shut down the printer's computer".to_owned()),
+        ("/server/restart", _) => Some("restart orrery".to_owned()),
+        ("/printer/restart" | "gcode/restart", _) => Some("restart Klipper".to_owned()),
+        ("/printer/firmware_restart" | "gcode/firmware_restart", _) => Some("restart Klipper's firmware".to_owned()),
+        ("/printer/emergency_stop" | "emergency_stop", _) => Some("use the emergency stop".to_owned()),
+        ("/printer/gcode/script" | "gcode/script", _) => Some("send gcode".to_owned()),
+        ("/printer/print/start", _) => Some("start a print".to_owned()),
+        ("/printer/print/pause" | "pause_resume/pause", _) => Some("pause the print".to_owned()),
+        ("/printer/print/resume" | "pause_resume/resume", _) => Some("resume the print".to_owned()),
+        ("/printer/print/cancel" | "pause_resume/cancel", _) => Some("cancel the print".to_owned()),
+        ("/server/history/job", Delete) => Some("delete print history".to_owned()),
+        ("/server/history/reset_totals", _) => Some("reset the print history's totals".to_owned()),
+        ("/server/webcams/item", _) => Some("change webcams".to_owned()),
+        ("/server/logs/rollover", _) => Some("roll over the logs".to_owned()),
+        ("/access/api_key", Get) => Some("see the API key".to_owned()),
+        ("/access/api_key", _) => Some("make a new API key".to_owned()),
+        ("/orrery/access/key/get", _) => Some("see API keys".to_owned()),
+        ("/orrery/access/key/rotate", _) => Some("rotate API keys".to_owned()),
+        ("/access/users/list", _) => Some("list users".to_owned()),
+        (e, Get) if e.starts_with("/server/job_queue/") => None,
+        (e, _) if e.starts_with("/server/job_queue/") => Some("change the job queue".to_owned()),
+        _ => None,
+    };
+    match described {
+        Some(d) => d,
+        None => format!("call {}", app.registry.read().expect("registry lock").method_name(endpoint, kind)),
     }
 }
 
 /// What an endpoint needs. `endpoint` is the path as registered: `/server/info`, or a Klippy
 /// endpoint such as `gcode/script`, which has no leading slash.
-pub fn need(app: &App, endpoint: &str, kind: RequestType, args: &Args) -> Need {
+fn need(app: &App, endpoint: &str, kind: RequestType, args: &Args) -> Need {
     use Role::*;
     if !endpoint.starts_with('/') {
         return klippy_need(endpoint);
@@ -544,7 +651,9 @@ impl Auth {
         let first =
             self.logged.lock().expect("logged lock").insert(format!("refused {} {}", access.source, error.message));
         if first {
-            tracing::warn!(target: "orrery::auth", "Refused {method}: {} ({}). Later refusals like it are only counted.", error.message, access.source);
+            // The client is told only the kind of source; the log names it, for the admin.
+            let message = error.message.trim_end_matches('.');
+            tracing::warn!(target: "orrery::auth", "Refused {method} from {}: {message}. Later refusals like it are only counted.", access.source);
             return;
         }
         let mut refusals = self.refusals.lock().expect("refusals lock");

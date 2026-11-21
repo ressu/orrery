@@ -153,8 +153,7 @@ async fn finalize_upload(
     let field = |k: &str| fields.get(k).and_then(Value::as_str).unwrap_or_default();
     let root = if field("root").is_empty() { "gcodes".to_owned() } else { field("root").to_lowercase() };
     let args = crate::api::Args([("root".to_owned(), json!(root))].into_iter().collect());
-    let need = crate::auth::need(app, "/server/files/upload", crate::api::RequestType::Post, &args);
-    if let Err(e) = crate::auth::check(app, access, &need) {
+    if let Err(e) = crate::auth::authorize(app, access, "/server/files/upload", crate::api::RequestType::Post, &args) {
         app.auth.log_refusal(access, "POST /server/files/upload", &e);
         return Err(e);
     }

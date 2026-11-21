@@ -357,8 +357,7 @@ impl App {
         };
         let args = Args(args);
         let access = conn.map(|c| self.client_access(c)).unwrap_or_default();
-        let need = crate::auth::need(self, &endpoint.endpoint, kind, &args);
-        let result = match crate::auth::check(self, &access, &need) {
+        let result = match crate::auth::authorize(self, &access, &endpoint.endpoint, kind, &args) {
             Ok(()) => {
                 let req = Request {
                     endpoint: endpoint.endpoint.clone(),
