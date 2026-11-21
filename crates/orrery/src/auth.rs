@@ -463,19 +463,6 @@ impl Auth {
         } else {
             Vec::new()
         };
-        // A proxy that drops the headers would hand its users its own address's role. So a
-        // network entry can't lie inside a proxy, and a proxy gets nothing from a network
-        // around it (see network_access).
-        if explicit_proxies {
-            for (network, _) in &trusted {
-                if let Some(proxy) = proxies.iter().find(|p| p.len <= network.len && p.contains(network.addr)) {
-                    bail!(
-                        "{networks_from}: {network} is a trusted proxy ({proxy} in trusted_proxies), and a \
-                         proxy can't have a role of its own. Remove {network} from {networks_from}."
-                    );
-                }
-            }
-        }
         let use_xheaders = config.section("server").get_bool("use_xheaders", true)?;
         let own_uid = rustix::process::geteuid().as_raw();
         Ok((
@@ -521,8 +508,26 @@ impl Auth {
             let list: Vec<String> = self.proxies.iter().map(ToString::to_string).collect();
             tracing::info!(target: "orrery::auth", "Authorization: trusted proxies, from {from}: {}", list.join(", "));
             if self.explicit_proxies {
-                tracing::info!(target: "orrery::auth", "Authorization: trusted proxies get no role from a network; their users get theirs from the proxy headers");
+                self.warn_proxies_with_roles();
             }
+        }
+    }
+
+    /// Warns about each trusted proxy that also has a network's role. Its requests without the
+    /// headers get that role: from programs on the proxy's host that's often wanted, as on a
+    /// printer where the proxy and local services share 127.0.0.1. But a proxy that drops the
+    /// headers would hand the role to everyone it serves.
+    fn warn_proxies_with_roles(&self) {
+        for proxy in &self.proxies {
+            let access = self.network_access(proxy.addr, true);
+            let Some(role) = access.role else { continue };
+            tracing::warn!(
+                target: "orrery::auth",
+                "Authorization: trusted proxy {proxy} has the {role} role, from {}, so its requests \
+                 without X-Real-Ip or X-Forwarded-For get {role}. If the proxy drops those headers, \
+                 everyone it serves gets {role}.",
+                access.source
+            );
         }
     }
 
@@ -564,7 +569,7 @@ impl Auth {
         let Some(claimed) = real_ip.or(forwarded).filter(|v| !v.is_empty()) else {
             if self.explicit_proxies && self.is_proxy(peer) {
                 self.log_once(format!("no-headers {peer}"), || {
-                    format!("Trusted proxy {peer} sent a request without X-Real-Ip or X-Forwarded-For, so it's judged by the proxy's own address")
+                    format!("Trusted proxy {peer} sent a request without X-Real-Ip or X-Forwarded-For, so orrery judges it by {peer} itself. That's expected from programs on the proxy's host.")
                 });
             }
             return peer;
@@ -591,9 +596,6 @@ impl Auth {
     /// Access for a TCP request or websocket, from the client's network. `origin_ok` is false
     /// for a browser request from a site that isn't allowed.
     pub fn network_access(&self, client: IpAddr, origin_ok: bool) -> Access {
-        if self.explicit_proxies && self.proxies.iter().any(|p| p.contains(client)) {
-            return Access::none(format!("{client} is a trusted proxy, which gets no role from a network"));
-        }
         // The most specific network decides, as in a routing table, so a single address can get
         // less than the network around it, or more. No two entries are the same network.
         let best = self.trusted.iter().filter(|(n, _)| n.contains(client)).max_by_key(|(n, r)| (n.len, *r));
@@ -772,21 +774,21 @@ mod tests {
         let h = headers(&[("x-real-ip", "10.1.1.1")]);
         assert_eq!(a.client_address(ip("127.0.0.1"), &h), ip("127.0.0.1"));
 
-        // A proxy inside a network gets nothing itself; its users are judged by the headers.
+        // A proxy inside a network gets the network's role; its users are judged by the headers.
         let toml = "[authorization]\ntrusted_proxies = [\"192.168.1.10\"]\n\
                     [authorization.networks]\noperator = [\"192.168.1.0/24\"]\n";
         let a = toml_auth(toml).unwrap();
-        assert_eq!(a.network_access(ip("192.168.1.10"), true).role, None);
+        assert_eq!(a.network_access(ip("192.168.1.10"), true).role, Some(Role::Operator));
         assert_eq!(a.network_access(ip("192.168.1.11"), true).role, Some(Role::Operator));
         let h = headers(&[("x-real-ip", "192.168.1.20")]);
         let client = a.client_address(ip("192.168.1.10"), &h);
         assert_eq!(a.network_access(client, true).role, Some(Role::Operator));
 
-        // A network entry inside a proxy is an error.
+        // So may a network entry inside a proxy.
         let toml = "[authorization]\ntrusted_proxies = [\"127.0.0.0/8\"]\n\
                     [authorization.networks]\nadmin = [\"127.0.0.1\"]\n";
-        let e = toml_auth(toml).err().unwrap().to_string();
-        assert!(e.contains("is a trusted proxy"), "{e}");
+        let a = toml_auth(toml).unwrap();
+        assert_eq!(a.network_access(ip("127.0.0.1"), true).role, Some(Role::Admin));
     }
 
     #[test]

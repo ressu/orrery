@@ -90,8 +90,8 @@ orrery doesn't protect against these:
 - **Processes running as orrery's user, and root.** They can read the database or edit
   `orrery.toml`, so no check inside orrery can stop them.
 - **A badly set up proxy.** A proxy whose own address has a role, and that doesn't pass on the
-  client's address, gives every caller that role. With `trusted_proxies`, a proxy never has a
-  role (see [Proxies](#proxies)). Securing the proxy is its owner's job.
+  client's address, gives every caller that role. orrery warns at startup about a trusted
+  proxy that has a role (see [Proxies](#proxies)). Securing the proxy is its owner's job.
 - **DNS rebinding,** a trick that makes a web page count as the printer's own site (see
   [Browser requests](#browser-requests)).
 - **Someone reading network traffic.** orrery has no TLS, so keys cross the network in plain
@@ -359,25 +359,24 @@ How a request from a trusted proxy is judged:
 - **With the headers:** by the client's address that the proxy passes on. From
   `X-Forwarded-For`, orrery takes the last address, the one the trusted proxy added. Earlier
   addresses come from the client, which can write anything there.
-- **Without the headers:** by the proxy's own address, which gets no role (see below).
+- **Without the headers:** by the proxy's own address, which may have a role (see below).
 
 Moonraker gets the same result another way. It reads the headers from anyone, then refuses the
 request unless the proxy's own address is trusted too (`authorization.py:865-871,915-921`).
 
-**A trusted proxy has no role of its own** (user, 2026-11-21). A proxy that doesn't pass on
-the headers makes every caller arrive from the proxy's address. If that address had a role,
-every caller would get it. That's true in Moonraker, where the proxy must be trusted, and so
-must have full rights. So in orrery, when `trusted_proxies` is set:
+**A trusted proxy may have a network's role, and orrery warns about it** (user, 2026-11-21).
+A proxy that doesn't pass on the headers makes every caller arrive from the proxy's address,
+so every caller gets that address's role. Forbidding the role doesn't work on a printer, where
+the proxy and local services such as Mobileraker Companion and `layerlock` all connect from
+127.0.0.1: they'd all lose their rights at once. A proxy on another host doesn't have this
+problem, and can simply be left out of `[authorization.networks]`.
 
-- **A network entry inside a trusted proxy is an error:** `admin = ["127.0.0.1"]` with
-  `trusted_proxies = ["127.0.0.1"]` stops orrery at startup, with a message that names both.
-- **A network around a trusted proxy gives the proxy nothing.** With
-  `operator = ["192.168.1.0/24"]` and a proxy at `192.168.1.10`, a request from the proxy
-  without the headers gets no rights, and its users get the role of their own address.
-- The price: programs on the proxy's host that connect to orrery directly, such as
-  KlipperScreen when the proxy runs on the printer, get no role from a network either. They
-  need a key, or the unix socket. KlipperScreen's key option is unchecked; its source isn't on
-  this machine.
+- **At startup,** orrery warns about each trusted proxy that has a role: "trusted proxy
+  127.0.0.1 has the operator role, from network 127.0.0.0/8, so its requests without
+  X-Real-Ip or X-Forwarded-For get operator."
+- **The first request** from a trusted proxy without the headers is logged too, once per run.
+- To have no shared address, use keys for the local services, and leave the proxy's address
+  out of `[authorization.networks]`.
 
 With only Moonraker's `trusted_clients`, the proxies are its networks, so these rules
 don't apply, and orrery behaves as Moonraker does.

@@ -67,9 +67,8 @@ change how safe or complete orrery is to run.
   - `trusted_proxies` is orrery's own option, and empty unless it's set. Only Moonraker's
     `trusted_clients` alone keeps Moonraker's fallback, where its networks are the proxies.
   - **A proxy on an address with a role that sends no proxy headers makes every caller look
-    like the proxy,** as in Moonraker. List it in `trusted_proxies`: then a network entry
-    inside a proxy is an error, and the proxy's own address gets no role from a network
-    around it.
+    like the proxy,** as in Moonraker. orrery warns at startup about a trusted proxy
+    that has a role. Leave a proxy on another host out of `[authorization.networks]`.
   - An agent's database namespace is the agent's own: other clients need `admin` to read or
     write it.
   - A refused request gets 403 when the client has a role, but not the one needed. Without
