@@ -3,5 +3,5 @@ klippy: none
 transports: [ws]
 steps:
   - call: server.connection.identify
-    params: {client_name: test, version: "0.1", type: web, url: "https://example.invalid", api_key: orr_notakey}
+    params: {client_name: test, version: "0.1", type: web, url: "https://example.invalid", api_key: 0123456789abcdef0123456789abcdef}
     expect_error: {code: -32602, message: Invalid API Key}

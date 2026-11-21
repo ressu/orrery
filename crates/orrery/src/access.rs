@@ -166,7 +166,7 @@ async fn info(_app: Arc<App>, req: Request) -> ApiResult {
 }
 
 /// RFC 4648 base32 for input whose length is a multiple of 5, so no padding is needed.
-pub fn base32(bytes: &[u8]) -> String {
+fn base32(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
     let mut out = String::with_capacity(bytes.len() * 8 / 5);
     for chunk in bytes.chunks(5) {

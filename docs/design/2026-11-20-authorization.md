@@ -193,9 +193,12 @@ role = "agent"   # the default, which a table can raise
   on or off, as in Moonraker (`authorization.py:133`), and it's on by default. From a trusted
   network with `operator`, Fluidd's API key dialog shows an error, because reading the key needs
   `admin`.
-- **Format:** `orr_` followed by 32 base32 characters (160 random bits). The prefix lets secret
-  scanners spot a leaked key. The `moonraker` key keeps Moonraker's format, a UUID without
-  dashes (`authorization.py:155`), so an imported key keeps working.
+- **Format:** Moonraker's, 32 lowercase hex characters, for every key (user, 2026-11-21).
+  orrery fills them with 128 random bits; Moonraker uses a UUID without dashes
+  (`authorization.py:155`). Clients check the format: Home Assistant's integration accepts
+  only 32 letters and digits (`moonraker-home-assistant/.../config_flow.py:106-110`). There's
+  no prefix such as `orr_`: it would help secret scanners, but it would also tell anyone who
+  sees a key what made it.
 - **How clients send a key:** as an `X-Api-Key` header on an HTTP request or on the websocket
   upgrade, or as `api_key` in `server.connection.identify`, as in Moonraker
   (`components/websockets.py:100`).

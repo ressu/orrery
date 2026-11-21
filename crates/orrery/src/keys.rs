@@ -83,7 +83,7 @@ impl Keys {
                 let secret = match existing {
                     Some(s) => s,
                     None => {
-                        let s = new_secret(&spec.name)?;
+                        let s = new_secret()?;
                         table.insert(spec.name.as_str(), s.as_str())?;
                         tracing::info!(target: "orrery::auth", "Made the key {} ({})", spec.name, spec.role);
                         s
@@ -143,7 +143,7 @@ impl Keys {
         if !self.exists(name) {
             bail!("No key named {name}");
         }
-        let secret = new_secret(name)?;
+        let secret = new_secret()?;
         let tx = db.raw().begin_write()?;
         tx.open_table(CREDENTIALS)?.insert(name, secret.as_str())?;
         tx.commit()?;
@@ -212,18 +212,16 @@ fn specs(config: &Config, agents: &Agents) -> Result<Vec<Spec>> {
     Ok(specs)
 }
 
-/// A new secret: `orr_` and 32 base32 characters (160 random bits), or a UUID without dashes
-/// for the `moonraker` key, as Moonraker makes it (`authorization.py:155`).
-fn new_secret(name: &str) -> Result<String> {
-    if name == MOONRAKER_KEY {
-        return Ok(uuid::Uuid::new_v4().simple().to_string());
-    }
-    let mut bytes = [0u8; 20];
+/// A new secret, in the format of Moonraker's API key: 32 lowercase hex characters, here 128
+/// random bits. Clients check that format: Home Assistant's integration accepts only 32 letters
+/// and digits (`config_flow.py:106`). No prefix, so a key doesn't say what made it.
+fn new_secret() -> Result<String> {
+    let mut bytes = [0u8; 16];
     let mut filled = 0;
     while filled < bytes.len() {
         filled += rustix::rand::getrandom(&mut bytes[filled..], rustix::rand::GetRandomFlags::empty())?;
     }
-    Ok(format!("orr_{}", crate::access::base32(&bytes).to_ascii_lowercase()))
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 fn constant_time_eq(a: &[u8; 32], b: &[u8; 32]) -> bool {
@@ -251,13 +249,13 @@ mod tests {
         let (agents, _) = Agents::new(&config, None).unwrap();
         let keys = Keys::new(&config, &agents, &db).unwrap();
         let ha = keys.get("homeassistant").unwrap();
-        assert!(ha.starts_with("orr_") && ha.len() == 36, "{ha}");
+        assert!(ha.len() == 32 && ha.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()), "{ha}");
         assert_eq!(keys.get(MOONRAKER_KEY).unwrap().len(), 32);
         let access = keys.lookup(&ha).unwrap();
         assert_eq!((access.role, access.key.as_deref()), (Some(Role::Operator), Some("homeassistant")));
         let agent = keys.lookup(&keys.get("agent.spoolman").unwrap()).unwrap();
         assert_eq!((agent.role, agent.agent.as_deref()), (Some(Role::Viewer), Some("spoolman")));
-        assert!(keys.lookup("orr_wrong").is_none());
+        assert!(keys.lookup("0123456789abcdef0123456789abcdef").is_none());
 
         // A rotated key works, and the old one doesn't.
         let new = keys.rotate(&db, "homeassistant").unwrap();

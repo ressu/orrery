@@ -11,7 +11,7 @@ steps:
   # The runner is on a trusted network with admin, so it can read keys.
   - call: orrery.access.key.get
     http: {verb: GET, path: /orrery/access/key/get, query: "name=dashboard"}
-    expect: {name: dashboard, key: "$regex:^orr_[a-z2-7]{32}$"}
+    expect: {name: dashboard, key: "$regex:^[0-9a-f]{32}$"}
     save: {viewer: key}
   - call: orrery.access.key.get
     http: {verb: GET, path: /orrery/access/key/get, query: "name=nobody"}
@@ -36,7 +36,7 @@ steps:
     http: {verb: POST, path: /printer/gcode/script, query: "script=G28", headers: {X-Api-Key: "${viewer}"}}
     expect_error: {code: 403}
   - call: server.info
-    http: {verb: GET, path: /server/info, headers: {X-Api-Key: "orr_notakey"}}
+    http: {verb: GET, path: /server/info, headers: {X-Api-Key: "0123456789abcdef0123456789abcdef"}}
     expect_error: {code: 401, message: Invalid API Key}
   # After a rotation, the old key fails and the new one works.
   - call: orrery.access.key.rotate
