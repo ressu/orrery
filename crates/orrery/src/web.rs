@@ -62,7 +62,7 @@ async fn websocket(
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
-    let from = describe_peer(peer, &headers);
+    let from = describe_peer(peer, app.auth.client_address(peer.ip(), &headers), &headers);
     // As in Moonraker, a websocket with a wrong key still opens, with no rights.
     let access = request_access(&app, peer, &headers).unwrap_or_else(|e| {
         let access = crate::auth::Access::none(format!("{from}: {e}"));
@@ -96,13 +96,11 @@ fn network_access(app: &App, peer: SocketAddr, headers: &HeaderMap) -> crate::au
 /// Where a connection comes from, for the log: the client's address, the proxy's address when a
 /// reverse proxy such as nginx or caddy forwarded it, and the client's `User-Agent`. This helps
 /// tell apart clients that never call `server.connection.identify`.
-fn describe_peer(peer: SocketAddr, headers: &HeaderMap) -> String {
+/// Who a connection is, for its log line: the client's address as orrery judged it, and the
+/// proxy it came through when a trusted proxy passed that address on.
+fn describe_peer(peer: SocketAddr, client: std::net::IpAddr, headers: &HeaderMap) -> String {
     let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok()).map(str::trim).filter(|v| !v.is_empty());
-    let forwarded = header("x-forwarded-for").and_then(|v| v.split(',').next()).map(str::trim).or(header("x-real-ip"));
-    let mut from = match forwarded {
-        Some(client) => format!("{client} (via {peer})"),
-        None => peer.to_string(),
-    };
+    let mut from = if client == peer.ip().to_canonical() { peer.to_string() } else { format!("{client} (via {peer})") };
     if let Some(agent) = header("user-agent") {
         from.push_str(&format!(", User Agent: {agent}"));
     }
@@ -278,13 +276,21 @@ mod tests {
     #[test]
     fn peers() {
         let peer: SocketAddr = "127.0.0.1:59894".parse().unwrap();
+        let local = peer.ip();
         let mut headers = HeaderMap::new();
-        assert_eq!(describe_peer(peer, &headers), "127.0.0.1:59894");
+        assert_eq!(describe_peer(peer, local, &headers), "127.0.0.1:59894");
         headers.insert("x-forwarded-for", "192.168.1.199, 10.0.0.1".parse().unwrap());
         headers.insert("user-agent", "HomeAssistant/2026.11 aiohttp/3.12".parse().unwrap());
+        // From a trusted proxy, the address it added counts.
+        let client = "10.0.0.1".parse().unwrap();
         assert_eq!(
-            describe_peer(peer, &headers),
-            "192.168.1.199 (via 127.0.0.1:59894), User Agent: HomeAssistant/2026.11 aiohttp/3.12"
+            describe_peer(peer, client, &headers),
+            "10.0.0.1 (via 127.0.0.1:59894), User Agent: HomeAssistant/2026.11 aiohttp/3.12"
+        );
+        // From anyone else, the headers are ignored, and so the log doesn't repeat them.
+        assert_eq!(
+            describe_peer(peer, local, &headers),
+            "127.0.0.1:59894, User Agent: HomeAssistant/2026.11 aiohttp/3.12"
         );
     }
 }
