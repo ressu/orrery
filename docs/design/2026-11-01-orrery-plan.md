@@ -342,14 +342,22 @@ Tiers, in order:
   rebooting the printer. orrery won't copy that. The design comes first, as a note in
   `docs/design/`, before any code. See "Open work" below.
 
+- **2026-11-21: authorization is in, without user logins.** Each client has a role, `viewer`,
+  `operator`, or `admin`, from a trusted network, a key, or the unix socket's user, and each
+  endpoint needs one. Keys are declared in `orrery.toml`, and orrery keeps their secrets in the
+  database. Proxy headers count only from a trusted proxy, and a browser request from another
+  site gets nothing from a trusted network. With a `moonraker.conf`, trusted networks and the
+  API key are `admin`, as in Moonraker. See
+  [2026-11-20-authorization.md](2026-11-20-authorization.md), and `auth-roles` and `no-logins`
+  in `docs/regressions.md`.
+
 ## Open work
 
-In order, as of 2026-11-20:
+In order, as of 2026-11-21:
 
-1. **Authorization: API keys.** Designed in
-   [2026-11-20-authorization.md](2026-11-20-authorization.md), under review: keys declared in
-   `orrery.toml` with roles, trusted networks as in Moonraker, and checks on browser requests.
-   User logins come later. Today there's none: see `no-auth` in `docs/regressions.md`.
+1. **Authorization: user logins.** Roles, trusted networks and proxies, and API keys are in
+   (see [2026-11-20-authorization.md](2026-11-20-authorization.md)). Logins, JWTs, and one-shot
+   tokens are next: see `no-logins` in `docs/regressions.md`.
 2. **A real print on bluev2,** to check job state, history, and Spoolman's usage end to end.
 3. **The thumbnail memory check.**
 4. **`sudo orrery setup`,** which writes `orrery.service`, an `orrery-admin` group, and a polkit

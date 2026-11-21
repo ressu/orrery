@@ -6,7 +6,9 @@
 //!   rebuilds from the files. The link from each file to its last print is kept, though.
 //! - Print history and its totals.
 //!
-//! Users aren't imported yet, because orrery has no authorization.
+//! - Moonraker's API key, as orrery's `moonraker` key.
+//!
+//! Users aren't imported yet, because orrery has no user logins.
 //!
 //! Running the same import again changes nothing. Each row is written under its own key, and
 //! the imported row wins when the store already holds a different one. History is the

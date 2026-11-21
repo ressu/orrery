@@ -6,8 +6,8 @@ generates the secrets and keeps them in its database. With a `moonraker.conf`, o
 before: trusted networks, `cors_domains`, and Fluidd's API key behave as in Moonraker. Agents
 that orrery starts need no key. User logins come later.
 
-**Status (2026-11-21):** design only. Today orrery has no authorization at all: see `no-auth` in
-`docs/regressions.md`.
+**Status (2026-11-21):** built, except user logins. What differs from Moonraker is in
+`auth-roles` and `no-logins` in `docs/regressions.md`.
 
 Moonraker gives full rights to everything it trusts: whole IP ranges, every logged-in user, and
 its one API key. Since 2026-11-20 orrery can reboot the printer and control services, so that
@@ -172,7 +172,8 @@ role = "agent"   # the default, which a table can raise
 - **orrery makes the secrets.** On startup it generates one for each `[key.<name>]` and
   `[agent.<name>]` table that has none. Removing a table removes its key: orrery deletes the
   secret on the next start. So the config is the full list of keys, and anyone who reads it sees
-  every key and its role.
+  every key and its role. A `[key.<name>]` key is named `<name>`, and an agent's key is named
+  `agent.<name>`, such as `agent.spoolman`. A rotated key's open connections lose its rights.
 - **Get and rotate, nothing else.** An admin can read a key again, or replace it with a new
   one. To create or delete a key, edit `orrery.toml`.
   - Over the API: `orrery.access.key.get {name}` and `orrery.access.key.rotate {name}`, at
@@ -214,7 +215,8 @@ role = "agent"   # the default, which a table can raise
 ## Trusted networks
 
 - **With a `moonraker.conf`:** `trusted_clients` works as in Moonraker, and a trusted network
-  gets `admin`. A host name in `trusted_clients` works as in Moonraker too.
+  gets `admin`. Host names in `trusted_clients` are skipped for now, with a warning: Moonraker
+  looks them up, and orrery doesn't yet.
 - **In `orrery.toml`:** a trusted network can get a role, `operator` or `admin`:
 
   ```toml

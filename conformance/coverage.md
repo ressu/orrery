@@ -116,12 +116,12 @@ fixture in `fixtures/files/`.
 
 ## Authorization
 
-The runner can't send credentials yet, so this section waits on runner support for logins,
-tokens, and API keys.
+The runner sends API keys as headers. Logins wait for orrery's user logins (`no-logins` in
+`docs/regressions.md`). The cases under `auth/` cover trusted networks, proxy headers, and keys.
 
 | Method | Status |
 |---|---|
-| `access.info` | To do |
+| `access.info` | Covered: `access/trusted`, `auth/untrusted` |
 | `access.login` | To do |
 | `access.logout` | To do |
 | `access.refresh_jwt` | To do |
@@ -131,7 +131,7 @@ tokens, and API keys.
 | `access.delete_user` | To do |
 | `access.users.list` | To do |
 | `access.user.password` | To do |
-| `access.get_api_key` | To do |
+| `access.get_api_key` | Covered: `auth/keys`, `auth/operator` |
 | `access.post_api_key` | To do |
 
 | Notification | Status |

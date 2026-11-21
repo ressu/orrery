@@ -18,8 +18,10 @@ orrery connects to Klippy and serves the `server.*`, `printer.*`, `server.databa
 `connection.register_remote_method`),
 `machine.system_info`, and `machine.proc_stats` APIs, with file upload and download. The same
 JSON-RPC API is also on a unix socket, `comms/moonraker.sock`, for local tools and agents.
-Authorization isn't written yet. **orrery has no authorization yet, so every client that can
-reach it has full access.** See
+Clients get rights from trusted networks and API keys, each with a role: `viewer`, `operator`,
+or `admin`. With a `moonraker.conf`, trusted networks and Fluidd's API key work as in
+Moonraker. User logins aren't written yet. See
+[docs/design/2026-11-20-authorization.md](docs/design/2026-11-20-authorization.md) and
 [docs/regressions.md](docs/regressions.md).
 For the plan and the decisions made so far, see
 [docs/design/2026-11-01-orrery-plan.md](docs/design/2026-11-01-orrery-plan.md).

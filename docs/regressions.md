@@ -22,24 +22,54 @@ change how safe or complete orrery is to run.
 
 ## Entries
 
-### no-auth: no authorization
+### no-logins: no user logins yet
 
 - **Area:** API
-- **Moonraker:** `[authorization]` controls access: trusted networks, user logins, JWTs, and an
-  API key.
-- **orrery:** there's no authorization yet. **Every client that can reach the port has full
-  access**, including gcode, file changes, starting and stopping services, restarting orrery,
-  and rebooting or shutting down the machine. Run orrery only on a network you trust.
-  Every client gets what Moonraker gives a trusted client: `access.get_user` returns
-  `_TRUSTED_USER_`, and `access.info` says `trusted: true`. `access.oneshot_token` hands out
-  tokens so frontends can build download links, and orrery doesn't check them. Logins, user
-  accounts, JWTs, and the API key aren't there.
-  CORS follows `cors_domains` as in Moonraker, including the fallback for an origin whose host
-  is a trusted IP. Host names in `trusted_clients` don't count for that fallback.
-- **Why:** authorization is being designed from scratch, not copied from Moonraker; see
-  `docs/design/2026-11-20-authorization.md`.
-- **Cases:** `server/config` (it expects an `authorization` section), and the authorization
-  cases when they're written. `access/trusted` covers the trusted-client replies.
+- **Moonraker:** users log in with a name and password, and get JWTs. `access.oneshot_token`
+  gives tokens for HTTP links. `force_logins` makes trusted clients log in too, and `ldap`
+  checks passwords against an LDAP server.
+- **orrery:** has trusted networks and API keys only. `access.login` and the user endpoints
+  return an error, `access.users.list` is empty, and `force_logins`, `default_source`,
+  `max_login_attempts`, `login_timeout`, and `[ldap]` are ignored. `access.oneshot_token` hands
+  out tokens so frontends can build download links, but orrery doesn't check them: a link works
+  only for a client that has rights without it. Fluidd works only from a trusted network, since
+  it can't send an API key.
+- **Why:** keys come first; see `docs/design/2026-11-20-authorization.md`.
+- **Cases:** `access/trusted` covers the trusted-client replies.
+
+### auth-roles: rights come in roles, and some requests need more than Moonraker asks
+
+- **Area:** API
+- **Moonraker:** every trusted client, logged-in user, and its one API key has full rights.
+- **orrery:** each client has a role, `viewer`, `operator`, or `admin`, and each endpoint needs
+  one; see `docs/design/2026-11-20-authorization.md`. With a `moonraker.conf`, trusted networks
+  and the API key are `admin`, so they work as before. The differences:
+  - Keys are declared in `orrery.toml`, as `[key.<name>]` with a role, and each agent table
+    has a key. orrery makes the secrets. `access.get_api_key` and `access.post_api_key` need
+    `admin`; Moonraker allows any authorized client.
+  - A browser request from a trusted network whose `Origin` is neither its own `Host` nor in
+    `cors_domains` gets no rights. Moonraker checks `Origin` only on the websocket, so a page on
+    another site can send gcode with a form post.
+  - On the unix socket, only orrery's own user and root are `admin`. Another user gets only
+    what a key or an agent table gives it; Moonraker gives full rights to anyone who can
+    connect. The socket is mode `0660`, and the database `0600`.
+  - Host names in `trusted_clients` are skipped, with a warning: orrery doesn't look up names
+    yet.
+  - Proxy headers count only from a trusted proxy, and from `X-Forwarded-For` only the last
+    address. `trusted_proxies` is orrery's own option. Moonraker reads the headers from
+    anyone, then requires the proxy to be trusted, and refuses with "Proxy address not
+    trusted"; orrery judges such a request by the connection's own address.
+  - **A proxy on a trusted address that sends no proxy headers makes every caller look like
+    the proxy,** as in Moonraker. Either make the proxy send `X-Real-Ip` or `X-Forwarded-For`,
+    or list it in `trusted_proxies` and leave its address out of `trusted_clients`.
+  - An agent's database namespace is the agent's own: other clients need `admin` to read or
+    write it.
+  - A refused request gets 403 when the client has a role, but not the one needed. Without
+    any rights, it's 401, as in Moonraker.
+- **Why:** Moonraker gives every trusted device full control, which now includes rebooting
+  the machine.
+- **Cases:** `auth/untrusted`, `auth/proxy`, and `auth/bad_key` (both servers); `auth/keys`,
+  `auth/operator`, and `auth/agent_key` (orrery only).
 
 ### partial-server-config: `server.config` leaves out components orrery doesn't have
 
@@ -216,14 +246,14 @@ change how safe or complete orrery is to run.
 - **Area:** datastore import
 - **Moonraker:** keeps users, its own state, and the gcode metadata cache in `moonraker-sql.db`.
 - **orrery:** `orrery-import` skips these:
-  - Users and their API key, because orrery has no authorization yet. The import reports how
-    many users it skipped.
+  - Users, because orrery has no user logins yet. The import reports how many it skipped.
+    Moonraker's API key is copied, as orrery's `moonraker` key.
   - The `moonraker` and `database` namespaces: Moonraker's own state, such as its instance id
     and the update manager's data. orrery keeps its own.
   - `gcode_metadata`: orrery reads the files again instead. It still copies each file's link to
     its last print (`job_id` and `print_start_time`) when the file hasn't changed.
   - The legacy LMDB database (`moonraker.db/`), from Moonraker before v0.9.
-- **Why:** users come with authorization. The rest belongs to Moonraker, or orrery rebuilds it.
+- **Why:** users come with logins. The rest belongs to Moonraker, or orrery rebuilds it.
 - **Cases:** none; the import's unit tests read `conformance/fixtures/import/seed.db`.
 
 ### agent-null-result: an agent's `null` result is a result
