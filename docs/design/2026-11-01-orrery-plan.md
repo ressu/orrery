@@ -365,3 +365,5 @@ In order, as of 2026-11-21:
 5. **Processors,** starting with `.gcode.3mf`. See the plugin note's "Processors".
 6. **A `moonraker.conf` to `orrery.toml` converter,** the musl allocator, and a check of
    Mainsail.
+7. **orrery edits `orrery.toml`** to give users roles, from Fluidd's add-user button or the CLI.
+   See "Editing orrery.toml (later)" in [2026-11-21-logins.md](2026-11-21-logins.md).
