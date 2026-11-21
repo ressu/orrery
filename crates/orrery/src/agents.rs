@@ -130,6 +130,24 @@ impl Agents {
     }
 
     /// Records the process orrery started for an agent, or that it exited.
+    /// Starts an agent's process with `spawn`, and records it while still holding the lock that
+    /// a claim reads. The agent can't claim its name before then: it may connect before
+    /// `spawn` returns, on a busy computer.
+    pub fn start_process<T>(
+        &self,
+        name: &str,
+        spawn: impl FnOnce() -> std::io::Result<T>,
+        pid: impl Fn(&T) -> Option<u32>,
+    ) -> std::io::Result<T> {
+        let mut processes = self.processes.lock().expect("processes lock");
+        let child = spawn()?;
+        match pid(&child) {
+            Some(pid) => processes.insert(name.to_owned(), pid),
+            None => processes.remove(name),
+        };
+        Ok(child)
+    }
+
     pub fn set_process(&self, name: &str, pid: Option<u32>) {
         let mut processes = self.processes.lock().expect("processes lock");
         match pid {

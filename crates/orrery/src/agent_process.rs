@@ -145,9 +145,7 @@ impl Agent {
                 Ok(())
             });
         }
-        let mut child = cmd.spawn()?;
-        // Recorded before the agent can connect, which takes it longer than this.
-        self.app.agents.set_process(&self.name, child.id());
+        let mut child = self.app.agents.start_process(&self.name, || cmd.spawn(), Child::id)?;
         if let Some(out) = child.stdout.take() {
             tokio::spawn(log_lines(self.name.clone(), out));
         }
