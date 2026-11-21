@@ -18,9 +18,8 @@ Scope of this step:
 
 - **In:** keys, roles, networks' roles, trusted proxies, CORS, the `Origin` check, agents, and
   the unix socket.
-- **Later:** user logins, JWTs, one-shot tokens, `force_logins`, and LDAP. The section
-  [Later: users and logins](#later-users-and-logins) lists what they'll need, so nothing here
-  blocks them.
+- **Later:** user logins, JWTs, one-shot tokens, `force_logins`, and LDAP. They're designed in
+  [2026-11-21-logins.md](2026-11-21-logins.md).
 
 ## Principles
 
@@ -399,32 +398,23 @@ itself is its owner's job.
 
 ## Later: users and logins
 
-Out of scope for now, along with LDAP. These are what they'll need, so keys don't block them:
+Logins are designed in [2026-11-21-logins.md](2026-11-21-logins.md). Two decisions from this
+note carry over to it:
 
-- Moonraker's JWT format and EdDSA signing, with a key per user (`authorization.py:73-77`), so
-  tokens from imported users keep working.
-- One-shot tokens for HTTP links, valid for 5 seconds (`authorization.py:61`).
-- `force_logins`, and `max_login_attempts` for limiting guesses.
-- Roles for users, from the same roles table.
-- `notify_user_created`, `notify_user_deleted`, and `notify_user_logged_out`.
-- User management, because Fluidd has it: listing, adding, and deleting users, changing your
-  own password, and showing and rotating the API key (`fluidd/src/components/settings/auth/`).
 - **Keys appear in `access.users.list`** (user, 2026-11-21), with the source `orrery`: each
   key in `[authorization.keys]` under its name, and each agent as `agent.<name>`. The
-  `moonraker` key stays out of the list, as Moonraker hides `_API_KEY_USER_`. These users have keys, not passwords, so
-  logging in, changing a password, and deleting are refused, with an error that points to
-  `orrery.toml`. A local user can't take a key's name.
-  - Fluidd greys out the delete button for any source but `moonraker`, which suits keys.
-  - Fluidd names only the `moonraker` and `ldap` sources (`locales/en.yaml:430,440`), so it
-    shows "User managed by app.general.label.orrery authentication" until it learns `orrery`.
-- **Deleting a user** forgets its signing key, so its tokens stop working, takes its rights
-  from open connections, as a key's rotation does, and sends `notify_user_deleted`. That's
-  what Moonraker does (`authorization.py:603`). History keeps the user's name.
+  `moonraker` key stays out of the list, as Moonraker hides `_API_KEY_USER_`. These users have
+  keys, not passwords, so logging in, changing a password, and deleting are refused, with an
+  error that points to `orrery.toml`. Fluidd greys out the delete button for any source but
+  `moonraker`, which suits keys. Fluidd names only the `moonraker` and `ldap` sources
+  (`locales/en.yaml:430,440`), so it shows "User managed by app.general.label.orrery
+  authentication" until it learns `orrery`.
+- **`access.users.list` needs `admin`,** since it names every key. Moonraker lets any
+  authorized client read it.
 
-Until then, `access.login` and the user endpoints return an error that says logins aren't
-there yet. `access.users.list` needs `admin`, since it will name every key; Moonraker lets any
-authorized client read it. `access.oneshot_token` keeps its current behaviour: it hands out tokens that orrery
-doesn't check, so Fluidd on a network with a role can build download links.
+Until logins are built, `access.login` and the user endpoints return an error that says logins
+aren't there yet. `access.oneshot_token` hands out tokens that orrery doesn't check, so Fluidd
+on a network with a role can build download links.
 
 ## Config and migration
 

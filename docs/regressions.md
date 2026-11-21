@@ -34,7 +34,8 @@ change how safe or complete orrery is to run.
   out tokens so frontends can build download links, but orrery doesn't check them: a link works
   only for a client that has rights without it. Fluidd works only from a trusted network, since
   it can't send an API key.
-- **Why:** keys come first; see `docs/design/2026-11-20-authorization.md`.
+- **Why:** keys come first; see `docs/design/2026-11-20-authorization.md`. Logins are designed
+  in `docs/design/2026-11-21-logins.md`.
 - **Cases:** `access/trusted` covers the trusted-client replies.
 
 ### auth-roles: rights come in roles, and some requests need more than Moonraker asks
