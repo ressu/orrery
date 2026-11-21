@@ -159,7 +159,7 @@ async fn key_rotate(app: Arc<App>, req: Request) -> ApiResult {
 
 fn rotate(app: &App, req: &Request, name: &str) -> ApiResult {
     let secret = app.keys.rotate(&app.database, name)?;
-    tracing::info!(target: "orrery::auth", "Rotated the key {name}, as {} asked", req.access.describe());
+    tracing::info!(target: "orrery::auth", "Rotated the key {name}, as {} asked", req.access.requester());
     app.revoke_key(name);
     Ok(json!(secret))
 }
@@ -210,12 +210,12 @@ async fn post_user(app: Arc<App>, req: Request) -> ApiResult {
     app.users.store(&app.database, Users::new_local(&name, hash))?;
     match app.users.role_of(&name).ok() {
         Some(role) => {
-            tracing::info!(target: "orrery::auth", "Added the user {name}, with the {role} role, as {} asked", req.access.describe())
+            tracing::info!(target: "orrery::auth", "Added the user {name}, with the {role} role, as {} asked", req.access.requester())
         }
         None => tracing::warn!(
             target: "orrery::auth",
             "Added the user {name}, as {} asked. orrery.toml gives them no role, so they can't log in until an admin lists them under [authorization.users]",
-            req.access.describe()
+            req.access.requester()
         ),
     }
     let tokens = app.users.log_in(&app.database, &name)?;
@@ -244,7 +244,7 @@ async fn delete_user(app: Arc<App>, req: Request) -> ApiResult {
     if !app.users.remove(&app.database, &name)? {
         return Err(ApiError::not_found(format!("No user named {name}")));
     }
-    tracing::info!(target: "orrery::auth", "Deleted the user {name}, as {} asked", req.access.describe());
+    tracing::info!(target: "orrery::auth", "Deleted the user {name}, as {} asked", req.access.requester());
     app.revoke_user(&name, None, "the user was deleted");
     app.notify("user_deleted", vec![json!({"username": name})]);
     Ok(json!({"username": name, "action": "user_deleted"}))
@@ -392,7 +392,7 @@ async fn set_password(app: Arc<App>, req: Request) -> ApiResult {
     }
     check_password_text(&password)?;
     replace_password(&app, &name, password, req.conn).await?;
-    tracing::info!(target: "orrery::auth", "Set the user {name}'s password, as {} asked", req.access.describe());
+    tracing::info!(target: "orrery::auth", "Set the user {name}'s password, as {} asked", req.access.requester());
     Ok(json!({"username": name, "action": "user_password_reset"}))
 }
 

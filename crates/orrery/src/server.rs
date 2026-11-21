@@ -456,7 +456,7 @@ impl App {
         );
         r.register("/server/websocket/id", &[RequestType::Get], Transports::WebsocketOnly, handler(websocket_id));
         r.register("/server/logs/rollover", &[RequestType::Post], Transports::All, handler(logs_rollover));
-        r.register("/server/restart", &[RequestType::Post], Transports::All, handler(|app, _| server_restart(app)));
+        r.register("/server/restart", &[RequestType::Post], Transports::All, handler(server_restart));
     }
 }
 
@@ -522,8 +522,8 @@ async fn server_config(app: Arc<App>, _req: Request) -> ApiResult {
 
 /// Restarts orrery, as Moonraker's `server.restart`: it answers first, then shuts down as for
 /// SIGTERM and starts its program again in the same process.
-async fn server_restart(app: Arc<App>) -> ApiResult {
-    tracing::info!("Restarting, as a client asked");
+async fn server_restart(app: Arc<App>, req: Request) -> ApiResult {
+    tracing::info!("Restarting, as {} asked", req.access.requester());
     tokio::spawn(async move {
         // Time for the answer to reach the client before the connections close.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -546,7 +546,7 @@ async fn logs_rollover(app: Arc<App>, req: Request) -> ApiResult {
     if apps.contains(&"moonraker") {
         match tokio::task::spawn_blocking(crate::logfile::rollover).await {
             Ok(Some(Ok(()))) => {
-                tracing::info!("Started a new log file, as a client asked");
+                tracing::info!("Started a new log file, as {} asked", req.access.requester());
                 rolled_over.push("moonraker");
             }
             Ok(Some(Err(e))) => drop(failed.insert("moonraker".into(), json!(e.to_string()))),
@@ -555,7 +555,7 @@ async fn logs_rollover(app: Arc<App>, req: Request) -> ApiResult {
         }
     }
     if apps.contains(&"klipper") {
-        match crate::services::rollover_klipper_log(&app).await {
+        match crate::services::rollover_klipper_log(&app, &req.access.requester()).await {
             Ok(()) => rolled_over.push("klipper"),
             Err(e) => drop(failed.insert("klipper".into(), json!(e))),
         }
@@ -581,7 +581,7 @@ async fn connection_identify(app: Arc<App>, req: Request) -> ApiResult {
         match role {
             Ok((name, role)) => {
                 app.set_client_user(conn, &name, role);
-                tracing::info!(target: "orrery::auth", "Connection {conn} identified as user {name}: {}", app.client_access(conn).describe());
+                tracing::info!(target: "orrery::auth", "Connection {conn} identified as user {name}: {}", app.client_access(conn).requester());
             }
             Err(e) => {
                 app.auth.log_refusal(&req.access, "server.connection.identify", &e);
@@ -593,8 +593,8 @@ async fn connection_identify(app: Arc<App>, req: Request) -> ApiResult {
     if let Some(key) = req.args.opt_str("api_key")?.filter(|k| !k.trim().is_empty()) {
         match app.keys.lookup(&key) {
             Some(access) => {
-                tracing::info!(target: "orrery::auth", "Connection {conn} identified with a key: {}", access.describe());
                 app.set_client_access(conn, access);
+                tracing::info!(target: "orrery::auth", "Connection {conn} identified with a key: {}", app.client_access(conn).requester());
             }
             None => {
                 let e = ApiError::new(401, "Invalid API Key");

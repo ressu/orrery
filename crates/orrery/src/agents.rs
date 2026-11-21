@@ -422,7 +422,7 @@ pub async fn check_claim(app: &App, name: &str, conn: ConnId) -> Result<(), ApiE
             client: access.client.clone(),
             ..crate::auth::Access::default()
         };
-        tracing::info!(target: "orrery::auth", "Connection {conn} is agent {name}: {}", access.describe());
+        tracing::info!(target: "orrery::auth", "Connection {conn} is agent {name}: {}", access.requester());
         app.set_client_access(conn, access);
     }
     Ok(())

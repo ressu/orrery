@@ -111,6 +111,18 @@ impl Access {
         access
     }
 
+    /// Who asked, for log lines about what a client did: its address, which is often all
+    /// orrery knows about a person, then its role and where that came from, such as
+    /// "192.168.1.157 (admin, network 192.168.0.0/16)".
+    pub fn requester(&self) -> String {
+        let what = match (self.role, &self.agent) {
+            (None, _) => format!("no rights, {}", self.source),
+            (Some(role), Some(agent)) => format!("{role} as agent {agent}, {}", self.source),
+            (Some(role), None) => format!("{role}, {}", self.source),
+        };
+        if self.client.is_empty() { what } else { format!("{} ({what})", self.client) }
+    }
+
     /// The role and its source, for log lines.
     pub fn describe(&self) -> String {
         match (self.role, &self.agent) {
@@ -788,6 +800,16 @@ pub fn origin_allowed(headers: &HeaderMap, cors: &crate::access::Cors) -> bool {
 mod tests {
     use super::*;
     use axum::http::HeaderValue;
+
+    #[test]
+    fn requesters_name_the_address() {
+        let a = auth("[authorization]\ntrusted_clients:\n  192.168.0.0/16\n");
+        let mut access = a.network_access(ip("192.168.1.157"), true);
+        access.client = "192.168.1.157".into();
+        assert_eq!(access.requester(), "192.168.1.157 (admin, network 192.168.0.0/16)");
+        let user = access.with_user("sami", Role::Admin);
+        assert_eq!(user.requester(), "192.168.1.157 (admin, network 192.168.0.0/16, user sami)");
+    }
 
     fn auth(text: &str) -> Auth {
         let (auth, warnings) = Auth::new(&Config::parse(text).unwrap()).unwrap();
