@@ -368,3 +368,6 @@ In order, as of 2026-11-21:
    Mainsail.
 7. **orrery edits `orrery.toml`** to give users roles, from Fluidd's add-user button or the CLI.
    See "Editing orrery.toml (later)" in [2026-11-21-logins.md](2026-11-21-logins.md).
+8. **How Fluidd's login flows are triggered,** to learn which kinds of login orrery can offer
+   without changing Fluidd, OIDC above all. See "OIDC (later)" in
+   [2026-11-21-logins.md](2026-11-21-logins.md).
