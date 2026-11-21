@@ -23,6 +23,9 @@ pub const API_KEY_USER: &str = "_API_KEY_USER_";
 /// When the trusted user was first seen, as Moonraker records it.
 static TRUSTED_SINCE: OnceLock<f64> = OnceLock::new();
 
+/// The source of users a trusted proxy logged in. They aren't stored.
+const PROXY_SOURCE: &str = "proxy";
+
 /// Which browser origins may call the API, after Moonraker's `check_cors`.
 pub struct Cors {
     domains: Vec<Regex>,
@@ -180,6 +183,12 @@ async fn user(app: Arc<App>, req: Request) -> ApiResult {
 /// The current user. As in Moonraker, a client that isn't logged in is the API key user with a
 /// key, and the trusted user otherwise.
 fn get_user(app: &App, req: &Request) -> ApiResult {
+    let since = *TRUSTED_SINCE.get_or_init(crate::users::now_secs);
+    if req.access.from_proxy
+        && let Some(name) = &req.access.user
+    {
+        return Ok(json!({"username": name, "source": PROXY_SOURCE, "created_on": since}));
+    }
     if let Some(user) = req.access.user.as_deref().and_then(|name| app.users.get(name)) {
         return Ok(json!({
             "username": user.username,
@@ -187,7 +196,6 @@ fn get_user(app: &App, req: &Request) -> ApiResult {
             "created_on": user.created_on,
         }));
     }
-    let since = *TRUSTED_SINCE.get_or_init(crate::users::now_secs);
     let name = if req.access.key.is_some() { API_KEY_USER } else { TRUSTED_USER };
     Ok(json!({"username": name, "source": "moonraker", "created_on": since}))
 }
@@ -348,6 +356,11 @@ async fn logout(app: Arc<App>, req: Request) -> ApiResult {
     let Some(name) = req.access.user.clone() else {
         return Err(ApiError::bad_request("No user is logged in on this connection"));
     };
+    if req.access.from_proxy {
+        return Err(ApiError::bad_request(format!(
+            "{name} logged in through the proxy, so log out there. For oauth2-proxy, that's /oauth2/sign_out."
+        )));
+    }
     app.users.forget_key(&app.database, &name)?;
     app.revoke_user(&name, None, "the user logged out");
     tracing::info!(target: "orrery::auth", "User {name} logged out, from {}", describe_client(&req));
@@ -375,6 +388,11 @@ async fn user_password(app: Arc<App>, req: Request) -> ApiResult {
     let Some(name) = req.access.user.clone() else {
         return Err(ApiError::bad_request("No user is logged in on this connection"));
     };
+    if req.access.from_proxy {
+        return Err(ApiError::bad_request(format!(
+            "{name} logged in through the proxy, so the proxy's login service keeps the password"
+        )));
+    }
     let password = req.args.str("password")?;
     let new_password = req.args.str("new_password")?;
     let user = app.users.get(&name).ok_or_else(|| ApiError::not_found(format!("No user named {name}")))?;

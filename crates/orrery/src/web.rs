@@ -72,6 +72,13 @@ async fn websocket(
     };
     let base = base_access(&app, peer, &headers).unwrap_or_else(refused);
     let base = with_oneshot(&app, base, query.as_deref());
+    let base = match with_proxy_user(&app, peer, &headers, base.clone()) {
+        Ok(access) => access,
+        Err(e) => {
+            refused(e);
+            base
+        }
+    };
     let user = token_user(&app, &headers, query.as_deref()).unwrap_or_else(|e| {
         refused(e);
         None
@@ -89,6 +96,7 @@ pub fn request_access(
     query: Option<&str>,
 ) -> Result<crate::auth::Access, ApiError> {
     let base = with_oneshot(app, base_access(app, peer, headers)?, query);
+    let base = with_proxy_user(app, peer, headers, base)?;
     Ok(match token_user(app, headers, query)? {
         Some((name, role)) => base.with_user(&name, role),
         None => base,
@@ -104,6 +112,24 @@ fn with_oneshot(app: &App, access: crate::auth::Access, query: Option<&str>) -> 
         .map(|(_, v)| v.into_owned());
     let Some(granted) = token.and_then(|t| app.auth.use_oneshot(t.trim(), &access.client)) else { return access };
     if granted.role > access.role { granted } else { access }
+}
+
+/// A request's access with the user a trusted proxy logged in, if it names one. A user that
+/// `orrery.toml` gives no role is an error, as for a password login.
+fn with_proxy_user(
+    app: &App,
+    peer: SocketAddr,
+    headers: &HeaderMap,
+    access: crate::auth::Access,
+) -> Result<crate::auth::Access, ApiError> {
+    let Some(name) = app.auth.proxy_user(peer.ip(), headers) else { return Ok(access) };
+    crate::users::check_name(&name).map_err(|e| ApiError::new(403, format!("The proxy's user name won't do: {e}")))?;
+    let role = app.users.role_of(&name)?;
+    let access = access.with_proxy_user(&name, role);
+    if app.auth.first_time(format!("proxy-user {name}")) {
+        tracing::info!(target: "orrery::auth", "Proxy user {name} came in, as {}", access.requester());
+    }
+    Ok(access)
 }
 
 /// A request's access without its token.

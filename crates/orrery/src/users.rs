@@ -485,7 +485,7 @@ fn role_lists(table: serde_json::Map<String, Value>, is_key: impl Fn(&str) -> bo
 
 /// A user name: not empty, no control characters or spaces at the ends, and none of
 /// Moonraker's own names.
-fn check_name(name: &str) -> Result<()> {
+pub(crate) fn check_name(name: &str) -> Result<()> {
     if name.is_empty() || name.len() > 64 {
         bail!("{name:?}: a user name has 1 to 64 characters");
     }

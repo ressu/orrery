@@ -83,6 +83,8 @@ pub struct Access {
     pub user: Option<String>,
     /// The role comes from the user's login: it's higher than the rest would give.
     pub from_login: bool,
+    /// The user came from a trusted proxy's header, so they log out at the proxy.
+    pub from_proxy: bool,
 }
 
 impl Access {
@@ -97,16 +99,29 @@ impl Access {
     /// This access with a user logged in. A login adds rights and never takes any away, so the
     /// role is the higher of the two.
     pub fn with_user(&self, name: &str, role: Role) -> Self {
+        self.with_login(name, role, "user", false)
+    }
+
+    /// This access with a user that a trusted proxy logged in. `access.info` reports it as
+    /// trusted, as Fluidd needs to skip its login screen.
+    pub fn with_proxy_user(&self, name: &str, role: Role) -> Self {
+        let mut access = self.with_login(name, role, "proxy user", true);
+        access.trusted = true;
+        access
+    }
+
+    fn with_login(&self, name: &str, role: Role, kind: &str, from_proxy: bool) -> Self {
         let mut access = self.clone();
         access.user = Some(name.to_owned());
+        access.from_proxy = from_proxy;
         if self.role.is_none_or(|r| role > r) {
             access.role = Some(role);
             access.from_login = true;
             access.agent = None;
-            access.source = format!("user {name}");
+            access.source = format!("{kind} {name}");
         } else {
             access.from_login = false;
-            access.source = format!("{}, user {name}", self.source);
+            access.source = format!("{}, {kind} {name}", self.source);
         }
         access
     }
@@ -590,6 +605,9 @@ pub struct Auth {
     ignored_trusted_clients: bool,
     /// Hosts whose proxy headers orrery reads.
     proxies: Vec<Network>,
+    /// `[authorization.proxy_login] header`, as written: the header that names a user the
+    /// proxy logged in. Looking it up ignores case.
+    proxy_login: Option<String>,
     /// The proxies came from `trusted_proxies`, not from `trusted_clients`.
     explicit_proxies: bool,
     use_xheaders: bool,
@@ -610,6 +628,9 @@ struct Oneshot {
     access: Access,
     expires: Instant,
 }
+
+/// The header a proxy names its user in, as oauth2-proxy sends it.
+const DEFAULT_PROXY_HEADER: &str = "X-Forwarded-User";
 
 /// How long a one-shot token lasts, as in Moonraker (`ONESHOT_TIMEOUT`).
 const ONESHOT_LIFETIME: std::time::Duration = std::time::Duration::from_secs(5);
@@ -691,6 +712,27 @@ impl Auth {
         } else {
             Vec::new()
         };
+        let proxy_login = match config.section_json("authorization proxy_login") {
+            None => None,
+            Some(table) => {
+                let header = match table.get("header") {
+                    None => DEFAULT_PROXY_HEADER.to_owned(),
+                    Some(serde_json::Value::String(h)) => h.trim().to_owned(),
+                    Some(other) => bail!("[authorization.proxy_login] header: {other} isn't a header name"),
+                };
+                if axum::http::HeaderName::from_bytes(header.as_bytes()).is_err() {
+                    bail!(
+                        "[authorization.proxy_login] header: {header:?} isn't a header name, such as \"X-Forwarded-User\""
+                    );
+                }
+                if !explicit_proxies {
+                    bail!(
+                        "[authorization.proxy_login] needs trusted_proxies in [authorization]: orrery reads {header} only from the proxies it lists"
+                    );
+                }
+                Some(header)
+            }
+        };
         let use_xheaders = config.section("server").get_bool("use_xheaders", true)?;
         let own_uid = rustix::process::geteuid().as_raw();
         Ok((
@@ -699,6 +741,7 @@ impl Auth {
                 networks_from,
                 ignored_trusted_clients,
                 proxies,
+                proxy_login,
                 explicit_proxies,
                 use_xheaders,
                 own_uid,
@@ -739,6 +782,9 @@ impl Auth {
         } else {
             let list: Vec<String> = self.proxies.iter().map(ToString::to_string).collect();
             tracing::info!(target: "orrery::auth", "Authorization: trusted proxies, from {from}: {}", list.join(", "));
+            if let Some(header) = &self.proxy_login {
+                tracing::info!(target: "orrery::auth", "Logins: trusted proxies name the user they logged in with {header}");
+            }
             if self.explicit_proxies {
                 self.warn_proxies_with_roles();
             }
@@ -791,6 +837,26 @@ impl Auth {
             tracing::warn!(target: "orrery::auth", "Refused {} more requests in the last hour", refusals.0);
             *refusals = (0, Instant::now());
         }
+    }
+
+    /// The user a trusted proxy logged in, from `[authorization.proxy_login] header`. From any
+    /// other address the header is ignored, since anyone can send it.
+    pub fn proxy_user(&self, peer: IpAddr, headers: &HeaderMap) -> Option<String> {
+        let header = self.proxy_login.as_deref()?;
+        let name = headers.get(header).and_then(|v| v.to_str().ok()).map(str::trim).filter(|v| !v.is_empty())?;
+        let peer = peer.to_canonical();
+        if !self.is_proxy(peer) {
+            self.log_once(format!("untrusted-login {peer}"), || {
+                format!("{peer} sent {header}, but it isn't a trusted proxy, so orrery ignores the user it names")
+            });
+            return None;
+        }
+        Some(name.to_owned())
+    }
+
+    /// Whether this is the first time `key` is seen, for log lines written once.
+    pub fn first_time(&self, key: String) -> bool {
+        self.logged.lock().expect("logged lock").insert(key)
     }
 
     fn is_proxy(&self, ip: IpAddr) -> bool {
@@ -1043,6 +1109,38 @@ mod tests {
         let mut c = Config::default();
         c.parse_toml(toml, std::path::Path::new("orrery.toml")).unwrap();
         Auth::new(&c).map(|(a, _)| a)
+    }
+
+    #[test]
+    fn proxy_users_come_only_from_trusted_proxies() {
+        let a =
+            toml_auth("[authorization]\ntrusted_proxies = [\"192.168.1.10\"]\n[authorization.proxy_login]\n").unwrap();
+        let h = headers(&[("x-forwarded-user", "sami")]);
+        assert_eq!(a.proxy_user(ip("192.168.1.10"), &h).as_deref(), Some("sami"));
+        // Anyone else could claim any name.
+        assert_eq!(a.proxy_user(ip("192.168.1.11"), &h), None);
+        assert_eq!(a.proxy_user(ip("192.168.1.10"), &headers(&[("x-forwarded-user", " ")])), None);
+
+        let a = toml_auth(
+            "[authorization]\ntrusted_proxies = [\"192.168.1.10\"]\n[authorization.proxy_login]\nheader = \"Remote-User\"\n",
+        )
+        .unwrap();
+        assert_eq!(a.proxy_user(ip("192.168.1.10"), &h), None);
+        assert_eq!(a.proxy_user(ip("192.168.1.10"), &headers(&[("remote-user", "sami")])).as_deref(), Some("sami"));
+        // A user named by the proxy is trusted, as Fluidd needs, and logs out at the proxy.
+        let user = Access::none("network").with_proxy_user("sami", Role::Operator);
+        assert!(user.trusted && user.from_proxy);
+        assert_eq!(user.source, "proxy user sami");
+        assert!(!user.with_user("olive", Role::Admin).from_proxy);
+
+        for toml in [
+            // Without trusted_proxies, orrery can't tell who may send the header.
+            "[authorization.proxy_login]\n",
+            "[authorization]\ntrusted_proxies = [\"192.168.1.10\"]\n[authorization.proxy_login]\nheader = \"not a header\"\n",
+            "[authorization]\ntrusted_proxies = [\"192.168.1.10\"]\n[authorization.proxy_login]\nheader = 1\n",
+        ] {
+            assert!(toml_auth(toml).is_err(), "{toml}");
+        }
     }
 
     #[test]

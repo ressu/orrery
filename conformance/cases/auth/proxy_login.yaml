@@ -1,0 +1,52 @@
+name: a trusted proxy names the user it logged in, who gets their role from orrery.toml
+targets: [orrery]
+klippy: none
+transports: [http]
+files:
+  config/orrery.toml: |
+    [authorization]
+    trusted_proxies = ["127.0.0.1"]
+    [authorization.networks]
+    viewer = ["192.168.1.0/24"]
+    [authorization.users]
+    admin = ["sami"]
+    operator = ["olive"]
+    [authorization.proxy_login]
+steps:
+  # The runner connects from 127.0.0.1, the trusted proxy, and names the client with
+  # X-Forwarded-For. 10.1.1.1 has no role from its network.
+  - call: server.info
+    http: {verb: GET, path: /server/info, headers: {X-Forwarded-For: 10.1.1.1}}
+    expect_error: {code: 401}
+  - call: server.info
+    http: {verb: GET, path: /server/info, headers: {X-Forwarded-For: 10.1.1.1, X-Forwarded-User: sami}}
+    expect: {klippy_connected: false}
+  - call: access.get_user
+    http: {verb: GET, path: /access/user, headers: {X-Forwarded-For: 10.1.1.1, X-Forwarded-User: sami}}
+    expect: {username: sami, source: proxy, created_on: $type:number}
+  # Trusted, so Fluidd skips its login screen.
+  - call: access.info
+    http: {verb: GET, path: /access/info, headers: {X-Forwarded-For: 10.1.1.1, X-Forwarded-User: sami}}
+    expect: {trusted: true, login_required: false}
+  # Proxy users aren't stored, so they aren't listed.
+  - call: access.users.list
+    http: {verb: GET, path: /access/users/list, headers: {X-Forwarded-For: 10.1.1.1, X-Forwarded-User: sami}}
+    expect: {users: {$excludes: [{username: sami}]}}
+  # olive is an operator, so she can't list users.
+  - call: access.users.list
+    http: {verb: GET, path: /access/users/list, headers: {X-Forwarded-For: 10.1.1.1, X-Forwarded-User: olive}}
+    expect_error: {code: 403}
+  # A user orrery.toml doesn't list gets no role.
+  - call: server.info
+    http: {verb: GET, path: /server/info, headers: {X-Forwarded-For: 10.1.1.1, X-Forwarded-User: mallory}}
+    expect_error: {code: 403, message: "orrery.toml doesn't give the user mallory a role. An admin can add them under [authorization.users]."}
+  # A login only adds rights: a viewer network's client logged in as sami is admin.
+  - call: access.users.list
+    http: {verb: GET, path: /access/users/list, headers: {X-Forwarded-For: 192.168.1.5, X-Forwarded-User: sami}}
+    expect: {users: $type:array}
+  - call: access.logout
+    http: {verb: POST, path: /access/logout, headers: {X-Forwarded-For: 10.1.1.1, X-Forwarded-User: sami}}
+    expect_error: {code: 400, message: "sami logged in through the proxy, so log out there. For oauth2-proxy, that's /oauth2/sign_out."}
+  - call: access.user.password
+    http: {verb: POST, path: /access/user/password, headers: {X-Forwarded-For: 10.1.1.1, X-Forwarded-User: sami}, body: {password: a, new_password: bbbbbbbb}}
+    expect_error: {code: 400}

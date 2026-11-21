@@ -22,17 +22,20 @@ change how safe or complete orrery is to run.
 
 ## Entries
 
-### no-logins: only local users log in, and some login options are ignored
+### no-logins: logins come from local users and proxies, and work a little differently
 
 - **Area:** API
 - **Moonraker:** users log in with a name and password, and get JWTs. `access.oneshot_token`
   gives tokens for HTTP links. `force_logins` makes trusted clients log in too, and `ldap`
   checks passwords against an LDAP server.
-- **orrery:** local users log in with Moonraker's tokens, and their roles come from
-  `orrery.toml`'s `[authorization.users]`; see `docs/design/2026-11-21-logins.md`. What's
-  missing or different:
-  - Proxy logins and login sources that are agents, such as LDAP, aren't built yet.
-    `access.login` with another `source` than `moonraker` is refused, and `[ldap]` is ignored.
+- **orrery:** local users log in with Moonraker's tokens, and a trusted proxy can name a user
+  it logged in, with `[authorization.proxy_login]`. Roles come from `orrery.toml`'s
+  `[authorization.users]`; see `docs/design/2026-11-21-logins.md`. What's missing or different:
+  - Login sources that are agents, such as LDAP, aren't built yet. `access.login` with another
+    `source` than `moonraker` is refused, and `[ldap]` is ignored.
+  - A proxy user has the source `proxy`, isn't stored, and isn't in `access.users.list`. They
+    log out and change their password at the proxy, so orrery refuses both with a message
+    that says so.
   - `force_logins` applies whenever it's set. Moonraker applies it only once a user exists.
   - After `max_login_attempts` failed logins, an address is locked out for `login_lockout`
     minutes, 15 by default, with 401 "Too many failed logins from this address. Try again in
@@ -58,7 +61,7 @@ change how safe or complete orrery is to run.
     the next login.
 - **Why:** see `docs/design/2026-11-21-logins.md`.
 - **Cases:** `auth/login` (both servers); `auth/users`, `auth/compat`, `auth/oneshot`,
-  `auth/lockout`, and `auth/force_logins` (orrery only); and `access/trusted`.
+  `auth/lockout`, `auth/force_logins`, and `auth/proxy_login` (orrery only); and `access/trusted`.
 
 ### auth-roles: rights come in roles, and some requests need more than Moonraker asks
 
