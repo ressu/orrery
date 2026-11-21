@@ -12,7 +12,7 @@
     }
   },
   {
-    "step": 3,
+    "step": 4,
     "call": "server.info",
     "error": {
       "code": 401

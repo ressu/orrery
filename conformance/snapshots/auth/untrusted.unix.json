@@ -1,6 +1,6 @@
 [
   {
-    "step": 4,
+    "step": 5,
     "call": "server.info",
     "result": {
       "klippy_connected": "bool",

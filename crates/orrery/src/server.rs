@@ -67,6 +67,8 @@ struct Client {
     identity: Option<Value>,
     peer: Peer,
     access: crate::auth::Access,
+    /// The access without a user logged in, which the connection goes back to on logout.
+    base: crate::auth::Access,
 }
 
 /// What orrery knows about the other end of a connection.
@@ -100,6 +102,7 @@ pub struct App {
     pub cors: crate::access::Cors,
     pub auth: crate::auth::Auth,
     pub keys: crate::keys::Keys,
+    pub users: crate::users::Users,
     pub extensions: crate::extensions::Extensions,
     pub agents: crate::agents::Agents,
     warnings: Mutex<Vec<String>>,
@@ -123,6 +126,7 @@ const COMPONENTS: &[&str] = &[
     "history",
     "webcam",
     "extensions",
+    "authorization",
 ];
 
 impl App {
@@ -149,6 +153,8 @@ impl App {
         warnings.extend(agent_warnings);
         let keys = crate::keys::Keys::new(&config, &agents, &database)?;
         keys.log_settings();
+        let users = crate::users::Users::new(&config, |name| keys.exists(name), &database)?;
+        users.log_settings();
         // Connection ids look like Moonraker's (Python object ids): large numbers.
         let base = 0x7f00_0000_0000 + (std::process::id() as u64) * 0x1000;
         let app = Arc::new(Self {
@@ -171,6 +177,7 @@ impl App {
             cors,
             auth,
             keys,
+            users,
             extensions: crate::extensions::Extensions::default(),
             agents,
             warnings: Mutex::new(warnings),
@@ -223,7 +230,10 @@ impl App {
 
     pub fn add_client(&self, tx: mpsc::UnboundedSender<String>, peer: Peer, access: crate::auth::Access) -> ConnId {
         let id = self.next_conn.fetch_add(1, Ordering::Relaxed);
-        self.clients.lock().expect("clients lock").insert(id, Client { tx, identity: None, peer, access });
+        self.clients
+            .lock()
+            .expect("clients lock")
+            .insert(id, Client { tx, identity: None, peer, base: access.clone(), access });
         id
     }
 
@@ -241,8 +251,30 @@ impl App {
                     client: c.access.client.clone(),
                     ..crate::auth::Access::none(format!("key {name} was rotated"))
                 };
+                c.base = c.access.clone();
             }
         }
+    }
+
+    /// Logs a user in on a connection: its rights become the higher of its own and the user's.
+    pub fn set_client_user(&self, id: ConnId, name: &str, role: crate::auth::Role) {
+        if let Some(c) = self.clients.lock().expect("clients lock").get_mut(&id) {
+            c.access = c.base.with_user(name, role);
+        }
+    }
+
+    /// Takes a user's rights from every connection they're logged in on, except `keep`: after a
+    /// logout, a deletion, or a new password. Returns how many lost them.
+    pub fn revoke_user(&self, name: &str, keep: Option<ConnId>, why: &str) -> usize {
+        let mut count = 0;
+        for (id, c) in self.clients.lock().expect("clients lock").iter_mut() {
+            if c.access.user.as_deref() == Some(name) && Some(*id) != keep {
+                tracing::info!(target: "orrery::auth", "Connection {id} is no longer logged in as {name}: {why}");
+                c.access = c.base.clone();
+                count += 1;
+            }
+        }
+        count
     }
 
     /// Gives a connection new rights: from a key it sent, or an agent name it claimed.
@@ -252,6 +284,7 @@ impl App {
             if access.client.is_empty() {
                 access.client = c.access.client.clone();
             }
+            c.base = access.clone();
             c.access = access;
         }
     }
@@ -390,8 +423,9 @@ impl App {
             Ok(v) => json!({"jsonrpc": "2.0", "result": v, "id": id}),
             Err(e) => {
                 // A refusal is logged by log_refusal, once per client and reason, with the client
-                // named. Logging each one here too would fill the log with lines that don't say who.
-                if !refused {
+                // named, and a failed login by the login. Logging each one here too would fill the
+                // log with lines that don't say who.
+                if !refused && !matches!(e.status, 401 | 403) {
                     tracing::info!(
                         "JSON-RPC Request Error - Requested Method: {method}, Code: {}, Message: {e}",
                         e.status
@@ -536,6 +570,21 @@ async fn connection_identify(app: Arc<App>, req: Request) -> ApiResult {
     if !CLIENT_TYPES.contains(&client_type.as_str()) {
         return Err(ApiError::bad_request(format!("Invalid Client Type: {client_type}")));
     }
+    // A token sent here logs the connection in as its user, as Moonraker's `authenticate`.
+    if let Some(token) = req.args.opt_str("access_token")?.filter(|t| !t.trim().is_empty()) {
+        let checked = app.users.check_token(token.trim(), crate::users::TokenType::Access, true);
+        let role = checked.and_then(|name| app.users.role_of(&name).map(|role| (name, role)));
+        match role {
+            Ok((name, role)) => {
+                app.set_client_user(conn, &name, role);
+                tracing::info!(target: "orrery::auth", "Connection {conn} identified as user {name}: {}", app.client_access(conn).describe());
+            }
+            Err(e) => {
+                app.auth.log_refusal(&req.access, "server.connection.identify", &e);
+                return Err(ApiError::new(401, e.message));
+            }
+        }
+    }
     // A key sent here gives the connection the key's rights, as Moonraker's `authenticate`.
     if let Some(key) = req.args.opt_str("api_key")?.filter(|k| !k.trim().is_empty()) {
         match app.keys.lookup(&key) {
@@ -549,6 +598,14 @@ async fn connection_identify(app: Arc<App>, req: Request) -> ApiResult {
                 return Err(e);
             }
         }
+    }
+    // As in Moonraker, a websocket with no rights can't identify without a token or key. That
+    // 401 is what makes Fluidd show its login screen. The unix socket's agents claim their
+    // rights after identifying, so it's left out.
+    if !app.client_peer(conn).unix && app.client_access(conn).role.is_none() {
+        let e = ApiError::new(401, "Unauthorized");
+        app.auth.log_refusal(&req.access, "server.connection.identify", &e);
+        return Err(e);
     }
     let identity = json!({"name": name, "version": version, "type": client_type, "url": url});
     {

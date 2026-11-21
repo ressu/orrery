@@ -12,6 +12,11 @@ steps:
   - call: server.info
     only: [ws]
     expect_error: {code: -32602, message: Unauthorized}
+  # Without a token or key, identify fails too. That's what makes Fluidd show its login screen.
+  - call: server.connection.identify
+    only: [ws]
+    params: {client_name: test, version: "0.1", type: web, url: "https://example.invalid"}
+    expect_error: {code: -32602, message: Unauthorized}
   - call: server.info
     only: [http]
     expect_error: {code: 401, message: Unauthorized}

@@ -9,15 +9,20 @@ publish.workspace = true
 [dependencies]
 orrery-proto.workspace = true
 anyhow.workspace = true
+argon2 = { version = "0.6", default-features = false, features = ["alloc"] }
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "multipart", "query", "tokio", "ws"] }
 clap = { workspace = true, features = ["env"] }
+ed25519-dalek = { version = "3", default-features = false, features = ["fast", "zeroize"] }
 form_urlencoded = "1"
 futures-util.workspace = true
+hmac = "0.13"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "qoi"] }
+pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"] }
 percent-encoding = "2.3.2"
 redb = "4"
 regex.workspace = true
-rustix = { version = "1.1.6", features = ["fs", "param", "process", "rand", "system", "time"] }
+rustix = { version = "1.1.6", features = ["fs", "param", "process", "rand", "system", "termios", "time"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.11.1"

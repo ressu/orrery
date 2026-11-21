@@ -17,5 +17,12 @@
     "error": {
       "code": -32602
     }
+  },
+  {
+    "step": 3,
+    "call": "server.connection.identify",
+    "error": {
+      "code": -32602
+    }
   }
 ]

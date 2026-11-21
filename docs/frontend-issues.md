@@ -26,11 +26,25 @@ filed, add its link; when it's fixed upstream, remove the entry.
   has no Authentication section, so the link goes nowhere.
 - **Cause:** the navigation entry is always visible (`src/components/layout/AppSettingsNav.vue:40`,
   `visible: true`). The section is shown only when the server reports the `authorization`
-  component (`src/views/Settings.vue:15,79`). orrery doesn't report it yet. Moonraker always
+  component (`src/views/Settings.vue:15,79`). Since 2026-11-21 orrery reports it, so this
+  shows only with a server that doesn't, such as orrery before logins. Moonraker always
   does, so Moonraker users don't see this.
 - **Fix:** make the navigation entry's `visible` follow the same check, as the timelapse and
   MMU entries do in the same list.
 - **Upstream:** not filed yet.
+
+### fluidd-auth-nonadmin: the Authentication settings expect every client to list users
+
+- **Frontend:** Fluidd 1.38.1, from its source, 2026-11-21. Not yet seen on bluev2.
+- **What happens (expected):** for a client that isn't an admin, the Authentication section
+  loads, but orrery refuses its list of users and its API key. Fluidd may show the refusals as
+  errors, and the section shows no users.
+- **Cause:** `auth/init` asks for the current user, the user list, and the API key together,
+  and needs all three to succeed (`src/store/auth/actions.ts:20-31`). It runs whenever the
+  server reports the `authorization` component (`src/globals.ts:271`). Moonraker lets any
+  authorized client list users and read the API key, so Fluidd never expects a refusal.
+- **Fix:** load the list and the key only when the section is opened, and hide the parts the
+  server refuses.
 
 ### fluidd-save-error: a refused save shows no error
 

@@ -22,21 +22,34 @@ change how safe or complete orrery is to run.
 
 ## Entries
 
-### no-logins: no user logins yet
+### no-logins: only local users log in, and some login options are ignored
 
 - **Area:** API
 - **Moonraker:** users log in with a name and password, and get JWTs. `access.oneshot_token`
   gives tokens for HTTP links. `force_logins` makes trusted clients log in too, and `ldap`
   checks passwords against an LDAP server.
-- **orrery:** has trusted networks and API keys only. `access.login` and the user endpoints
-  return an error, `access.users.list` is empty, and `force_logins`, `default_source`,
-  `max_login_attempts`, `login_timeout`, and `[ldap]` are ignored. `access.oneshot_token` hands
-  out tokens so frontends can build download links, but orrery doesn't check them: a link works
-  only for a client that has rights without it. Fluidd works only from a trusted network, since
-  it can't send an API key.
-- **Why:** keys come first; see `docs/design/2026-11-20-authorization.md`. Logins are designed
-  in `docs/design/2026-11-21-logins.md`.
-- **Cases:** `access/trusted` covers the trusted-client replies.
+- **orrery:** local users log in with Moonraker's tokens, and their roles come from
+  `orrery.toml`'s `[authorization.users]`; see `docs/design/2026-11-21-logins.md`. What's
+  missing or different:
+  - Proxy logins and login sources that are agents, such as LDAP, aren't built yet.
+    `access.login` with another `source` than `moonraker` is refused, and `[ldap]` is ignored.
+  - `force_logins` and `max_login_attempts` are ignored, for now.
+  - `access.oneshot_token` hands out tokens that orrery doesn't check yet: a download link
+    works only for a client that has rights without it.
+  - A failed login says "Wrong user name or password", with 401, whatever was wrong. Moonraker
+    says "Unregistered User" or "Invalid Password", with 400, which tells a guesser which
+    names exist.
+  - A login adds rights and never takes any away: the connection gets the higher of its
+    network's role and its user's. After a logout, a websocket goes back to its network's
+    rights; in Moonraker it has none until it identifies again.
+  - `access.post_user` and `access.delete_user` need `admin`; Moonraker allows any authorized
+    client. A user who isn't listed in `[authorization.users]` gets `default_role`, or can't
+    log in. Without the list, every local user is `admin`, as in Moonraker.
+  - Changing a password ends the user's other sessions. Moonraker keeps their tokens valid.
+  - Passwords are hashed with Argon2id. Moonraker's PBKDF2 hashes are checked, and replaced at
+    the next login.
+- **Why:** see `docs/design/2026-11-21-logins.md`.
+- **Cases:** `auth/login` (both servers), `auth/users` (orrery only), and `access/trusted`.
 
 ### auth-roles: rights come in roles, and some requests need more than Moonraker asks
 
@@ -48,9 +61,8 @@ change how safe or complete orrery is to run.
   - Keys are listed by role in `orrery.toml`'s `[authorization.keys]`, and each agent table
     has a key. orrery makes the secrets. `access.get_api_key`, `access.post_api_key`, and
     `access.users.list` need `admin`; Moonraker allows any authorized client.
-  - orrery doesn't report the `authorization` component in `server.info`, so Fluidd hides
-    its Authentication settings, with the users and the API key, and doesn't ask for them
-    when it connects. Fluidd's link to the section still shows; see `fluidd-auth-nav` in
+  - Fluidd's Authentication settings load the user list and the API key, which need `admin`.
+    For an operator or viewer, those calls are refused; see `fluidd-auth-nonadmin` in
     `docs/frontend-issues.md`.
   - A browser request from a network with a role whose `Origin` is neither its own `Host` nor in
     `cors_domains` gets no rights. Moonraker checks `Origin` only on the websocket, so a page on

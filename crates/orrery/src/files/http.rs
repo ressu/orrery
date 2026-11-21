@@ -49,11 +49,12 @@ pub async fn upload(
     State(app): State<Arc<App>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
+    axum::extract::RawQuery(query): axum::extract::RawQuery,
     mut form: Multipart,
 ) -> Response {
     // A client with no rights at all is turned away before it sends the file. The root is
     // checked once its field has arrived.
-    let access = match crate::web::request_access(&app, peer, &headers) {
+    let access = match crate::web::request_access(&app, peer, &headers, query.as_deref()) {
         Ok(a) => a,
         Err(e) => return api_error(e),
     };

@@ -1,20 +1,21 @@
-//! The parts of Moonraker's `authorization.py` that frontends need when nobody logs in: the
-//! `access.*` endpoints, and CORS. Who may do what is in [`crate::auth`]. orrery has no user
-//! logins yet, so a client is the `_TRUSTED_USER_`, or the `_API_KEY_USER_` with a key.
-//! Oneshot tokens are handed out so frontends can build download links, and they aren't
-//! checked. CORS follows `[authorization] cors_domains` and the networks that have a role.
+//! The parts of Moonraker's `authorization.py` that frontends call: the `access.*` endpoints,
+//! and CORS. Who may do what is in [`crate::auth`]; users and their tokens are in
+//! [`crate::users`]. A client that isn't logged in is the `_TRUSTED_USER_`, or the
+//! `_API_KEY_USER_` with a key, as in Moonraker. Oneshot tokens are handed out so frontends can
+//! build download links, and they aren't checked yet. CORS follows `[authorization]
+//! cors_domains` and the networks that have a role.
 
 use std::net::IpAddr;
 use std::sync::{Arc, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use regex::Regex;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::api::{ApiError, ApiResult, Request, RequestType, Transports, handler};
 use crate::auth::Network;
 use crate::config::Config;
 use crate::server::App;
+use crate::users::{LOCAL_SOURCE, TokenType, Users};
 
 pub const TRUSTED_USER: &str = "_TRUSTED_USER_";
 pub const API_KEY_USER: &str = "_API_KEY_USER_";
@@ -87,6 +88,11 @@ pub fn register_endpoints(app: &Arc<App>) {
         handler(user),
     );
     r.register("/access/users/list", &[RequestType::Get], Transports::All, handler(users_list));
+    r.register("/access/login", &[RequestType::Post], Transports::All, handler(login));
+    r.register("/access/logout", &[RequestType::Post], Transports::All, handler(logout));
+    r.register("/access/refresh_jwt", &[RequestType::Post], Transports::All, handler(refresh_jwt));
+    r.register("/access/user/password", &[RequestType::Post], Transports::All, handler(user_password));
+    r.register("/orrery/access/user/password", &[RequestType::Post], Transports::All, handler(set_password));
     r.register("/access/oneshot_token", &[RequestType::Get], Transports::All, handler(oneshot_token));
     r.register("/access/info", &[RequestType::Get], Transports::All, handler(info));
     r.register("/access/api_key", &[RequestType::Get, RequestType::Post], Transports::All, handler(api_key));
@@ -133,19 +139,264 @@ fn no_key(name: &str) -> ApiError {
     ApiError::not_found(format!("No key named {name}: keys are listed by role in orrery.toml's [authorization.keys]"))
 }
 
-async fn user(_app: Arc<App>, req: Request) -> ApiResult {
-    if req.kind != RequestType::Get {
-        return Err(ApiError::bad_request("User accounts aren't available: orrery has no user logins yet"));
+/// `access.get_user`, `access.post_user`, and `access.delete_user`.
+async fn user(app: Arc<App>, req: Request) -> ApiResult {
+    match req.kind {
+        RequestType::Post => post_user(app, req).await,
+        RequestType::Delete => delete_user(app, req).await,
+        _ => get_user(&app, &req),
     }
-    let since =
-        *TRUSTED_SINCE.get_or_init(|| SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs_f64());
-    // As in Moonraker: a key's client is the API key user, everyone else the trusted user.
+}
+
+/// The current user. As in Moonraker, a client that isn't logged in is the API key user with a
+/// key, and the trusted user otherwise.
+fn get_user(app: &App, req: &Request) -> ApiResult {
+    if let Some(user) = req.access.user.as_deref().and_then(|name| app.users.get(name)) {
+        return Ok(json!({
+            "username": user.username,
+            "source": user.source,
+            "created_on": user.created_on,
+        }));
+    }
+    let since = *TRUSTED_SINCE.get_or_init(crate::users::now_secs);
     let name = if req.access.key.is_some() { API_KEY_USER } else { TRUSTED_USER };
     Ok(json!({"username": name, "source": "moonraker", "created_on": since}))
 }
 
-async fn users_list(_app: Arc<App>, _req: Request) -> ApiResult {
-    Ok(json!({"users": []}))
+fn local_logins_on(users: &Users) -> Result<(), ApiError> {
+    if users.local_logins {
+        return Ok(());
+    }
+    Err(ApiError::bad_request("Local passwords are off in orrery.toml (local_logins = false)"))
+}
+
+/// `access.post_user`: adds a local user, admin only. The user's role comes from the config.
+async fn post_user(app: Arc<App>, req: Request) -> ApiResult {
+    local_logins_on(&app.users)?;
+    let name = req.args.str("username")?;
+    let password = req.args.str("password")?;
+    app.users.check_new_name(&name, |n| app.keys.exists(n))?;
+    check_password_text(&password)?;
+    let hash = hash_off_thread(password).await?;
+    app.users.store(&app.database, Users::new_local(&name, hash))?;
+    match app.users.role_of(&name).ok() {
+        Some(role) => {
+            tracing::info!(target: "orrery::auth", "Added the user {name}, with the {role} role, as {} asked", req.access.describe())
+        }
+        None => tracing::warn!(
+            target: "orrery::auth",
+            "Added the user {name}, as {} asked. orrery.toml gives them no role, so they can't log in until an admin lists them under [authorization.users]",
+            req.access.describe()
+        ),
+    }
+    let tokens = app.users.log_in(&app.database, &name)?;
+    app.notify("user_created", vec![json!({"username": name})]);
+    Ok(json!({
+        "username": name,
+        "token": tokens.token,
+        "source": LOCAL_SOURCE,
+        "refresh_token": tokens.refresh_token,
+        "action": "user_created",
+    }))
+}
+
+/// `access.delete_user`: admin only. The user's tokens stop working, and their open
+/// connections lose their rights.
+async fn delete_user(app: Arc<App>, req: Request) -> ApiResult {
+    let name = req.args.str("username")?;
+    if req.access.user.as_deref() == Some(name.as_str()) {
+        return Err(ApiError::bad_request(format!("You're logged in as {name}, so you can't delete {name}")));
+    }
+    if app.keys.exists(&name) || name.starts_with("agent.") {
+        return Err(ApiError::bad_request(format!(
+            "{name} is a key, not a user. To remove it, remove it from orrery.toml's [authorization.keys]"
+        )));
+    }
+    if !app.users.remove(&app.database, &name)? {
+        return Err(ApiError::not_found(format!("No user named {name}")));
+    }
+    tracing::info!(target: "orrery::auth", "Deleted the user {name}, as {} asked", req.access.describe());
+    app.revoke_user(&name, None, "the user was deleted");
+    app.notify("user_deleted", vec![json!({"username": name})]);
+    Ok(json!({"username": name, "action": "user_deleted"}))
+}
+
+/// `access.users.list`: the stored users, and the keys, with source `orrery`, as the
+/// authorization note decided. The `moonraker` key stays out, as Moonraker hides
+/// `_API_KEY_USER_`.
+async fn users_list(app: Arc<App>, _req: Request) -> ApiResult {
+    let mut users: Vec<Value> = app
+        .users
+        .list()
+        .into_iter()
+        .map(|u| json!({"username": u.username, "source": u.source, "created_on": u.created_on}))
+        .collect();
+    let since = *TRUSTED_SINCE.get_or_init(crate::users::now_secs);
+    for name in app.keys.names().filter(|n| *n != crate::keys::MOONRAKER_KEY) {
+        users.push(json!({"username": name, "source": "orrery", "created_on": since}));
+    }
+    Ok(json!({"users": users}))
+}
+
+/// `access.login`: checks a local user's password, and logs the connection in.
+async fn login(app: Arc<App>, req: Request) -> ApiResult {
+    let name = req.args.str("username")?;
+    let password = req.args.str("password")?;
+    let source = req.args.opt_str("source")?.unwrap_or_else(|| LOCAL_SOURCE.to_owned()).to_lowercase();
+    let client = describe_client(&req);
+    let refuse = |why: &str| {
+        tracing::info!(target: "orrery::auth", "Refused a login as {name} from {client}: {why}");
+        ApiError::new(401, "Wrong user name or password")
+    };
+    if source != LOCAL_SOURCE {
+        tracing::info!(target: "orrery::auth", "Refused a login as {name} from {client}: orrery has no {source} source");
+        return Err(ApiError::new(401, format!("orrery has no {source} login source")));
+    }
+    local_logins_on(&app.users)?;
+    let Some(user) = app.users.get(&name) else { return Err(refuse("no such user")) };
+    if user.source != LOCAL_SOURCE {
+        return Err(ApiError::new(401, format!("The user {name} logs in with the {} source", user.source)));
+    }
+    let Some(stored) = user.password.clone() else { return Err(refuse("the user has no password")) };
+    let checked = {
+        let password = password.clone();
+        tokio::task::spawn_blocking(move || crate::users::check_password(&password, &stored))
+            .await
+            .map_err(|e| ApiError::from(anyhow::anyhow!("password check: {e}")))?
+    };
+    let (ok, outdated) = checked;
+    if !ok {
+        return Err(refuse("wrong password"));
+    }
+    let role = app.users.role_of(&name).inspect_err(|_| {
+        tracing::info!(target: "orrery::auth", "Refused a login as {name} from {client}: orrery.toml gives the user no role");
+    })?;
+    if outdated {
+        let mut user = user;
+        user.password = Some(hash_off_thread(password).await?);
+        app.users.store(&app.database, user)?;
+        tracing::info!(target: "orrery::auth", "Replaced the user {name}'s imported password hash with an Argon2id one");
+    }
+    let tokens = app.users.log_in(&app.database, &name)?;
+    if let Some(conn) = req.conn {
+        app.set_client_user(conn, &name, role);
+    }
+    tracing::info!(target: "orrery::auth", "User {name} logged in from {client}, with the {role} role");
+    Ok(json!({
+        "username": name,
+        "token": tokens.token,
+        "source": LOCAL_SOURCE,
+        "refresh_token": tokens.refresh_token,
+        "action": "user_logged_in",
+    }))
+}
+
+/// `access.logout`: forgets the user's signing key, so their tokens stop working everywhere,
+/// as in Moonraker.
+async fn logout(app: Arc<App>, req: Request) -> ApiResult {
+    let Some(name) = req.access.user.clone() else {
+        return Err(ApiError::bad_request("No user is logged in on this connection"));
+    };
+    app.users.forget_key(&app.database, &name)?;
+    app.revoke_user(&name, None, "the user logged out");
+    tracing::info!(target: "orrery::auth", "User {name} logged out, from {}", describe_client(&req));
+    app.notify("user_logged_out", vec![json!({"username": name})]);
+    Ok(json!({"username": name, "action": "user_logged_out"}))
+}
+
+/// `access.refresh_jwt`: a new access token for a refresh token.
+async fn refresh_jwt(app: Arc<App>, req: Request) -> ApiResult {
+    let refresh = req.args.str("refresh_token")?;
+    let name = app.users.check_token(refresh.trim(), TokenType::Refresh, true).map_err(|e| {
+        tracing::info!(target: "orrery::auth", "Refused a token refresh from {}: {}", describe_client(&req), e.message);
+        ApiError::new(401, format!("Invalid Refresh Token: {}", e.message))
+    })?;
+    let token = app.users.access_token(&name).map_err(|_| ApiError::new(401, "User not logged in"))?;
+    let source = app.users.get(&name).map(|u| u.source).unwrap_or_default();
+    Ok(json!({"username": name, "token": token, "source": source, "action": "user_jwt_refresh"}))
+}
+
+/// `access.user.password`: a user changes their own password. Their other sessions end; this
+/// connection stays logged in.
+async fn user_password(app: Arc<App>, req: Request) -> ApiResult {
+    let Some(name) = req.access.user.clone() else {
+        return Err(ApiError::bad_request("No user is logged in on this connection"));
+    };
+    let password = req.args.str("password")?;
+    let new_password = req.args.str("new_password")?;
+    let user = app.users.get(&name).ok_or_else(|| ApiError::not_found(format!("No user named {name}")))?;
+    let Some(stored) = user.password.clone().filter(|_| user.source == LOCAL_SOURCE) else {
+        return Err(ApiError::bad_request(format!(
+            "The user {name} logs in with the {} source, which keeps the password",
+            user.source
+        )));
+    };
+    check_password_text(&new_password)?;
+    let (ok, _) = tokio::task::spawn_blocking(move || crate::users::check_password(&password, &stored))
+        .await
+        .map_err(|e| ApiError::from(anyhow::anyhow!("password check: {e}")))?;
+    if !ok {
+        return Err(ApiError::bad_request("The current password is wrong"));
+    }
+    replace_password(&app, &name, new_password, req.conn).await?;
+    tracing::info!(target: "orrery::auth", "User {name} changed their password, from {}", describe_client(&req));
+    Ok(json!({"username": name, "action": "user_password_reset"}))
+}
+
+/// `orrery.access.user.password {username, password}`: an admin sets a user's password, as
+/// `orrery user password` does.
+async fn set_password(app: Arc<App>, req: Request) -> ApiResult {
+    let name = req.args.str("username")?;
+    let password = req.args.str("password")?;
+    let user = app.users.get(&name).ok_or_else(|| ApiError::not_found(format!("No user named {name}")))?;
+    if user.source != LOCAL_SOURCE {
+        return Err(ApiError::bad_request(format!("The user {name} logs in with the {} source", user.source)));
+    }
+    check_password_text(&password)?;
+    replace_password(&app, &name, password, req.conn).await?;
+    tracing::info!(target: "orrery::auth", "Set the user {name}'s password, as {} asked", req.access.describe());
+    Ok(json!({"username": name, "action": "user_password_reset"}))
+}
+
+/// Stores a new password and a new signing key, so the user's other sessions end. `keep`
+/// stays logged in.
+async fn replace_password(
+    app: &App,
+    name: &str,
+    password: String,
+    keep: Option<crate::api::ConnId>,
+) -> Result<(), ApiError> {
+    let hash = hash_off_thread(password).await?;
+    let mut user = app.users.get(name).ok_or_else(|| ApiError::not_found(format!("No user named {name}")))?;
+    user.password = Some(hash);
+    let had_key = user.jwt_secret.is_some();
+    user.jwt_secret = None;
+    user.jwk_id = None;
+    app.users.store(&app.database, user)?;
+    if had_key {
+        app.users.log_in(&app.database, name)?;
+    }
+    app.revoke_user(name, keep, "the user's password changed");
+    Ok(())
+}
+
+fn check_password_text(password: &str) -> Result<(), ApiError> {
+    if password.is_empty() {
+        return Err(ApiError::bad_request("A password can't be empty"));
+    }
+    Ok(())
+}
+
+async fn hash_off_thread(password: String) -> Result<String, ApiError> {
+    tokio::task::spawn_blocking(move || crate::users::hash_password(&password))
+        .await
+        .map_err(|e| ApiError::from(anyhow::anyhow!("password hash: {e}")))?
+        .map_err(ApiError::from)
+}
+
+/// Who asked, for log lines: the client's address.
+fn describe_client(req: &Request) -> String {
+    if req.access.client.is_empty() { req.access.source.clone() } else { req.access.client.clone() }
 }
 
 async fn oneshot_token(_app: Arc<App>, _req: Request) -> ApiResult {
@@ -156,10 +407,11 @@ async fn oneshot_token(_app: Arc<App>, _req: Request) -> ApiResult {
     Ok(json!(base32(&bytes)))
 }
 
-async fn info(_app: Arc<App>, req: Request) -> ApiResult {
+async fn info(app: Arc<App>, req: Request) -> ApiResult {
+    let sources: Vec<&str> = if app.users.local_logins { vec![LOCAL_SOURCE] } else { vec![] };
     Ok(json!({
-        "default_source": "moonraker",
-        "available_sources": ["moonraker"],
+        "default_source": LOCAL_SOURCE,
+        "available_sources": sources,
         "login_required": false,
         "trusted": req.access.trusted,
     }))

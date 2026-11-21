@@ -124,8 +124,13 @@ impl Keys {
             trusted: false,
             key: Some(spec.name.clone()),
             source: format!("key {}", spec.name),
-            client: String::new(),
+            ..Access::default()
         })
+    }
+
+    /// The names of the keys the config declares.
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        self.specs.iter().map(|s| s.name.as_str())
     }
 
     /// Whether the config declares a key of this name.
@@ -216,16 +221,28 @@ fn specs(config: &Config, agents: &Agents) -> Result<Vec<Spec>> {
 /// random bits. Clients check that format: Home Assistant's integration accepts only 32 letters
 /// and digits (`config_flow.py:106`). No prefix, so a key doesn't say what made it.
 fn new_secret() -> Result<String> {
-    let mut bytes = [0u8; 16];
-    let mut filled = 0;
-    while filled < bytes.len() {
-        filled += rustix::rand::getrandom(&mut bytes[filled..], rustix::rand::GetRandomFlags::empty())?;
-    }
-    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+    Ok(hex(&random_bytes::<16>()?))
 }
 
-fn constant_time_eq(a: &[u8; 32], b: &[u8; 32]) -> bool {
-    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+/// `N` random bytes, from the kernel.
+pub(crate) fn random_bytes<const N: usize>() -> Result<[u8; N]> {
+    let mut bytes = [0u8; N];
+    let mut filled = 0;
+    while filled < N {
+        filled += rustix::rand::getrandom(&mut bytes[filled..], rustix::rand::GetRandomFlags::empty())?;
+    }
+    Ok(bytes)
+}
+
+/// Lowercase hex.
+pub(crate) fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Compares in time that depends only on the length, so the time taken doesn't tell how much
+/// of a secret matched.
+pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 #[cfg(test)]

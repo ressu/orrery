@@ -26,6 +26,7 @@ mod proc_stats;
 pub mod server;
 mod services;
 pub mod unix_socket;
+mod users;
 pub mod web;
 mod webcam;
 

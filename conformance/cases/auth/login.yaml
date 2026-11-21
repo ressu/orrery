@@ -1,0 +1,53 @@
+name: local users are added and deleted, and log in, refresh their token, and log out
+transports: [ws, http]
+steps:
+  - call: access.post_user
+    params: {username: alice, password: secret1}
+    expect: {username: alice, source: moonraker, action: user_created, token: $type:string, refresh_token: $type:string}
+  - expect_notification: notify_user_created
+    match: [{username: alice}]
+  - call: access.post_user
+    params: {username: bob, password: secret2}
+    expect: {username: bob, action: user_created}
+  - call: access.users.list
+    expect: {users: [{username: alice, source: moonraker, created_on: $type:number}, {username: bob, source: moonraker}]}
+  - call: access.delete_user
+    params: {username: bob}
+    expect: {username: bob, action: user_deleted}
+  - expect_notification: notify_user_deleted
+    match: [{username: bob}]
+  - call: access.users.list
+    expect: {users: [{username: alice, source: moonraker}]}
+  - call: access.login
+    params: {username: alice, password: secret1, source: moonraker}
+    expect: {username: alice, source: moonraker, action: user_logged_in, token: $type:string, refresh_token: $type:string}
+    save: {token: token, refresh: refresh_token}
+  # On the websocket, the login logs the connection in. Over HTTP, each request sends the token.
+  - call: access.get_user
+    only: [ws]
+    expect: {username: alice, source: moonraker, created_on: $type:number}
+  - call: access.get_user
+    only: [http]
+    http: {verb: GET, path: /access/user, headers: {Authorization: "Bearer ${token}"}}
+    expect: {username: alice, source: moonraker, created_on: $type:number}
+  - call: access.refresh_jwt
+    params: {refresh_token: "${refresh}"}
+    expect: {username: alice, source: moonraker, action: user_jwt_refresh, token: $type:string}
+  - call: access.logout
+    only: [ws]
+    expect: {username: alice, action: user_logged_out}
+  - call: access.logout
+    only: [http]
+    http: {verb: POST, path: /access/logout, headers: {Authorization: "Bearer ${token}"}}
+    expect: {username: alice, action: user_logged_out}
+  - expect_notification: notify_user_logged_out
+    match: [{username: alice}]
+  # Logging out ends every token of the user.
+  - call: access.refresh_jwt
+    only: [http]
+    params: {refresh_token: "${refresh}"}
+    expect_error: {code: 401}
+  - call: access.refresh_jwt
+    only: [ws]
+    params: {refresh_token: "${refresh}"}
+    expect_error: {code: -32602}

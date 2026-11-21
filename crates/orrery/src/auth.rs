@@ -79,6 +79,10 @@ pub struct Access {
     /// Who the client is, for the log: its address as orrery judged it, such as
     /// "192.168.1.157", or "process 1234, user 1000" on the unix socket.
     pub client: String,
+    /// The user logged in on this connection, or whose token the request carries.
+    pub user: Option<String>,
+    /// The role comes from the user's login: it's higher than the rest would give.
+    pub from_login: bool,
 }
 
 impl Access {
@@ -88,6 +92,23 @@ impl Access {
 
     pub fn admin(source: impl Into<String>) -> Self {
         Self { role: Some(Role::Admin), source: source.into(), ..Self::default() }
+    }
+
+    /// This access with a user logged in. A login adds rights and never takes any away, so the
+    /// role is the higher of the two.
+    pub fn with_user(&self, name: &str, role: Role) -> Self {
+        let mut access = self.clone();
+        access.user = Some(name.to_owned());
+        if self.role.is_none_or(|r| role > r) {
+            access.role = Some(role);
+            access.from_login = true;
+            access.agent = None;
+            access.source = format!("user {name}");
+        } else {
+            access.from_login = false;
+            access.source = format!("{}, user {name}", self.source);
+        }
+        access
     }
 
     /// The role and its source, for log lines.
@@ -155,7 +176,9 @@ fn plural(role: Role) -> &'static str {
 /// What the client has, and what that lets it do: "This connection has the viewer role, from
 /// its network, so it can watch the printer but can't control it."
 fn what_it_has(access: &Access, role: Role) -> String {
-    let from = if access.key.is_some() {
+    let from = if access.from_login {
+        "from its login".to_owned()
+    } else if access.key.is_some() {
         "from its API key".to_owned()
     } else if access.trusted {
         "from its network".to_owned()
@@ -235,6 +258,9 @@ fn action(app: &App, endpoint: &str, kind: RequestType, args: &Args) -> String {
         ("/orrery/access/key/get", _) => Some("see API keys".to_owned()),
         ("/orrery/access/key/rotate", _) => Some("rotate API keys".to_owned()),
         ("/access/users/list", _) => Some("list users".to_owned()),
+        ("/access/user", Post) => Some("add users".to_owned()),
+        ("/access/user", Delete) => Some("delete users".to_owned()),
+        ("/orrery/access/user/password", _) => Some("set other users' passwords".to_owned()),
         (e, Get) if e.starts_with("/server/job_queue/") => None,
         (e, _) if e.starts_with("/server/job_queue/") => Some("change the job queue".to_owned()),
         _ => None,
@@ -260,7 +286,13 @@ fn need(app: &App, endpoint: &str, kind: RequestType, args: &Args) -> Need {
     }
     let get = kind == RequestType::Get;
     let role = match endpoint {
-        "/access/info" | "/server/connection/identify" => return Need::Anyone,
+        // Logging in needs no rights, and the rest check for a user themselves.
+        "/access/info"
+        | "/server/connection/identify"
+        | "/access/login"
+        | "/access/refresh_jwt"
+        | "/access/logout"
+        | "/access/user/password" => return Need::Anyone,
         "/server/info"
         | "/server/config"
         | "/server/websocket/id"

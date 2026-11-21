@@ -60,28 +60,72 @@ async fn websocket(
     State(app): State<Arc<App>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
+    RawQuery(query): RawQuery,
     ws: WebSocketUpgrade,
 ) -> Response {
     let from = describe_peer(peer, app.auth.client_address(peer.ip(), &headers), &headers);
-    // As in Moonraker, a websocket with a wrong key still opens, with no rights.
-    let access = request_access(&app, peer, &headers).unwrap_or_else(|e| {
+    // As in Moonraker, a websocket with a wrong key or token still opens, with no rights.
+    let refused = |e: ApiError| {
         let access = refused_access(&app, peer, &headers);
         app.auth.log_refusal(&access, "the websocket", &e);
         access
+    };
+    let base = base_access(&app, peer, &headers).unwrap_or_else(refused);
+    let user = token_user(&app, &headers, query.as_deref()).unwrap_or_else(|e| {
+        refused(e);
+        None
     });
-    ws.on_upgrade(move |socket| serve_socket(app, socket, from, access))
+    ws.on_upgrade(move |socket| serve_socket(app, socket, from, base, user))
 }
 
 /// What a TCP request may do: a key's rights, when it sends `X-Api-Key`, or else a trusted
-/// network's, by the client's address, as long as a browser's `Origin` is allowed. A key that
-/// isn't one is an error, as in Moonraker.
-pub fn request_access(app: &App, peer: SocketAddr, headers: &HeaderMap) -> Result<crate::auth::Access, ApiError> {
+/// network's, by the client's address, as long as a browser's `Origin` is allowed. A token adds
+/// its user's rights. A key or token that isn't one is an error, as in Moonraker.
+pub fn request_access(
+    app: &App,
+    peer: SocketAddr,
+    headers: &HeaderMap,
+    query: Option<&str>,
+) -> Result<crate::auth::Access, ApiError> {
+    let base = base_access(app, peer, headers)?;
+    Ok(match token_user(app, headers, query)? {
+        Some((name, role)) => base.with_user(&name, role),
+        None => base,
+    })
+}
+
+/// A request's access without its token.
+fn base_access(app: &App, peer: SocketAddr, headers: &HeaderMap) -> Result<crate::auth::Access, ApiError> {
     let mut access = match headers.get("x-api-key").and_then(|v| v.to_str().ok()).filter(|k| !k.trim().is_empty()) {
         Some(key) => app.keys.lookup(key.trim()).ok_or_else(|| ApiError::new(401, "Invalid API Key"))?,
         None => network_access(app, peer, headers),
     };
     access.client = app.auth.client_address(peer.ip(), headers).to_string();
     Ok(access)
+}
+
+/// The user of a request's access token, and their role. The token can come as Moonraker
+/// takes it: `Authorization: Bearer`, `X-Access-Token`, or `?access_token=`.
+fn token_user(
+    app: &App,
+    headers: &HeaderMap,
+    query: Option<&str>,
+) -> Result<Option<(String, crate::auth::Role)>, ApiError> {
+    let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok()).map(str::trim);
+    let token = match header("authorization") {
+        // Another kind of Authorization, such as a proxy's Basic, isn't orrery's.
+        Some(value) => value.strip_prefix("Bearer ").map(str::to_owned),
+        None => header("x-access-token").map(str::to_owned).or_else(|| {
+            form_urlencoded::parse(query.unwrap_or_default().as_bytes())
+                .filter(|(k, _)| k == "access_token")
+                .last()
+                .map(|(_, v)| v.into_owned())
+        }),
+    };
+    let Some(token) = token.filter(|t| !t.trim().is_empty()) else { return Ok(None) };
+    let name = app.users.check_token(token.trim(), crate::users::TokenType::Access, true)?;
+    let role = app.users.role_of(&name)?;
+    Ok(Some((name, role)))
 }
 
 /// No rights, for a request whose key isn't one, with the client named for the log.
@@ -117,11 +161,20 @@ fn describe_peer(peer: SocketAddr, client: std::net::IpAddr, headers: &HeaderMap
     from
 }
 
-async fn serve_socket(app: Arc<App>, socket: WebSocket, from: String, access: crate::auth::Access) {
+async fn serve_socket(
+    app: Arc<App>,
+    socket: WebSocket,
+    from: String,
+    access: crate::auth::Access,
+    user: Option<(String, crate::auth::Role)>,
+) {
     let (mut sink, mut stream) = socket.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-    let described = access.describe();
     let conn = app.add_client(tx.clone(), crate::server::Peer::default(), access);
+    if let Some((name, role)) = user {
+        app.set_client_user(conn, &name, role);
+    }
+    let described = app.client_access(conn).describe();
     let opened = Instant::now();
     tracing::info!("Websocket Opened: ID: {conn}, From: {from}, Access: {described}");
     let writer = tokio::spawn(async move {
@@ -169,7 +222,7 @@ async fn http_request(
     body: Bytes,
 ) -> Response {
     let found = app.registry.read().expect("registry lock").by_path(uri.path());
-    let access = match request_access(&app, peer, &headers) {
+    let access = match request_access(&app, peer, &headers, query.as_deref()) {
         Ok(a) => a,
         Err(e) => {
             let access = refused_access(&app, peer, &headers);

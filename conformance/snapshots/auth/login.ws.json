@@ -1,0 +1,103 @@
+[
+  {
+    "step": 1,
+    "call": "access.post_user",
+    "result": {
+      "username": "string",
+      "token": "string",
+      "source": "string",
+      "refresh_token": "string",
+      "action": "string"
+    }
+  },
+  {
+    "step": 3,
+    "call": "access.post_user",
+    "result": {
+      "username": "string",
+      "token": "string",
+      "source": "string",
+      "refresh_token": "string",
+      "action": "string"
+    }
+  },
+  {
+    "step": 4,
+    "call": "access.users.list",
+    "result": {
+      "users": [
+        {
+          "username": "string",
+          "source": "string",
+          "created_on": "number"
+        }
+      ]
+    }
+  },
+  {
+    "step": 5,
+    "call": "access.delete_user",
+    "result": {
+      "username": "string",
+      "action": "string"
+    }
+  },
+  {
+    "step": 7,
+    "call": "access.users.list",
+    "result": {
+      "users": [
+        {
+          "username": "string",
+          "source": "string",
+          "created_on": "number"
+        }
+      ]
+    }
+  },
+  {
+    "step": 8,
+    "call": "access.login",
+    "result": {
+      "username": "string",
+      "token": "string",
+      "source": "string",
+      "refresh_token": "string",
+      "action": "string"
+    }
+  },
+  {
+    "step": 9,
+    "call": "access.get_user",
+    "result": {
+      "username": "string",
+      "source": "string",
+      "created_on": "number"
+    }
+  },
+  {
+    "step": 11,
+    "call": "access.refresh_jwt",
+    "result": {
+      "username": "string",
+      "token": "string",
+      "source": "string",
+      "action": "string"
+    }
+  },
+  {
+    "step": 12,
+    "call": "access.logout",
+    "result": {
+      "username": "string",
+      "action": "string"
+    }
+  },
+  {
+    "step": 16,
+    "call": "access.refresh_jwt",
+    "error": {
+      "code": -32602
+    }
+  }
+]

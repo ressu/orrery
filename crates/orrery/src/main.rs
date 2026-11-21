@@ -49,6 +49,22 @@ enum Command {
         #[command(subcommand)]
         action: KeyAction,
     },
+    /// Add or delete local users, or set their passwords. Roles come from orrery.toml's
+    /// [authorization.users]. orrery must be running: the command asks it over the unix socket.
+    User {
+        #[command(subcommand)]
+        action: UserAction,
+    },
+}
+
+#[derive(clap::Subcommand)]
+enum UserAction {
+    /// Add a user. The command asks for the password.
+    Add { name: String },
+    /// Delete a user. Their sessions end at once.
+    Delete { name: String },
+    /// Set a user's password. Their sessions end at once.
+    Password { name: String },
 }
 
 #[derive(clap::Subcommand)]
@@ -255,8 +271,10 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    if let Some(Command::Key { action }) = &cli.command {
-        return key_command(&socket_path, action);
+    match &cli.command {
+        Some(Command::Key { action }) => return key_command(&socket_path, action),
+        Some(Command::User { action }) => return user_command(&socket_path, action),
+        None => {}
     }
     let (_log_guard, log_warning) = init_logging(&cli, &paths);
     let runtime = match tokio::runtime::Runtime::new() {
@@ -298,4 +316,77 @@ fn key_command(socket: &Path, action: &KeyAction) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// `orrery user add|delete|password`: one request to the running orrery, over the unix socket,
+/// where orrery's own user is admin. A password is read from the terminal, never taken as an
+/// argument, so it stays out of the shell's history.
+fn user_command(socket: &Path, action: &UserAction) -> ExitCode {
+    let result = (|| -> Result<String> {
+        Ok(match action {
+            UserAction::Add { name } => {
+                let password = read_new_password()?;
+                unix_socket::call(
+                    socket,
+                    "access.post_user",
+                    serde_json::json!({"username": name, "password": password}),
+                )?;
+                format!("Added the user {name}. Their role comes from orrery.toml's [authorization.users].")
+            }
+            UserAction::Delete { name } => {
+                unix_socket::call(socket, "access.delete_user", serde_json::json!({"username": name}))?;
+                format!("Deleted the user {name}.")
+            }
+            UserAction::Password { name } => {
+                let password = read_new_password()?;
+                unix_socket::call(
+                    socket,
+                    "orrery.access.user.password",
+                    serde_json::json!({"username": name, "password": password}),
+                )?;
+                format!("Set the password of {name}. Their other sessions have ended.")
+            }
+        })
+    })();
+    match result {
+        Ok(message) => {
+            println!("{message}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("orrery user: {e:#}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Asks for a new password twice, without showing it.
+fn read_new_password() -> Result<String> {
+    let first = read_hidden("Password: ")?;
+    if first.is_empty() {
+        anyhow::bail!("the password is empty");
+    }
+    if read_hidden("The same password again: ")? != first {
+        anyhow::bail!("the two passwords differ");
+    }
+    Ok(first)
+}
+
+/// Reads a line from the terminal with echo off.
+fn read_hidden(prompt: &str) -> Result<String> {
+    use rustix::termios::{LocalModes, OptionalActions, tcgetattr, tcsetattr};
+    use std::io::{BufRead, Write};
+    let stdin = std::io::stdin();
+    let old = tcgetattr(&stdin).map_err(|_| anyhow::anyhow!("the password has to be typed in a terminal"))?;
+    let mut quiet = old.clone();
+    quiet.local_modes.remove(LocalModes::ECHO);
+    eprint!("{prompt}");
+    std::io::stderr().flush()?;
+    tcsetattr(&stdin, OptionalActions::Now, &quiet)?;
+    let mut line = String::new();
+    let read = stdin.lock().read_line(&mut line);
+    tcsetattr(&stdin, OptionalActions::Now, &old)?;
+    eprintln!();
+    read?;
+    Ok(line.trim_end_matches(['\n', '\r']).to_owned())
 }
