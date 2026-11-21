@@ -49,7 +49,7 @@ change how safe or complete orrery is to run.
     `access.users.list` need `admin`; Moonraker allows any authorized client. So Fluidd on an
     `operator` network can show two errors when it connects, and an empty user list, and works
     otherwise.
-  - A browser request from a trusted network whose `Origin` is neither its own `Host` nor in
+  - A browser request from a network with a role whose `Origin` is neither its own `Host` nor in
     `cors_domains` gets no rights. Moonraker checks `Origin` only on the websocket, so a page on
     another site can send gcode with a form post.
   - On the unix socket, only orrery's own user and root are `admin`. Another user gets only
@@ -57,13 +57,19 @@ change how safe or complete orrery is to run.
     connect. The socket is mode `0660`, and the database `0600`.
   - Host names in `trusted_clients` are skipped, with a warning: orrery doesn't look up names
     yet.
+  - `orrery.toml`'s `[authorization.networks]` gives each network a role, `viewer` too, and
+    replaces `trusted_clients`. The most specific network that holds an address decides its
+    role. Moonraker has no roles, so it has no such rule.
   - Proxy headers count only from a trusted proxy, and from `X-Forwarded-For` only the last
-    address. `trusted_proxies` is orrery's own option. Moonraker reads the headers from
-    anyone, then requires the proxy to be trusted, and refuses with "Proxy address not
-    trusted"; orrery judges such a request by the connection's own address.
-  - **A proxy on a trusted address that sends no proxy headers makes every caller look like
-    the proxy,** as in Moonraker. Either make the proxy send `X-Real-Ip` or `X-Forwarded-For`,
-    or list it in `trusted_proxies` and leave its address out of `trusted_clients`.
+    address. Moonraker reads the headers from anyone, then requires the proxy to be trusted,
+    and refuses with "Proxy address not trusted"; orrery judges such a request by the
+    connection's own address.
+  - `trusted_proxies` is orrery's own option, and empty unless it's set. Only Moonraker's
+    `trusted_clients` alone keeps Moonraker's fallback, where its networks are the proxies.
+  - **A proxy on an address with a role that sends no proxy headers makes every caller look
+    like the proxy,** as in Moonraker. List it in `trusted_proxies`: then a network entry
+    inside a proxy is an error, and the proxy's own address gets no role from a network
+    around it.
   - An agent's database namespace is the agent's own: other clients need `admin` to read or
     write it.
   - A refused request gets 403 when the client has a role, but not the one needed. Without

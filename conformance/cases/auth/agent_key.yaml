@@ -7,7 +7,7 @@ files:
     [agent.helper]
     [agent.other]
 steps:
-  # The runner is admin on its trusted network, so it can read the agent's key.
+  # The runner is admin by its network, so it can read the agent's key.
   - call: orrery.access.key.get
     params: {name: agent.helper}
     save: {key: key}

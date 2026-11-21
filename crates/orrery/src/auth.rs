@@ -8,9 +8,9 @@
 //! Where access comes from:
 //! - The unix socket: orrery's own user and root are `admin`. Other users get nothing, unless
 //!   they connect as a configured agent that names them.
-//! - TCP: a trusted network's role, by the client's address. A trusted proxy passes on that
+//! - TCP: the role of the client's network, by its address. A trusted proxy passes on that
 //!   address in `X-Real-Ip` or `X-Forwarded-For`; anyone else's headers are ignored. A browser
-//!   request whose `Origin` isn't allowed gets nothing from a trusted network.
+//!   request whose `Origin` isn't allowed gets nothing from its network.
 //! - A key, sent as `X-Api-Key` or as `api_key` in `server.connection.identify`.
 
 use std::collections::HashSet;
@@ -70,11 +70,11 @@ pub struct Access {
     pub role: Option<Role>,
     /// The agent this connection speaks for. It may use what that agent owns.
     pub agent: Option<String>,
-    /// The rights come from a trusted network, as `access.info` reports.
+    /// The rights come from the client's network, as `access.info` reports `trusted`.
     pub trusted: bool,
     /// The rights come from a key, as `access.get_user` reports.
     pub key: Option<String>,
-    /// Why, for the log: "trusted network 192.168.1.0/24", "key homeassistant", and so on.
+    /// Why, for the log: "network 192.168.1.0/24", "key homeassistant", and so on.
     pub source: String,
 }
 
@@ -322,6 +322,25 @@ impl Network {
         (len <= max).then_some(Self { addr, len })
     }
 
+    /// The network's first address. An entry written with the host part set, such as
+    /// `192.168.1.5/24`, is the network `192.168.1.0/24`.
+    fn base(&self) -> IpAddr {
+        match self.addr {
+            IpAddr::V4(a) => {
+                IpAddr::V4((u32::from(a) & u32::MAX.checked_shl(32 - u32::from(self.len)).unwrap_or(0)).into())
+            }
+            IpAddr::V6(a) => {
+                IpAddr::V6((u128::from(a) & u128::MAX.checked_shl(128 - u32::from(self.len)).unwrap_or(0)).into())
+            }
+        }
+    }
+
+    /// Whether two entries name the same network: `192.168.1.0/24` twice, or once written with
+    /// the host part set, as `192.168.1.5/24`.
+    fn same_as(&self, other: &Network) -> bool {
+        self.len == other.len && self.base() == other.base()
+    }
+
     pub fn contains(&self, ip: IpAddr) -> bool {
         match (ip.to_canonical(), self.addr) {
             (IpAddr::V4(ip), IpAddr::V4(net)) => {
@@ -340,14 +359,20 @@ impl Network {
 impl fmt::Display for Network {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let max = if self.addr.is_ipv4() { 32 } else { 128 };
-        if self.len == max { write!(f, "{}", self.addr) } else { write!(f, "{}/{}", self.addr, self.len) }
+        // Always the network's first address, so `192.168.1.5/24` shows as `192.168.1.0/24`.
+        if self.len == max { write!(f, "{}", self.addr) } else { write!(f, "{}/{}", self.base(), self.len) }
     }
 }
 
 /// orrery's authorization settings, from `[authorization]` and `[server] use_xheaders`.
 pub struct Auth {
-    /// Trusted networks and their roles.
+    /// Networks and their roles: `[authorization.networks]`, or Moonraker's `trusted_clients`
+    /// as `admin`.
     trusted: Vec<(Network, Role)>,
+    /// Where `trusted` came from, for the log.
+    networks_from: &'static str,
+    /// `trusted_clients` was set, and `[authorization.networks]` replaced it.
+    ignored_trusted_clients: bool,
     /// Hosts whose proxy headers orrery reads.
     proxies: Vec<Network>,
     /// The proxies came from `trusted_proxies`, not from `trusted_clients`.
@@ -366,24 +391,47 @@ impl Auth {
     pub fn new(config: &Config) -> Result<(Self, Vec<String>)> {
         let mut warnings = Vec::new();
         let section = config.section("authorization");
-        let mut trusted = Vec::new();
-        // orrery.toml's form, with a role per network: [authorization.trusted_clients].
-        if let Some(table) = config.section_json("authorization trusted_clients") {
-            for (net, role) in table {
-                let Some(network) = Network::parse(&net) else {
-                    warnings.push(format!(
-                        "[authorization] trusted_clients: {net:?} isn't an IP address or network, so orrery skips it"
-                    ));
-                    continue;
+        if config.section_json("authorization trusted_clients").is_some() {
+            bail!(
+                "[authorization.trusted_clients] is now [authorization.networks], which lists the \
+                 networks for each role, such as admin = [\"192.168.1.0/24\"] and viewer = [\"192.168.1.134\"]."
+            );
+        }
+        let mut trusted: Vec<(Network, Role)> = Vec::new();
+        let networks = config.section_json("authorization networks");
+        let networks_from = if networks.is_some() { "[authorization.networks]" } else { "trusted_clients" };
+        let ignored_trusted_clients = networks.is_some() && section.has("trusted_clients");
+        if let Some(table) = networks {
+            // orrery.toml's form: the networks for each role, such as admin = ["192.168.1.0/24"].
+            for (role_name, list) in table {
+                let Some(role) = Role::parse(&role_name) else {
+                    bail!(
+                        "[authorization.networks]: {role_name} isn't a role. Use viewer, operator, or admin, \
+                         such as operator = [\"192.168.1.0/24\"]"
+                    );
                 };
-                let role = match role.as_str().and_then(Role::parse) {
-                    Some(Role::Viewer) | None => bail!(
-                        "[authorization] trusted_clients: {net} has role {role}; a trusted network gets \
-                         \"operator\" or \"admin\""
-                    ),
-                    Some(r) => r,
+                let entries: Vec<&Value> = match &list {
+                    Value::Array(items) => items.iter().collect(),
+                    other => vec![other],
                 };
-                trusted.push((network, role));
+                for entry in entries {
+                    let Some(net) = entry.as_str() else {
+                        bail!("[authorization.networks] {role_name}: {entry} isn't an IP address or network in quotes");
+                    };
+                    let Some(network) = Network::parse(net) else {
+                        bail!(
+                            "[authorization.networks] {role_name}: {net:?} isn't an IP address or network, such as \
+                             192.168.1.0/24"
+                        );
+                    };
+                    if let Some((other, other_role)) = trusted.iter().find(|(n, _)| n.same_as(&network)) {
+                        bail!(
+                            "[authorization.networks]: {net} ({role_name}) and {other} ({other_role}) are the same \
+                             network, so it's unclear which role it gets. Keep one of them."
+                        );
+                    }
+                    trusted.push((network, role));
+                }
             }
         } else {
             // Moonraker's form, a list: each network gets admin, as in Moonraker.
@@ -396,7 +444,10 @@ impl Auth {
                 }
             }
         }
-        let (proxies, explicit_proxies) = if section.has("trusted_proxies") {
+        // Proxies are only what trusted_proxies lists. Moonraker's trusted_clients alone keeps
+        // Moonraker's behaviour, where its networks may pass on proxy headers.
+        let explicit_proxies = section.has("trusted_proxies");
+        let proxies = if explicit_proxies {
             let mut proxies = Vec::new();
             for entry in section.get_list("trusted_proxies") {
                 match Network::parse(&entry) {
@@ -406,15 +457,32 @@ impl Auth {
                     )),
                 }
             }
-            (proxies, true)
+            proxies
+        } else if networks_from == "trusted_clients" {
+            trusted.iter().map(|(n, _)| *n).collect()
         } else {
-            (trusted.iter().map(|(n, _)| *n).collect(), false)
+            Vec::new()
         };
+        // A proxy that drops the headers would hand its users its own address's role. So a
+        // network entry can't lie inside a proxy, and a proxy gets nothing from a network
+        // around it (see network_access).
+        if explicit_proxies {
+            for (network, _) in &trusted {
+                if let Some(proxy) = proxies.iter().find(|p| p.len <= network.len && p.contains(network.addr)) {
+                    bail!(
+                        "{networks_from}: {network} is a trusted proxy ({proxy} in trusted_proxies), and a \
+                         proxy can't have a role of its own. Remove {network} from {networks_from}."
+                    );
+                }
+            }
+        }
         let use_xheaders = config.section("server").get_bool("use_xheaders", true)?;
         let own_uid = rustix::process::geteuid().as_raw();
         Ok((
             Self {
                 trusted,
+                networks_from,
+                ignored_trusted_clients,
                 proxies,
                 explicit_proxies,
                 use_xheaders,
@@ -426,27 +494,35 @@ impl Auth {
         ))
     }
 
-    /// The trusted networks, for CORS: an origin whose host is a trusted address is allowed.
+    /// The networks that have a role, for CORS: an origin whose host is such an address is
+    /// allowed.
     pub fn trusted_networks(&self) -> Vec<Network> {
         self.trusted.iter().map(|(n, _)| *n).collect()
     }
 
     /// The startup log lines.
     pub fn log_settings(&self) {
+        if self.ignored_trusted_clients {
+            tracing::info!(target: "orrery::auth", "Authorization: [authorization.networks] replaces trusted_clients, so orrery ignores trusted_clients");
+        }
+        let from = self.networks_from;
         if self.trusted.is_empty() {
-            tracing::info!("Authorization: no trusted networks");
+            tracing::info!(target: "orrery::auth", "Authorization: no networks have a role, so clients need a key");
         } else {
             let list: Vec<String> = self.trusted.iter().map(|(n, r)| format!("{n} ({r})")).collect();
-            tracing::info!("Authorization: trusted networks: {}", list.join(", "));
+            tracing::info!(target: "orrery::auth", "Authorization: networks, from {from}: {}", list.join(", "));
         }
         let from = if self.explicit_proxies { "trusted_proxies" } else { "trusted_clients" };
         if !self.use_xheaders {
-            tracing::info!("Authorization: proxy headers are off (use_xheaders: False)");
+            tracing::info!(target: "orrery::auth", "Authorization: proxy headers are off (use_xheaders: False)");
         } else if self.proxies.is_empty() {
-            tracing::info!("Authorization: no trusted proxies (from {from})");
+            tracing::info!(target: "orrery::auth", "Authorization: no trusted proxies, so orrery reads no proxy headers");
         } else {
             let list: Vec<String> = self.proxies.iter().map(ToString::to_string).collect();
-            tracing::info!("Authorization: trusted proxies, from {from}: {}", list.join(", "));
+            tracing::info!(target: "orrery::auth", "Authorization: trusted proxies, from {from}: {}", list.join(", "));
+            if self.explicit_proxies {
+                tracing::info!(target: "orrery::auth", "Authorization: trusted proxies get no role from a network; their users get theirs from the proxy headers");
+            }
         }
     }
 
@@ -512,17 +588,22 @@ impl Auth {
         }
     }
 
-    /// Access for a TCP request or websocket, from a trusted network. `origin_ok` is false for
-    /// a browser request from a site that isn't allowed.
+    /// Access for a TCP request or websocket, from the client's network. `origin_ok` is false
+    /// for a browser request from a site that isn't allowed.
     pub fn network_access(&self, client: IpAddr, origin_ok: bool) -> Access {
-        let best = self.trusted.iter().filter(|(n, _)| n.contains(client)).max_by_key(|(_, r)| *r);
+        if self.explicit_proxies && self.proxies.iter().any(|p| p.contains(client)) {
+            return Access::none(format!("{client} is a trusted proxy, which gets no role from a network"));
+        }
+        // The most specific network decides, as in a routing table, so a single address can get
+        // less than the network around it, or more. No two entries are the same network.
+        let best = self.trusted.iter().filter(|(n, _)| n.contains(client)).max_by_key(|(n, r)| (n.len, *r));
         let Some((network, role)) = best else {
-            return Access::none(format!("{client} isn't in a trusted network"));
+            return Access::none(format!("{client} isn't in a network with a role"));
         };
         if !origin_ok {
-            return Access::none(format!("{client} is trusted, but the request's Origin isn't allowed"));
+            return Access::none(format!("{client} is in network {network}, but the request's Origin isn't allowed"));
         }
-        Access { role: Some(*role), trusted: true, source: format!("trusted network {network}"), ..Access::default() }
+        Access { role: Some(*role), trusted: true, source: format!("network {network}"), ..Access::default() }
     }
 
     /// Access over the unix socket, by the peer's user id.
@@ -582,6 +663,10 @@ mod tests {
         assert!(Network::parse("10.0.0.0/33").is_none());
         assert!(Network::parse("printer.local").is_none());
         assert_eq!(Network::parse("fe80::/10").unwrap().to_string(), "fe80::/10");
+        // An entry with the host part set is the network it's in.
+        let n = Network::parse("192.168.1.5/24").unwrap();
+        assert_eq!(n.to_string(), "192.168.1.0/24");
+        assert!(n.same_as(&Network::parse("192.168.1.0/24").unwrap()));
     }
 
     #[test]
@@ -596,20 +681,54 @@ mod tests {
     fn toml_roles() {
         let mut c = Config::default();
         c.parse_toml(
-            "[authorization.trusted_clients]\n\"192.168.1.0/24\" = \"operator\"\n\"192.168.1.10\" = \"admin\"\n",
+            "[authorization.networks]\noperator = [\"192.168.1.0/24\"]\nadmin = \"192.168.1.10\"\n",
             std::path::Path::new("orrery.toml"),
         )
         .unwrap();
         let (a, _) = Auth::new(&c).unwrap();
         assert_eq!(a.network_access(ip("192.168.1.9"), true).role, Some(Role::Operator));
         assert_eq!(a.network_access(ip("192.168.1.10"), true).role, Some(Role::Admin));
+
+        // A single address can also get less than its network.
         let mut c = Config::default();
         c.parse_toml(
-            "[authorization.trusted_clients]\n\"10.0.0.0/8\" = \"viewer\"\n",
+            "[authorization.networks]\noperator = [\"192.168.1.134\"]\nadmin = [\"192.168.1.0/24\", \"10.0.0.0/8\"]\n",
             std::path::Path::new("orrery.toml"),
         )
         .unwrap();
-        assert!(Auth::new(&c).is_err());
+        let (a, _) = Auth::new(&c).unwrap();
+        assert_eq!(a.network_access(ip("192.168.1.134"), true).role, Some(Role::Operator));
+        assert_eq!(a.network_access(ip("192.168.1.9"), true).role, Some(Role::Admin));
+        assert_eq!(a.network_access(ip("10.1.1.1"), true).role, Some(Role::Admin));
+
+        // A name that isn't a role is an error.
+        let e = toml_auth("[authorization.networks]\nagent = [\"10.0.0.0/8\"]\n").err().unwrap().to_string();
+        assert!(e.contains("isn't a role"), "{e}");
+
+        // Two entries for one network are an error, also when one is written with the host part
+        // set.
+        let mut c = Config::default();
+        c.parse_toml(
+            "[authorization.networks]\nadmin = [\"192.168.1.0/24\"]\noperator = [\"192.168.1.5/24\"]\n",
+            std::path::Path::new("orrery.toml"),
+        )
+        .unwrap();
+        let e = Auth::new(&c).err().unwrap().to_string();
+        assert!(e.contains("are the same network"), "{e}");
+
+        let mut c = Config::default();
+        c.parse_toml("[authorization.networks]\nviewer = [\"10.0.0.0/8\"]\n", std::path::Path::new("orrery.toml"))
+            .unwrap();
+        let (a, _) = Auth::new(&c).unwrap();
+        assert_eq!(a.network_access(ip("10.1.2.3"), true).role, Some(Role::Viewer));
+        // The old name is an error that says the new one.
+        let mut c = Config::default();
+        c.parse_toml(
+            "[authorization.trusted_clients]\n\"10.0.0.0/8\" = \"admin\"\n",
+            std::path::Path::new("orrery.toml"),
+        )
+        .unwrap();
+        assert!(Auth::new(&c).err().unwrap().to_string().contains("[authorization.networks]"));
     }
 
     #[test]
@@ -638,6 +757,36 @@ mod tests {
         // The proxy's own address grants nothing.
         let client = a.client_address(ip("127.0.0.1"), &HeaderMap::new());
         assert_eq!(a.network_access(client, true).role, None);
+    }
+
+    fn toml_auth(toml: &str) -> Result<Auth> {
+        let mut c = Config::default();
+        c.parse_toml(toml, std::path::Path::new("orrery.toml")).unwrap();
+        Auth::new(&c).map(|(a, _)| a)
+    }
+
+    #[test]
+    fn networks_and_proxies() {
+        // With [authorization.networks], no proxy is trusted unless trusted_proxies says so.
+        let a = toml_auth("[authorization.networks]\nadmin = [\"127.0.0.0/8\"]\n").unwrap();
+        let h = headers(&[("x-real-ip", "10.1.1.1")]);
+        assert_eq!(a.client_address(ip("127.0.0.1"), &h), ip("127.0.0.1"));
+
+        // A proxy inside a network gets nothing itself; its users are judged by the headers.
+        let toml = "[authorization]\ntrusted_proxies = [\"192.168.1.10\"]\n\
+                    [authorization.networks]\noperator = [\"192.168.1.0/24\"]\n";
+        let a = toml_auth(toml).unwrap();
+        assert_eq!(a.network_access(ip("192.168.1.10"), true).role, None);
+        assert_eq!(a.network_access(ip("192.168.1.11"), true).role, Some(Role::Operator));
+        let h = headers(&[("x-real-ip", "192.168.1.20")]);
+        let client = a.client_address(ip("192.168.1.10"), &h);
+        assert_eq!(a.network_access(client, true).role, Some(Role::Operator));
+
+        // A network entry inside a proxy is an error.
+        let toml = "[authorization]\ntrusted_proxies = [\"127.0.0.0/8\"]\n\
+                    [authorization.networks]\nadmin = [\"127.0.0.1\"]\n";
+        let e = toml_auth(toml).err().unwrap().to_string();
+        assert!(e.contains("is a trusted proxy"), "{e}");
     }
 
     #[test]

@@ -2,7 +2,7 @@
 //! `access.*` endpoints, and CORS. Who may do what is in [`crate::auth`]. orrery has no user
 //! logins yet, so a client is the `_TRUSTED_USER_`, or the `_API_KEY_USER_` with a key.
 //! Oneshot tokens are handed out so frontends can build download links, and they aren't
-//! checked. CORS follows `[authorization] cors_domains` and the trusted networks.
+//! checked. CORS follows `[authorization] cors_domains` and the networks that have a role.
 
 use std::net::IpAddr;
 use std::sync::{Arc, OnceLock};

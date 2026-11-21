@@ -3,7 +3,7 @@
 **Decision (2026-11-21):** orrery's authorization starts with API keys. Each key is declared in
 `orrery.toml`, as an agent is, and has a role: `viewer`, `operator`, `agent`, or `admin`. orrery
 generates the secrets and keeps them in its database. With a `moonraker.conf`, orrery works as
-before: trusted networks, `cors_domains`, and Fluidd's API key behave as in Moonraker. Agents
+before: `trusted_clients`, `cors_domains`, and Fluidd's API key behave as in Moonraker. Agents
 that orrery starts need no key. User logins come later.
 
 **Status (2026-11-21):** built, except user logins. What differs from Moonraker is in
@@ -16,7 +16,7 @@ where clients depend on it, and adds keys with limited rights for everything els
 
 Scope of this step:
 
-- **In:** keys, roles, trusted networks, trusted proxies, CORS, the `Origin` check, agents, and
+- **In:** keys, roles, networks' roles, trusted proxies, CORS, the `Origin` check, agents, and
   the unix socket.
 - **Later:** user logins, JWTs, one-shot tokens, `force_logins`, and LDAP. The section
   [Later: users and logins](#later-users-and-logins) lists what they'll need, so nothing here
@@ -57,7 +57,7 @@ What the sources show:
   - It sends no `Authorization` or `X-Api-Key` header, so it can't use an API key itself.
   - It can show and regenerate one API key (`access.get_api_key`, `access.post_api_key`), and
     add and remove users (`src/store/auth/actions.ts`).
-  - Until logins come, Fluidd works only from a trusted network.
+  - Until logins come, Fluidd works only from a network with a role.
 - **Home Assistant:** the integration (`moonraker-home-assistant`) uses the `moonraker-api`
   library. That library sends the key as an `X-Api-Key` header on the websocket upgrade
   (`moonraker_api/websockets/websocketclient.py`, `WebsocketClient._run`, read on GitHub at
@@ -89,9 +89,9 @@ orrery doesn't protect against these:
 
 - **Processes running as orrery's user, and root.** They can read the database or edit
   `orrery.toml`, so no check inside orrery can stop them.
-- **A badly set up proxy.** A proxy whose own address is trusted, and that doesn't pass on the
-  client's address, makes every caller look trusted. `trusted_proxies` lets an admin avoid that
-  (see [Proxies](#proxies)). Securing the proxy is its owner's job.
+- **A badly set up proxy.** A proxy whose own address has a role, and that doesn't pass on the
+  client's address, gives every caller that role. With `trusted_proxies`, a proxy never has a
+  role (see [Proxies](#proxies)). Securing the proxy is its owner's job.
 - **DNS rebinding,** a trick that makes a web page count as the printer's own site (see
   [Browser requests](#browser-requests)).
 - **Someone reading network traffic.** orrery has no TLS, so keys cross the network in plain
@@ -212,33 +212,49 @@ role = "agent"   # the default, which a table can raise
 - Restoring a database backup brings back the secrets it had. Keys still follow the config: on
   the next start orrery drops the ones without a table and makes the missing ones.
 
-## Trusted networks
+## Networks
 
-- **With a `moonraker.conf`:** `trusted_clients` works as in Moonraker, and a trusted network
+A network's role is what clients from that network may do without a key. Moonraker calls such
+clients trusted. orrery keeps that apart from trusting a proxy (see [Proxies](#proxies)): the
+two used to share `trusted_clients`, and that mixed them up (user, 2026-11-21).
+
+- **With a `moonraker.conf`:** `trusted_clients` works as in Moonraker, and each network in it
   gets `admin`. Host names in `trusted_clients` are skipped for now, with a warning: Moonraker
   looks them up, and orrery doesn't yet.
-- **In `orrery.toml`:** a trusted network can get a role, `operator` or `admin`:
+- **In `orrery.toml`:** `[authorization.networks]` lists the networks for each role, any of
+  `viewer`, `operator`, and `admin`. There are few roles and often several networks, so the
+  role comes first (user, 2026-11-21). A role with one network may give it as a string:
 
   ```toml
-  [authorization]
-  trusted_clients = { "192.168.1.0/24" = "operator", "192.168.1.10" = "admin" }
+  [authorization.networks]
+  admin = ["192.168.1.10", "10.8.0.0/24"]
+  operator = ["192.168.1.0/24"]
+  viewer = "192.168.1.134"
   ```
 
-  A network can't get `viewer`: a trusted network that can only watch would confuse users.
-  When an address is in several networks, it gets the highest role among them.
+  It replaces `trusted_clients`, and orrery logs that it ignores `trusted_clients`. An address
+  in no network gets nothing without a key.
+- **The most specific network decides,** as in a routing table (user, 2026-11-21). So
+  `viewer = "192.168.1.134"` inside an `operator` network limits that one device, and
+  `admin = "192.168.1.10"` raises another. Two entries for the same network are an error, so
+  the role is never ambiguous.
+- **A network written with the host part set is the network it's in.** orrery reads
+  `192.168.1.5/24` as `192.168.1.0/24`, so it clashes with a `192.168.1.0/24` entry under
+  another role. Logs and errors always show the network's first address, `192.168.1.0/24`.
 - **Behind a proxy,** orrery judges the address the trusted proxy passes on (see
   [Proxies](#proxies)).
+- The old `[authorization.trusted_clients]` table is an error that names the new one.
 
 ## Browser requests
 
 A web page on another site can make the user's browser send requests to the printer. A key in
-a header is safe from this, because the page can't read or set it. A trusted network isn't safe:
+a header is safe from this, because the page can't read or set it. A network's role isn't safe:
 the browser's own address is what makes the request trusted. So orrery checks `Origin`, which
 Moonraker does only on the websocket:
 
 - A browser sends `Origin` on cross-site requests and on websocket upgrades. A request whose
   `Origin` is neither the address it was sent to (its `Host`) nor in `cors_domains` gets no
-  rights from a trusted network. A request with a key still works, and so does a request with
+  rights from its network. A request with a key still works, and so does a request with
   no `Origin`, such as one from `curl` or Home Assistant.
 - Moonraker checks `Origin` on the websocket only (`components/websockets.py:305`). Its HTTP
   endpoints accept arguments in the query string, so a page on another site can send gcode with
@@ -317,22 +333,25 @@ A proxy such as nginx passes on the client's address in `X-Real-Ip` or `X-Forwar
 
 **The rule (user, 2026-11-21): orrery reads those headers only from a trusted proxy.** From
 any other connection, it ignores them and judges the connection's own address. Otherwise a
-caller could send the header itself and claim to come from a trusted network.
+caller could send the header itself and claim to come from a network with a role.
 
-Which hosts are trusted proxies:
+Which hosts are trusted proxies (user, 2026-11-21):
 
 - **`trusted_proxies` set:** exactly the hosts it lists. It's orrery's own option, in
-  `orrery.toml`.
-- **`trusted_proxies` not set:** the hosts in `trusted_clients`, as in Moonraker. So a migrated
-  `moonraker.conf` works as before with no new config.
+  `orrery.toml`. No setup needs it.
+- **`trusted_proxies` not set:** none, so orrery reads no proxy headers. The one exception is
+  Moonraker's `trusted_clients` with no `[authorization.networks]`: then its hosts are the
+  proxies, as in Moonraker, so a migrated `moonraker.conf` works as before.
 - **`[server] use_xheaders = false`:** none. orrery ignores the headers from everyone. That's
   Moonraker's option, on by default (`docs/configuration.md:104`,
   `components/application.py:214,328`).
 
 ```toml
 [authorization]
-trusted_clients = { "192.168.1.0/24" = "operator" }
 trusted_proxies = ["127.0.0.1"]
+
+[authorization.networks]
+operator = ["192.168.1.0/24"]
 ```
 
 How a request from a trusted proxy is judged:
@@ -340,26 +359,31 @@ How a request from a trusted proxy is judged:
 - **With the headers:** by the client's address that the proxy passes on. From
   `X-Forwarded-For`, orrery takes the last address, the one the trusted proxy added. Earlier
   addresses come from the client, which can write anything there.
-- **Without the headers:** by the proxy's own address, against `trusted_clients`, as any other
-  connection is.
+- **Without the headers:** by the proxy's own address, which gets no role (see below).
 
 Moonraker gets the same result another way. It reads the headers from anyone, then refuses the
 request unless the proxy's own address is trusted too (`authorization.py:865-871,915-921`).
 
-**Why `trusted_proxies` exists.** If 127.0.0.1 is in `trusted_clients` and a proxy on the
-printer doesn't send the headers, every caller arrives from 127.0.0.1, so every caller is
-trusted. That's true in Moonraker too, and orrery can't detect such a proxy. With
-`trusted_proxies`, an admin can trust the proxy without trusting its address:
+**A trusted proxy has no role of its own** (user, 2026-11-21). A proxy that doesn't pass on
+the headers makes every caller arrive from the proxy's address. If that address had a role,
+every caller would get it. That's true in Moonraker, where the proxy must be trusted, and so
+must have full rights. So in orrery, when `trusted_proxies` is set:
 
-- List 127.0.0.1 in `trusted_proxies` and leave it out of `trusted_clients`. Callers through the
-  proxy get the role of their own address. A request through a proxy that sends no headers gets
-  nothing from a trusted network.
-- The price: programs on the printer that connect to 127.0.0.1 directly, such as KlipperScreen,
-  aren't trusted any more. They need a key, or the unix socket. KlipperScreen's key option is
-  unchecked; its source isn't on this machine.
+- **A network entry inside a trusted proxy is an error:** `admin = ["127.0.0.1"]` with
+  `trusted_proxies = ["127.0.0.1"]` stops orrery at startup, with a message that names both.
+- **A network around a trusted proxy gives the proxy nothing.** With
+  `operator = ["192.168.1.0/24"]` and a proxy at `192.168.1.10`, a request from the proxy
+  without the headers gets no rights, and its users get the role of their own address.
+- The price: programs on the proxy's host that connect to orrery directly, such as
+  KlipperScreen when the proxy runs on the printer, get no role from a network either. They
+  need a key, or the unix socket. KlipperScreen's key option is unchecked; its source isn't on
+  this machine.
 
-The startup log lists the trusted proxies, and says whether they came from `trusted_proxies` or
-from `trusted_clients`.
+With only Moonraker's `trusted_clients`, the proxies are its networks, so these rules
+don't apply, and orrery behaves as Moonraker does.
+
+The startup log lists the trusted proxies, says whether they came from `trusted_proxies` or
+from `trusted_clients`, and says when there are none.
 
 orrery logs both addresses (`describe_peer`, `crates/orrery/src/web.rs:72`). Securing the proxy
 itself is its owner's job.
@@ -391,7 +415,7 @@ Out of scope for now, along with LDAP. These are what they'll need, so keys don'
 Until then, `access.login` and the user endpoints return an error that says logins aren't
 there yet. `access.users.list` needs `admin`, since it will name every key; Moonraker lets any
 authorized client read it. `access.oneshot_token` keeps its current behaviour: it hands out tokens that orrery
-doesn't check, so Fluidd on a trusted network can build download links.
+doesn't check, so Fluidd on a network with a role can build download links.
 
 ## Config and migration
 
@@ -399,11 +423,11 @@ How each of Moonraker's `[authorization]` options (`authorization.py:128-200`) m
 
 | Option | In this step |
 |---|---|
-| `trusted_clients` | As in Moonraker, with `admin`. In `orrery.toml`, each network can get a role |
+| `trusted_clients` | As in Moonraker, with `admin`. `[authorization.networks]` in `orrery.toml` replaces it, with a role per network |
 | `cors_domains` | As in Moonraker, and also checked on the websocket and for trusted requests |
 | `enable_api_key` | Turns the `moonraker` key on or off |
 | `[server] use_xheaders` | As in Moonraker: `false` turns proxy headers off |
-| `trusted_proxies` | orrery's own, in `orrery.toml`. Not set: the hosts in `trusted_clients` |
+| `trusted_proxies` | orrery's own, in `orrery.toml`. Not set: none, or the hosts in `trusted_clients` when `[authorization.networks]` isn't set |
 | `force_logins` | Ignored until logins; orrery logs that it ignores it |
 | `default_source` | Ignored until logins |
 | `max_login_attempts` | Ignored until logins |
@@ -425,7 +449,8 @@ what helps an admin and leaves out what repeats.
 
 **At startup,** one line for each:
 
-- the trusted networks, each with its role;
+- the networks, each with its role, and whether they came from `[authorization.networks]` or from
+  `trusted_clients`;
 - the trusted proxies, and whether they came from `trusted_proxies` or from `trusted_clients`;
 - the keys, each with its name and role;
 - whether the `moonraker` key is on;
@@ -434,7 +459,7 @@ what helps an admin and leaves out what repeats.
 **When something changes:**
 
 - A key is rotated: its name, and who rotated it.
-- A connection opens: the role it got, and why, such as the key's name or the trusted network.
+- A connection opens: the role it got, and why, such as the key's name or the network.
   orrery already logs one line per connection (`describe_peer`,
   `crates/orrery/src/web.rs:72`); this adds to that line instead of adding a new one.
 
@@ -466,7 +491,7 @@ it.
 
 ## Testing
 
-- Conformance cases under `auth/`, run against Moonraker too: trusted networks, `cors_domains`,
+- Conformance cases under `auth/`, run against Moonraker too: `trusted_clients`, `cors_domains`,
   and the `moonraker` key.
 - orrery-only cases: key roles, rotation, a key removed from the config, `check_claim` with a
   key, the `Origin` check, proxy headers from trusted and untrusted hosts, and another user on

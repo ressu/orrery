@@ -1,11 +1,11 @@
-name: a trusted network with the operator role prints, but can't change config or the machine
+name: a network with the operator role prints, but can't change config or the machine
 targets: [orrery]
 klippy: ready
 transports: [ws, http]
 files:
   config/orrery.toml: |
-    [authorization.trusted_clients]
-    "127.0.0.0/8" = "operator"
+    [authorization.networks]
+    operator = ["127.0.0.0/8"]
   config/printer.cfg: "[printer]\n"
   gcodes/cube.gcode: "G28\n"
 steps:

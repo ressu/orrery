@@ -87,7 +87,7 @@ fn network_access(app: &App, peer: SocketAddr, headers: &HeaderMap) -> crate::au
     let origin_ok = crate::auth::origin_allowed(headers, &app.cors);
     if !origin_ok && let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
         app.auth.log_once(format!("origin {origin}"), || {
-            format!("A request from a page at {origin} gets no rights from a trusted network: the origin isn't the printer's own address or in cors_domains")
+            format!("A request from a page at {origin} gets no rights from its network: the origin isn't the printer's own address or in cors_domains")
         });
     }
     app.auth.network_access(client, origin_ok)
