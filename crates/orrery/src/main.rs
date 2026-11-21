@@ -43,13 +43,13 @@ struct Cli {
 
 #[derive(clap::Subcommand)]
 enum Command {
-    /// Show or rotate the API keys that orrery.toml declares. orrery must be running: the
+    /// List, show, or rotate the API keys that orrery.toml declares. orrery must be running: the
     /// command asks it over the unix socket.
     Key {
         #[command(subcommand)]
         action: KeyAction,
     },
-    /// Add or delete local users, or set their passwords. Roles come from orrery.toml's
+    /// List, add, or delete local users, or set their passwords. Roles come from orrery.toml's
     /// [authorization.users]. orrery must be running: the command asks it over the unix socket.
     User {
         #[command(subcommand)]
@@ -59,6 +59,8 @@ enum Command {
 
 #[derive(clap::Subcommand)]
 enum UserAction {
+    /// List the users, with their roles from orrery.toml.
+    List,
     /// Add a user. The command asks for the password.
     Add { name: String },
     /// Delete a user. Their sessions end at once.
@@ -69,6 +71,8 @@ enum UserAction {
 
 #[derive(clap::Subcommand)]
 enum KeyAction {
+    /// List the keys and their roles, without their secrets.
+    List,
     /// Print a key, such as homeassistant, agent.spoolman, or moonraker.
     Show { name: String },
     /// Give a key a new secret, and print it. The old secret stops working at once.
@@ -299,14 +303,34 @@ fn main() -> ExitCode {
     }
 }
 
-/// `orrery key show` and `orrery key rotate`: one request to the running orrery, over the unix
-/// socket, where orrery's own user is admin.
+/// `orrery key list|show|rotate`: one request to the running orrery, over the unix socket,
+/// where orrery's own user is admin.
 fn key_command(socket: &Path, action: &KeyAction) -> ExitCode {
     let (method, name) = match action {
-        KeyAction::Show { name } => ("orrery.access.key.get", name),
-        KeyAction::Rotate { name } => ("orrery.access.key.rotate", name),
+        KeyAction::List => ("orrery.access.key.list", None),
+        KeyAction::Show { name } => ("orrery.access.key.get", Some(name)),
+        KeyAction::Rotate { name } => ("orrery.access.key.rotate", Some(name)),
     };
-    match unix_socket::call(socket, method, serde_json::json!({"name": name})) {
+    let params = name.map_or_else(|| serde_json::json!({}), |n| serde_json::json!({"name": n}));
+    match unix_socket::call(socket, method, params) {
+        Ok(result) if name.is_none() => {
+            let keys = result["keys"].as_array().cloned().unwrap_or_default();
+            if keys.is_empty() {
+                println!("No keys. Keys are listed by role in orrery.toml's [authorization.keys].");
+                return ExitCode::SUCCESS;
+            }
+            let rows: Vec<Vec<String>> = keys
+                .iter()
+                .map(|k| {
+                    let name = k["name"].as_str().unwrap_or_default();
+                    let note =
+                        if name == "moonraker" { "Fluidd's API key; enable_api_key = false turns it off" } else { "" };
+                    vec![name.to_owned(), k["role"].as_str().unwrap_or_default().to_owned(), note.to_owned()]
+                })
+                .collect();
+            print_table(&["NAME", "ROLE", ""], &rows);
+            ExitCode::SUCCESS
+        }
         Ok(result) => {
             println!("{}", result["key"].as_str().unwrap_or_default());
             ExitCode::SUCCESS
@@ -324,6 +348,27 @@ fn key_command(socket: &Path, action: &KeyAction) -> ExitCode {
 fn user_command(socket: &Path, action: &UserAction) -> ExitCode {
     let result = (|| -> Result<String> {
         Ok(match action {
+            UserAction::List => {
+                let result = unix_socket::call(socket, "orrery.access.user.list", serde_json::json!({}))?;
+                let users = result["users"].as_array().cloned().unwrap_or_default();
+                if users.is_empty() {
+                    return Ok("No users. Add one with: orrery user add <name>".to_owned());
+                }
+                let rows: Vec<Vec<String>> = users
+                    .iter()
+                    .map(|u| {
+                        vec![
+                            u["username"].as_str().unwrap_or_default().to_owned(),
+                            u["source"].as_str().unwrap_or_default().to_owned(),
+                            u["role"].as_str().unwrap_or("none: not in [authorization.users]").to_owned(),
+                            u["created_on"].as_f64().map(date).unwrap_or_default(),
+                            if u["has_tokens"].as_bool() == Some(true) { "yes" } else { "no" }.to_owned(),
+                        ]
+                    })
+                    .collect();
+                print_table(&["NAME", "SOURCE", "ROLE", "ADDED", "TOKENS"], &rows);
+                return Ok(String::new());
+            }
             UserAction::Add { name } => {
                 let password = read_new_password()?;
                 unix_socket::call(
@@ -350,7 +395,9 @@ fn user_command(socket: &Path, action: &UserAction) -> ExitCode {
     })();
     match result {
         Ok(message) => {
-            println!("{message}");
+            if !message.is_empty() {
+                println!("{message}");
+            }
             ExitCode::SUCCESS
         }
         Err(e) => {
@@ -389,4 +436,47 @@ fn read_hidden(prompt: &str) -> Result<String> {
     eprintln!();
     read?;
     Ok(line.trim_end_matches(['\n', '\r']).to_owned())
+}
+
+/// Prints rows in columns, under a header.
+fn print_table(header: &[&str], rows: &[Vec<String>]) {
+    let mut widths: Vec<usize> = header.iter().map(|h| h.len()).collect();
+    for row in rows {
+        for (w, cell) in widths.iter_mut().zip(row) {
+            *w = (*w).max(cell.chars().count());
+        }
+    }
+    let line = |cells: Vec<&str>| {
+        let padded: Vec<String> = cells.iter().zip(&widths).map(|(c, w)| format!("{c:<w$}")).collect();
+        println!("{}", padded.join("  ").trim_end());
+    };
+    line(header.to_vec());
+    for row in rows {
+        line(row.iter().map(String::as_str).collect());
+    }
+}
+
+/// A Unix time as a date, `2026-11-21`, in UTC.
+fn date(secs: f64) -> String {
+    // Howard Hinnant's days-to-civil algorithm.
+    let days = (secs / 86400.0).floor() as i64 + 719_468;
+    let era = days.div_euclid(146_097);
+    let doe = days.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{year}-{month:02}-{day:02}")
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn dates() {
+        assert_eq!(super::date(0.0), "1970-01-01");
+        assert_eq!(super::date(1_795_219_200.0), "2026-11-21");
+        assert_eq!(super::date(951_782_400.0), "2000-02-29");
+    }
 }

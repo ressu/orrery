@@ -10,14 +10,14 @@ steps:
     params: {username: bob, password: secret2}
     expect: {username: bob, action: user_created}
   - call: access.users.list
-    expect: {users: [{username: alice, source: moonraker, created_on: $type:number}, {username: bob, source: moonraker}]}
+    expect: {users: {$contains: [{username: alice, source: moonraker, created_on: $type:number}, {username: bob, source: moonraker}]}}
   - call: access.delete_user
     params: {username: bob}
     expect: {username: bob, action: user_deleted}
   - expect_notification: notify_user_deleted
     match: [{username: bob}]
   - call: access.users.list
-    expect: {users: [{username: alice, source: moonraker}]}
+    expect: {users: {$contains: [{username: alice, source: moonraker}], $excludes: [{username: bob}]}}
   - call: access.login
     params: {username: alice, password: secret1, source: moonraker}
     expect: {username: alice, source: moonraker, action: user_logged_in, token: $type:string, refresh_token: $type:string}

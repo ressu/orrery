@@ -128,6 +128,12 @@ impl Keys {
         })
     }
 
+    /// Each key's name and role, as the startup log shows them: `homeassistant` and
+    /// `operator`, `agent.spoolman` and `agent spoolman`.
+    pub fn list(&self) -> Vec<(String, String)> {
+        self.specs.iter().map(|s| (s.name.clone(), describe_role(s))).collect()
+    }
+
     /// The names of the keys the config declares.
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.specs.iter().map(|s| s.name.as_str())
@@ -282,9 +288,10 @@ mod tests {
         drop(keys);
         drop(db);
 
-        // Secrets survive a restart; a key removed from the config is deleted.
-        let moonraker = "[authorization]\nenable_api_key: False\n";
-        let (config, db) = setup(moonraker, "[authorization.keys]\noperator = \"homeassistant\"\n", dir.path());
+        // Secrets survive a restart; a key removed from the config is deleted. orrery.toml can
+        // turn the moonraker key off as well as moonraker.conf can.
+        let toml = "[authorization]\nenable_api_key = false\n[authorization.keys]\noperator = \"homeassistant\"\n";
+        let (config, db) = setup("", toml, dir.path());
         let (agents, _) = Agents::new(&config, None).unwrap();
         let keys = Keys::new(&config, &agents, &db).unwrap();
         assert_eq!(keys.get("homeassistant").as_deref(), Some(new.as_str()));

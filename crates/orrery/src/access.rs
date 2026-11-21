@@ -97,6 +97,8 @@ pub fn register_endpoints(app: &Arc<App>) {
     r.register("/access/info", &[RequestType::Get], Transports::All, handler(info));
     r.register("/access/api_key", &[RequestType::Get, RequestType::Post], Transports::All, handler(api_key));
     r.register("/orrery/access/key/get", &[RequestType::Get], Transports::All, handler(key_get));
+    r.register("/orrery/access/key/list", &[RequestType::Get], Transports::All, handler(key_list));
+    r.register("/orrery/access/user/list", &[RequestType::Get], Transports::All, handler(user_list));
     r.register("/orrery/access/key/rotate", &[RequestType::Post], Transports::All, handler(key_rotate));
 }
 
@@ -117,6 +119,33 @@ async fn api_key(app: Arc<App>, req: Request) -> ApiResult {
 async fn key_get(app: Arc<App>, req: Request) -> ApiResult {
     let name = req.args.str("name")?;
     app.keys.get(&name).map(|s| json!({"name": name, "key": s})).ok_or_else(|| no_key(&name))
+}
+
+/// `orrery.access.key.list`: every key's name and role, without the secrets.
+async fn key_list(app: Arc<App>, _req: Request) -> ApiResult {
+    let keys: Vec<Value> =
+        app.keys.list().into_iter().map(|(name, role)| json!({"name": name, "role": role})).collect();
+    Ok(json!({"keys": keys}))
+}
+
+/// `orrery.access.user.list`: the stored users with their roles from the config, which
+/// `access.users.list` doesn't show. `role` is null for a user the config gives none.
+async fn user_list(app: Arc<App>, _req: Request) -> ApiResult {
+    let users: Vec<Value> = app
+        .users
+        .list()
+        .into_iter()
+        .map(|u| {
+            json!({
+                "username": u.username,
+                "source": u.source,
+                "role": app.users.role_of(&u.username).ok().map(crate::auth::Role::as_str),
+                "created_on": u.created_on,
+                "has_tokens": u.jwt_secret.is_some(),
+            })
+        })
+        .collect();
+    Ok(json!({"users": users}))
 }
 
 /// `orrery.access.key.rotate {name}`: gives a key a new secret, and returns it.
@@ -221,9 +250,9 @@ async fn delete_user(app: Arc<App>, req: Request) -> ApiResult {
     Ok(json!({"username": name, "action": "user_deleted"}))
 }
 
-/// `access.users.list`: the stored users, and the keys, with source `orrery`, as the
-/// authorization note decided. The `moonraker` key stays out, as Moonraker hides
-/// `_API_KEY_USER_`.
+/// `access.users.list`: the stored users, and the keys, with source `orrery`. That includes
+/// the `moonraker` key, which Moonraker hides as `_API_KEY_USER_`: a key that works should be
+/// listed somewhere (user, 2026-11-21).
 async fn users_list(app: Arc<App>, _req: Request) -> ApiResult {
     let mut users: Vec<Value> = app
         .users
@@ -232,7 +261,7 @@ async fn users_list(app: Arc<App>, _req: Request) -> ApiResult {
         .map(|u| json!({"username": u.username, "source": u.source, "created_on": u.created_on}))
         .collect();
     let since = *TRUSTED_SINCE.get_or_init(crate::users::now_secs);
-    for name in app.keys.names().filter(|n| *n != crate::keys::MOONRAKER_KEY) {
+    for name in app.keys.names() {
         users.push(json!({"username": name, "source": "orrery", "created_on": since}));
     }
     Ok(json!({"users": users}))

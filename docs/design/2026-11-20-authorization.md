@@ -180,16 +180,21 @@ role = "agent"   # the default, which a table can raise
   and the reserved name `moonraker` stop orrery at startup. The old `[key.<name>]` tables do
   too, with an error that shows the new form. If keys get settings beyond a role later, such as
   scopes, a table per key can come back then. A rotated key's open connections lose its rights.
-- **Get and rotate, nothing else.** An admin can read a key again, or replace it with a new
-  one. To create or delete a key, edit `orrery.toml`.
-  - Over the API: `orrery.access.key.get {name}` and `orrery.access.key.rotate {name}`, at
-    `admin`. These are orrery's own; Moonraker has nothing like them.
-  - In the CLI: `orrery key show <name>` and `orrery key rotate <name>`. The CLI talks to the
+- **List, get, and rotate.** An admin can list the keys with their roles, read a key again, or
+  replace it with a new one. To create or delete a key, edit `orrery.toml`. Listing was added
+  on 2026-11-21: the config already shows every key, but a list from the running orrery shows
+  what it actually loaded (user, 2026-11-21).
+  - Over the API: `orrery.access.key.list`, `orrery.access.key.get {name}`, and
+    `orrery.access.key.rotate {name}`, at `admin`. These are orrery's own; Moonraker has nothing
+    like them. The list has names and roles, never secrets.
+  - In the CLI: `orrery key list`, `orrery key show <name>`, and `orrery key rotate <name>`. The CLI talks to the
     running orrery over the unix socket, so it's `admin` by its user id. It can't open the
     database itself, because redb locks the file while orrery runs.
 - **Fluidd's API key is the built-in key `moonraker`,** with the `admin` role. Fluidd's
   `access.get_api_key` and `access.post_api_key` get and rotate it. `enable_api_key` turns it
-  on or off, as in Moonraker (`authorization.py:133`), and it's on by default. From a trusted
+  on or off, as in Moonraker (`authorization.py:133`), and it's on by default. To turn it off
+  once every client has its own key or login, set `enable_api_key = false` in `orrery.toml`'s
+  `[authorization]`. From a trusted
   network with `operator`, Fluidd's API key dialog shows an error, because reading the key needs
   `admin`.
 - **Format:** Moonraker's, 32 lowercase hex characters, for every key (user, 2026-11-21).
@@ -403,7 +408,8 @@ note carry over to it:
 
 - **Keys appear in `access.users.list`** (user, 2026-11-21), with the source `orrery`: each
   key in `[authorization.keys]` under its name, and each agent as `agent.<name>`. The
-  `moonraker` key stays out of the list, as Moonraker hides `_API_KEY_USER_`. These users have
+  `moonraker` key is listed too, although Moonraker hides `_API_KEY_USER_`: a key that works
+  should show up somewhere (user, 2026-11-21). These users have
   keys, not passwords, so logging in, changing a password, and deleting are refused, with an
   error that points to `orrery.toml`. Fluidd greys out the delete button for any source but
   `moonraker`, which suits keys. Fluidd names only the `moonraker` and `ldap` sources

@@ -45,6 +45,8 @@ change how safe or complete orrery is to run.
   - `access.post_user` and `access.delete_user` need `admin`; Moonraker allows any authorized
     client. A user who isn't listed in `[authorization.users]` gets `default_role`, or can't
     log in. Without the list, every local user is `admin`, as in Moonraker.
+  - `access.users.list` also lists the keys, with source `orrery`, the `moonraker` key
+    among them. Moonraker lists only users, and hides its API key user.
   - Changing a password ends the user's other sessions. Moonraker keeps their tokens valid.
   - Passwords are hashed with Argon2id. Moonraker's PBKDF2 hashes are checked, and replaced at
     the next login.

@@ -256,6 +256,8 @@ fn action(app: &App, endpoint: &str, kind: RequestType, args: &Args) -> String {
         ("/access/api_key", Get) => Some("see the API key".to_owned()),
         ("/access/api_key", _) => Some("make a new API key".to_owned()),
         ("/orrery/access/key/get", _) => Some("see API keys".to_owned()),
+        ("/orrery/access/key/list", _) => Some("list API keys".to_owned()),
+        ("/orrery/access/user/list", _) => Some("list users".to_owned()),
         ("/orrery/access/key/rotate", _) => Some("rotate API keys".to_owned()),
         ("/access/users/list", _) => Some("list users".to_owned()),
         ("/access/user", Post) => Some("add users".to_owned()),

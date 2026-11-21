@@ -26,7 +26,7 @@ steps:
     params: {username: dash, password: pw1}
     expect_error: {code: 400, message: "dash is the name of a key in orrery.toml's [authorization.keys], so a user can't have it"}
   - call: access.users.list
-    expect: {users: [{username: olive, source: moonraker}, {username: kid, source: moonraker}, {username: dash, source: orrery}]}
+    expect: {users: [{username: olive, source: moonraker}, {username: kid, source: moonraker}, {username: dash, source: orrery}, {username: moonraker, source: orrery}]}
   # A failed login doesn't say which part was wrong.
   - call: access.login
     params: {username: olive, password: wrong}

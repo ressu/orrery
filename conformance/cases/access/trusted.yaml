@@ -7,5 +7,6 @@ steps:
   # Frontends add this token to download links.
   - call: access.oneshot_token
     expect: "$regex:^[A-Z2-7]{32}$"
+  # orrery also lists its keys, with source orrery; Moonraker lists none.
   - call: access.users.list
-    expect: {users: []}
+    expect: {users: {$excludes: [{source: moonraker}]}}
