@@ -364,6 +364,7 @@ impl App {
         };
         let args = Args(args);
         let access = conn.map(|c| self.client_access(c)).unwrap_or_default();
+        let mut refused = false;
         let result = match crate::auth::authorize(self, &access, &endpoint.endpoint, kind, &args) {
             Ok(()) => {
                 let req = Request {
@@ -378,6 +379,7 @@ impl App {
             }
             Err(e) => {
                 self.auth.log_refusal(&access, method, &e);
+                refused = true;
                 Err(e)
             }
         };
@@ -387,7 +389,14 @@ impl App {
         Some(match result {
             Ok(v) => json!({"jsonrpc": "2.0", "result": v, "id": id}),
             Err(e) => {
-                tracing::info!("JSON-RPC Request Error - Requested Method: {method}, Code: {}, Message: {e}", e.status);
+                // A refusal is logged by log_refusal, once per client and reason, with the client
+                // named. Logging each one here too would fill the log with lines that don't say who.
+                if !refused {
+                    tracing::info!(
+                        "JSON-RPC Request Error - Requested Method: {method}, Code: {}, Message: {e}",
+                        e.status
+                    );
+                }
                 let mut reply = rpc_error(e.jsonrpc_code(), &e.message, id);
                 if let Some(data) = e.data {
                     reply["error"]["data"] = data;

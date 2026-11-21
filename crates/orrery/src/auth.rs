@@ -603,7 +603,9 @@ impl Auth {
             tracing::info!(target: "orrery::auth", "Authorization: [authorization.networks] replaces trusted_clients, so orrery ignores trusted_clients");
         }
         let from = self.networks_from;
-        if self.trusted.is_empty() {
+        if self.trusted.is_empty() && self.ignored_trusted_clients {
+            tracing::warn!(target: "orrery::auth", "Authorization: [authorization.networks] lists no networks, and it replaces trusted_clients, so every client needs a key. To keep trusted_clients, remove the [authorization.networks] table.");
+        } else if self.trusted.is_empty() {
             tracing::info!(target: "orrery::auth", "Authorization: no networks have a role, so clients need a key");
         } else {
             let list: Vec<String> = self.trusted.iter().map(|(n, r)| format!("{n} ({r})")).collect();
@@ -693,7 +695,7 @@ impl Auth {
         if !self.is_proxy(peer) {
             if self.use_xheaders {
                 self.log_once(format!("untrusted-headers {peer}"), || {
-                    format!("{peer} sent proxy headers, but it isn't a trusted proxy, so orrery ignores them")
+                    format!("{peer} sent proxy headers, but it isn't a trusted proxy, so orrery ignores them and judges the request by {peer}. If {peer} is your proxy, list it in trusted_proxies.")
                 });
             }
             return peer;
