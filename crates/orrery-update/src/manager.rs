@@ -2,6 +2,7 @@
 //! runs on a schedule, and the print state that holds them back
 //! (docs/design/2026-11-22-update-manager.md).
 
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -10,7 +11,7 @@ use serde_json::{Map, Value, json};
 use tokio::sync::{Notify, watch};
 
 use crate::config::{self, Entry, Global, Kind, SECTION};
-use crate::git::{self, RepoState, Tracking};
+use crate::git::{self, RepoState, Rollback, Tracking};
 
 /// Moonraker skips a refresh of everything within this long of the last one.
 const REFRESH_SPAM: Duration = Duration::from_secs(60);
@@ -32,7 +33,8 @@ pub struct Stored {
     /// The entry's object in `version_info` after the last refresh.
     pub status: Value,
     pub tracking: Tracking,
-    pub rollback_version: Option<String>,
+    /// Where a rollback goes: the state before the last update, or after the last recover.
+    pub rollback: Option<Rollback>,
 }
 
 impl Stored {
@@ -43,7 +45,11 @@ impl Stored {
             config_hash: text("config_hash").unwrap_or_default(),
             status: v.get("status").cloned().unwrap_or(Value::Null),
             tracking: Tracking { branch: text("branch"), remote: text("remote") },
-            rollback_version: text("rollback_version"),
+            rollback: text("rollback_commit").map(|commit| Rollback {
+                commit,
+                branch: text("rollback_branch").unwrap_or_else(|| "?".into()),
+                version: text("rollback_version").unwrap_or_else(|| "?".into()),
+            }),
         }
     }
 
@@ -54,7 +60,9 @@ impl Stored {
             "status": self.status,
             "branch": self.tracking.branch,
             "remote": self.tracking.remote,
-            "rollback_version": self.rollback_version,
+            "rollback_commit": self.rollback.as_ref().map(|r| &r.commit),
+            "rollback_branch": self.rollback.as_ref().map(|r| &r.branch),
+            "rollback_version": self.rollback.as_ref().map(|r| &r.version),
         })
     }
 }
@@ -101,6 +109,64 @@ pub struct Manager {
     last_refresh_all: Mutex<Option<Instant>>,
     /// Config problems, for `server.info`.
     warnings: Mutex<Vec<String>>,
+    /// Commands waiting for the one that runs. While one waits, restarts wait for it too.
+    waiting: AtomicUsize,
+    /// Services to restart once the updates are done, in the order they were added.
+    pending: Mutex<Vec<String>>,
+    /// Whether a task waits for a print to end, to restart the pending services.
+    restart_after_print: AtomicBool,
+    next_proc_id: AtomicU64,
+}
+
+/// One command's progress messages, sent as `notify_update_response` and logged.
+struct Progress {
+    agent: Option<Agent>,
+    application: String,
+    proc_id: u64,
+}
+
+impl Progress {
+    async fn send(&self, message: &str, complete: bool) {
+        tracing::info!("{message}");
+        if let Some(agent) = &self.agent {
+            let data = json!({"message": message, "application": self.application, "proc_id": self.proc_id, "complete": complete});
+            let _ = agent.send_event("update_response", Some(data)).await;
+        }
+    }
+}
+
+/// Why a command stopped: the messages for the update dialog, the last one completing it, and
+/// the error for the request.
+struct Failure {
+    messages: Vec<String>,
+    code: i64,
+    error: String,
+}
+
+impl Failure {
+    fn new(code: i64, error: impl Into<String>) -> Self {
+        Self { messages: Vec::new(), code, error: error.into() }
+    }
+}
+
+/// A boolean parameter, as text or JSON.
+fn flag(params: &Value, key: &str) -> bool {
+    match &params[key] {
+        Value::Bool(b) => *b,
+        Value::String(s) => s.eq_ignore_ascii_case("true"),
+        _ => false,
+    }
+}
+
+/// Why a repo isn't valid, for the message that refuses its update.
+fn invalid_reason(repo: &RepoState) -> String {
+    if repo.diverged {
+        format!(": it has diverged from {}/{}, and a recover resets it", repo.remote, repo.branch)
+    } else if repo.warnings.is_empty() {
+        String::new()
+    } else {
+        format!(": {}", repo.warnings.join("; "))
+    }
 }
 
 fn now() -> f64 {
@@ -123,6 +189,10 @@ impl Manager {
             wake: Notify::new(),
             last_refresh_all: Mutex::new(None),
             warnings: Mutex::new(Vec::new()),
+            waiting: AtomicUsize::new(0),
+            pending: Mutex::new(Vec::new()),
+            restart_after_print: AtomicBool::new(false),
+            next_proc_id: AtomicU64::new(now() as u64),
         })
     }
 
@@ -155,8 +225,9 @@ impl Manager {
         }
         agent.register_endpoint("status", &["GET"]).await?;
         agent.register_endpoint("refresh", &["POST"]).await?;
-        agent.register_endpoint("klipper", &["POST"]).await?;
-        agent.register_endpoint("moonraker", &["POST"]).await?;
+        for name in ["upgrade", "client", "full", "system", "recover", "rollback", "klipper", "moonraker"] {
+            agent.register_endpoint(name, &["POST"]).await?;
+        }
 
         let m = self.clone();
         let mut notifications = agent.notifications();
@@ -229,7 +300,10 @@ impl Manager {
         for name in agent.config_names(None).await? {
             let map = agent.config(Some(&format!("{SECTION} {name}"))).await?.unwrap_or_default();
             match config::entry(&name, &map, &global) {
-                Ok(e) => entries.push(e),
+                Ok(e) => {
+                    warnings.extend(e.services_warning());
+                    entries.push(e);
+                }
                 Err(w) => warnings.push(w),
             }
         }
@@ -268,11 +342,7 @@ impl Manager {
     /// first, unless a print or a command is running, or the last check was a minute ago;
     /// then the request is answered without a check, as Moonraker does.
     pub async fn status(self: &Arc<Self>, params: &Value) -> Result<Value, MethodError> {
-        let refresh = match &params["refresh"] {
-            Value::Bool(b) => *b,
-            Value::String(s) => s.eq_ignore_ascii_case("true"),
-            _ => false,
-        };
+        let refresh = flag(params, "refresh");
         let recent = self.last_refresh_all.lock().expect("refresh lock").is_some_and(|t| t.elapsed() < REFRESH_SPAM);
         if refresh && !recent && !self.is_printing() && !self.is_busy() {
             self.refresh_entries(None).await;
@@ -326,14 +396,23 @@ impl Manager {
     }
 
     async fn refresh_one(&self, s: &mut EntryState) {
-        match &s.entry.kind {
-            Kind::Git(opts) => {
-                let repo = git::refresh(&s.entry, opts, &s.stored.tracking, true).await;
-                tracing::info!("Checked {}: {}", s.entry.name, git::summary(&repo));
-                s.stored.tracking = git::tracking_of(&repo);
-                s.stored.status = repo.status(&s.entry, s.stored.rollback_version.as_deref());
-                s.repo = Some(repo);
-            }
+        self.read_repo(s, true).await;
+        tracing::info!("Checked {}: {}", s.entry.name, s.repo.as_ref().map_or_else(String::new, git::summary));
+    }
+
+    /// Reads the entry's repo, fetching first when `fetch` is set, and stores what it finds.
+    async fn read_repo(&self, s: &mut EntryState, fetch: bool) {
+        let Kind::Git(opts) = &s.entry.kind;
+        let repo = git::refresh(&s.entry, opts, &s.stored.tracking, fetch).await;
+        s.stored.tracking = git::tracking_of(&repo);
+        s.repo = Some(repo);
+        self.save(s).await;
+    }
+
+    /// Stores the entry's state, with its object in `version_info`.
+    async fn save(&self, s: &mut EntryState) {
+        if let Some(repo) = &s.repo {
+            s.stored.status = repo.status(&s.entry, s.stored.rollback.as_ref().map(|r| r.version.as_str()));
         }
         s.stored.last_refresh_time = now();
         s.stored.config_hash = s.entry.hash.clone();
@@ -351,6 +430,260 @@ impl Manager {
         match view.iter_mut().find(|(n, _)| n == name) {
             Some((_, v)) => *v = status,
             None => view.push((name.to_owned(), status)),
+        }
+    }
+
+    fn has_entry(&self, name: &str) -> bool {
+        self.view.lock().expect("view lock").iter().any(|(n, _)| n == name)
+    }
+
+    fn not_available(name: &str) -> MethodError {
+        MethodError::new(404, format!("Updater {name} not available"))
+    }
+
+    /// `machine.update.upgrade` and `client`: updates the entry `name`, or everything
+    /// without it. `full` is the same without a name.
+    pub async fn update(self: &Arc<Self>, params: &Value) -> Result<Value, MethodError> {
+        if self.is_printing() {
+            return Err(MethodError::new(503, "Update Refused: Klippy is printing"));
+        }
+        let name = params["name"].as_str().map(str::to_owned);
+        if let Some(name) = &name
+            && !self.has_entry(name)
+        {
+            return Err(Self::not_available(name));
+        }
+        self.run(name.as_deref().unwrap_or("full"), async |m, entries, p| match &name {
+            Some(name) => {
+                let s = entries.iter_mut().find(|s| &s.entry.name == name).expect("checked above");
+                match m.update_entry(s, p).await {
+                    Ok(true) => Ok(Some(format!("Git Repo {name}: Update Finished..."))),
+                    // Moonraker says nothing for an entry that's up to date.
+                    Ok(false) => Ok(None),
+                    Err(e) => Err(Failure { messages: vec![format!("Error updating {name}: {}", e.error)], ..e }),
+                }
+            }
+            None => {
+                p.send("Preparing full software update...", false).await;
+                for s in entries.iter_mut() {
+                    if let Err(e) = m.update_entry(s, p).await {
+                        let messages = vec![format!("Error updating {}: {}", s.entry.name, e.error)];
+                        return Err(Failure { messages, ..e });
+                    }
+                }
+                Ok(Some("Full Update Complete".into()))
+            }
+        })
+        .await
+    }
+
+    /// `machine.update.recover`: a soft recover resets the repo; a hard one clones it again.
+    pub async fn recover(self: &Arc<Self>, params: &Value) -> Result<Value, MethodError> {
+        if self.is_printing() {
+            return Err(MethodError::new(400, "Recovery Attempt Refused: Klippy is printing"));
+        }
+        let name = params["name"].as_str().ok_or_else(|| MethodError::new(400, "No data for argument: name"))?;
+        if !self.has_entry(name) {
+            return Err(Self::not_available(name));
+        }
+        let hard = flag(params, "hard");
+        let name = name.to_owned();
+        self.run(&format!("recover_{name}"), async |m, entries, p| {
+            let s = entries.iter_mut().find(|s| s.entry.name == name).expect("checked above");
+            m.recover_entry(s, hard, p)
+                .await
+                .map(|()| Some(format!("Git Repo {name}: Reinstall Complete")))
+                .map_err(|e| Failure { messages: vec![format!("Error Recovering {name}"), e.error.clone()], ..e })
+        })
+        .await
+    }
+
+    /// `machine.update.rollback`: back to the commit before the last update.
+    pub async fn rollback(self: &Arc<Self>, params: &Value) -> Result<Value, MethodError> {
+        if self.is_printing() {
+            return Err(MethodError::new(400, "Rollback Attempt Refused: Klippy is printing"));
+        }
+        let name = params["name"].as_str().ok_or_else(|| MethodError::new(400, "No data for argument: name"))?;
+        if !self.has_entry(name) {
+            return Err(Self::not_available(name));
+        }
+        let name = name.to_owned();
+        self.run(&format!("rollback_{name}"), async |m, entries, _| {
+            let s = entries.iter_mut().find(|s| s.entry.name == name).expect("checked above");
+            let done = m
+                .rollback_entry(s)
+                .await
+                .map_err(|e| Failure { messages: vec![format!("Error Rolling Back {name}"), e.error.clone()], ..e })?;
+            Ok(Some(format!("Git Repo {name}: Rollback {}", if done { "Complete" } else { "not performed" })))
+        })
+        .await
+    }
+
+    /// Runs one command: after the one before it, with `busy` set, and with the restarts it
+    /// leaves pending at the end. The command returns the message that completes it.
+    async fn run<F>(self: &Arc<Self>, application: &str, command: F) -> Result<Value, MethodError>
+    where
+        F: AsyncFnOnce(&Arc<Self>, &mut Vec<EntryState>, &Progress) -> Result<Option<String>, Failure>,
+    {
+        self.waiting.fetch_add(1, Ordering::SeqCst);
+        let mut entries = self.entries.lock().await;
+        self.waiting.fetch_sub(1, Ordering::SeqCst);
+        *self.busy.lock().expect("busy lock") = true;
+        let p = Progress {
+            agent: self.agent(),
+            application: application.to_owned(),
+            proc_id: self.next_proc_id.fetch_add(1, Ordering::Relaxed),
+        };
+        let result = command(self, &mut entries, &p).await;
+        self.restart_pending(&p).await;
+        drop(entries);
+        *self.busy.lock().expect("busy lock") = false;
+        self.notify_refreshed().await;
+        match result {
+            Ok(done) => {
+                if let Some(message) = done {
+                    p.send(&message, true).await;
+                }
+                Ok(json!("ok"))
+            }
+            Err(f) => {
+                for (i, message) in f.messages.iter().enumerate() {
+                    p.send(message, i + 1 == f.messages.len()).await;
+                }
+                Err(MethodError::new(f.code, f.error))
+            }
+        }
+    }
+
+    /// Updates one entry to the version a fresh check finds. Returns false when it's up to
+    /// date.
+    async fn update_entry(&self, s: &mut EntryState, p: &Progress) -> Result<bool, Failure> {
+        let name = s.entry.name.clone();
+        self.read_repo(s, true).await;
+        let repo = s.repo.as_ref().expect("just read");
+        if !repo.is_valid() {
+            return Err(Failure::new(400, format!("Update aborted, repo not valid{}", invalid_reason(repo))));
+        }
+        if repo.current_commit == repo.upstream_commit {
+            return Ok(false);
+        }
+        p.send(&format!("Updating Application {name}..."), false).await;
+        p.send(&format!("Git Repo {name}: Updating Repo..."), false).await;
+        let Kind::Git(opts) = &s.entry.kind;
+        let rollback = Rollback::of(repo);
+        git::fast_forward(opts, repo).await.map_err(|e| Failure::new(500, e))?;
+        s.stored.rollback = Some(rollback);
+        self.read_repo(s, false).await;
+        self.add_pending(&s.entry);
+        Ok(true)
+    }
+
+    async fn recover_entry(&self, s: &mut EntryState, hard: bool, p: &Progress) -> Result<(), Failure> {
+        let name = s.entry.name.clone();
+        p.send(&format!("Git Repo {name}: Attempting Repo Recovery..."), false).await;
+        self.read_repo(s, true).await;
+        let Kind::Git(opts) = &s.entry.kind;
+        let repo = s.repo.as_ref().expect("just read");
+        if hard {
+            p.send(&format!("Git Repo {name}: Starting Clone Recovery..."), false).await;
+            if let Err(e) = git::hard_recover(opts, repo).await {
+                p.send(&format!("Git Repo {name}: Git Clone Failed"), false).await;
+                return Err(Failure::new(500, e));
+            }
+            p.send(&format!("Git Repo {name}: Git Clone Complete"), false).await;
+        } else {
+            p.send(&format!("Git Repo {name}: Resetting Git Repo..."), false).await;
+            git::soft_recover(opts, repo).await.map_err(|e| Failure::new(500, e))?;
+        }
+        // The tracking that a detached repo had is gone with the reset.
+        s.stored.tracking = Tracking::default();
+        self.read_repo(s, false).await;
+        let repo = s.repo.as_ref().expect("just read");
+        s.stored.rollback = Some(Rollback::of(repo));
+        self.save(s).await;
+        let repo = s.repo.as_ref().expect("just read");
+        if repo.current.dirty || !repo.is_valid() {
+            return Err(Failure::new(500, "Recovery attempt failed, repo state not pristine"));
+        }
+        self.add_pending(&s.entry);
+        Ok(())
+    }
+
+    async fn rollback_entry(&self, s: &mut EntryState) -> Result<bool, Failure> {
+        self.read_repo(s, false).await;
+        let repo = s.repo.as_ref().expect("just read");
+        // Moonraker resets a changed repo here, and the changes are lost.
+        if repo.current.dirty {
+            return Err(Failure::new(400, "Rollback aborted, repo has been modified. A recover resets it."));
+        }
+        let Some(rollback) = s.stored.rollback.clone() else {
+            return Err(Failure::new(400, "Incomplete rollback data stored, cannot rollback"));
+        };
+        let Kind::Git(opts) = &s.entry.kind;
+        let done = git::rollback(opts, repo, &rollback).await.map_err(|e| Failure::new(500, e))?;
+        if done {
+            self.read_repo(s, false).await;
+            self.add_pending(&s.entry);
+        }
+        Ok(done)
+    }
+
+    /// Adds the entry's services to the restarts that wait for the end of the updates.
+    fn add_pending(&self, entry: &Entry) {
+        let mut pending = self.pending.lock().expect("pending lock");
+        for service in entry.services() {
+            if service == "moonraker" {
+                tracing::info!("{}: managed_services names moonraker, which orrery doesn't restart", entry.name);
+            } else if !pending.contains(&service) {
+                pending.push(service);
+            }
+        }
+    }
+
+    /// Restarts the pending services once, unless another command waits to run, or a print
+    /// started during the update; then they restart after it.
+    async fn restart_pending(self: &Arc<Self>, p: &Progress) {
+        let services = {
+            let pending = self.pending.lock().expect("pending lock");
+            if pending.is_empty() {
+                return;
+            }
+            pending.clone()
+        };
+        if self.waiting.load(Ordering::SeqCst) > 0 {
+            for service in &services {
+                p.send(&format!("Service {service} restart postponed..."), false).await;
+            }
+            return;
+        }
+        if self.is_printing() {
+            p.send(&format!("A print started, so {} restart when it ends.", services.join(", ")), false).await;
+            if !self.restart_after_print.swap(true, Ordering::SeqCst) {
+                let m = self.clone();
+                tokio::spawn(async move {
+                    let mut state = m.print_state.subscribe();
+                    let _ = state.wait_for(|s| !matches!(s.as_str(), "printing" | "paused")).await;
+                    let _entries = m.entries.lock().await;
+                    m.restart_after_print.store(false, Ordering::SeqCst);
+                    let quiet = Progress { agent: None, application: String::new(), proc_id: 0 };
+                    m.restart_services(&quiet).await;
+                });
+            }
+            return;
+        }
+        self.restart_services(p).await;
+    }
+
+    /// Restarts the pending services now.
+    async fn restart_services(&self, p: &Progress) {
+        let services = std::mem::take(&mut *self.pending.lock().expect("pending lock"));
+        let Some(agent) = self.agent() else { return };
+        for service in services {
+            p.send(&format!("Restarting service {service}..."), false).await;
+            let unit = if service == "klipper" { klipper_unit(&agent).await } else { service.clone() };
+            if let Err(e) = agent.call("machine.services.restart", json!({"service": unit})).await {
+                p.send(&format!("Can't restart {service}: {e}"), false).await;
+            }
         }
     }
 
@@ -417,6 +750,13 @@ impl Manager {
     }
 }
 
+/// The service Klipper runs in, such as `klipper` or `klipper-1`, as Moonraker reads it from
+/// the Klippy connection.
+async fn klipper_unit(agent: &Agent) -> String {
+    let info = agent.call("machine.system_info", Value::Null).await.unwrap_or_default();
+    info["system_info"]["instance_ids"]["klipper"].as_str().unwrap_or("klipper").to_owned()
+}
+
 /// The local time of day, from `date`: reading the time zone without it would take a time zone
 /// library, and the window needs it only when a check is due.
 async fn local_time() -> (u32, u32, u32) {
@@ -475,6 +815,22 @@ mod tests {
     }
 
     #[test]
+    fn each_service_restarts_once() {
+        let g = config::global(&Map::new(), &mut Vec::new());
+        let e = |name: &str, extra: Value| {
+            let mut map = json!({"type": "git_repo", "path": "/x", "origin": "o"});
+            map.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            config::entry(name, map.as_object().unwrap(), &g).unwrap()
+        };
+        let m = Manager::new();
+        m.add_pending(&e("crowsnest", json!({})));
+        m.add_pending(&e("autotune", json!({"managed_services": "klipper"})));
+        m.add_pending(&e("filter_monitor", json!({"managed_services": "klipper moonraker"})));
+        m.add_pending(&e("led_effect", json!({"is_system_service": false})));
+        assert_eq!(*m.pending.lock().unwrap(), ["crowsnest", "klipper"]);
+    }
+
+    #[test]
     fn stale_entries() {
         let stored = json!({"a": {}, "gone": {}});
         assert_eq!(stale_keys(stored.as_object().unwrap(), &[entry("24")]), ["gone"]);
@@ -496,7 +852,7 @@ mod tests {
             config_hash: "abc".into(),
             status: json!({"version": "v1-0"}),
             tracking: Tracking { branch: Some("main".into()), remote: None },
-            rollback_version: Some("v0-9".into()),
+            rollback: Some(Rollback { commit: "abc".into(), branch: "main".into(), version: "v0-9".into() }),
         };
         assert_eq!(Stored::from_json(&s.to_json()), s);
     }

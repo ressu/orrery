@@ -41,6 +41,34 @@ steps:
     expect_error: {code: 400, message: "No updater registered for 'site'"}
   - call: machine.update.klipper
     expect_error: {code: 400, message: "Klipper updates aren't available in orrery yet."}
+  # Updates, recovers, and rollbacks, with Moonraker's messages.
+  - call: machine.update.client
+    params: {name: site}
+    expect_error: {code: -32601, message: "Updater site not available"}
+  - call: machine.update.system
+    expect_error: {code: -32601, message: "Updater system not available"}
+  - call: machine.update.client
+    params: {name: missing}
+    expect_error: {code: 400, message: "Update aborted, repo not valid: No git repo detected at configured path"}
+  - expect_notification: notify_update_response
+    match: [{application: missing, complete: true, message: "Error updating missing: Update aborted, repo not valid: No git repo detected at configured path"}]
+  - call: machine.update.full
+    expect_error: {code: 400, message: "Update aborted, repo not valid: No git repo detected at configured path"}
+  - expect_notification: notify_update_response
+    match: [{application: full, complete: false, message: "Preparing full software update..."}]
+  - expect_notification: notify_update_response
+    match: [{application: full, complete: true, message: "Error updating missing: Update aborted, repo not valid: No git repo detected at configured path"}]
+  # The folder above the repo isn't there either, so the clone fails.
+  - call: machine.update.recover
+    params: {name: missing, hard: true}
+    expect_error: {code: 500, message: "$regex:^Git Clone Error: "}
+  - expect_notification: notify_update_response
+    match: [{application: recover_missing, complete: false, message: "Git Repo missing: Attempting Repo Recovery..."}]
+  - call: machine.update.rollback
+    params: {name: missing}
+    expect_error: {code: 400, message: "Incomplete rollback data stored, cannot rollback"}
+  - call: machine.update.recover
+    expect_error: {code: 400, message: "No data for argument: name"}
   # The check is saved in the agent's namespace.
   - call: server.database.get_item
     params: {namespace: update_manager, key: missing}
@@ -50,6 +78,17 @@ steps:
   - call: machine.update.refresh
     retry_ms: 2000
     expect_error: {code: 503, message: "Server is busy, cannot perform refresh"}
+  - call: machine.update.client
+    params: {name: missing}
+    expect_error: {code: 503, message: "Update Refused: Klippy is printing"}
+  - call: machine.update.full
+    expect_error: {code: 503, message: "Update Refused: Klippy is printing"}
+  - call: machine.update.recover
+    params: {name: missing}
+    expect_error: {code: 400, message: "Recovery Attempt Refused: Klippy is printing"}
+  - call: machine.update.rollback
+    params: {name: missing}
+    expect_error: {code: 400, message: "Rollback Attempt Refused: Klippy is printing"}
   - klippy: {update: {print_stats: {state: standby}}}
   - call: machine.update.refresh
     retry_ms: 2000

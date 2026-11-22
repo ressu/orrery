@@ -64,7 +64,8 @@ pub struct Entry {
     pub name: String,
     pub channel: Channel,
     pub refresh_interval: Duration,
-    pub managed_services: Vec<String>,
+    /// As written; `None` when the option isn't there. [`Entry::services`] reads it.
+    pub managed_services: Option<Vec<String>>,
     pub is_system_service: bool,
     pub info_tags: Vec<String>,
     pub report_anomalies: bool,
@@ -246,13 +247,43 @@ pub fn entry(name: &str, map: &Map<String, Value>, global: &Global) -> Result<En
         name: name.to_owned(),
         channel,
         refresh_interval: o.hours("refresh_interval")?.unwrap_or(global.refresh_interval),
-        managed_services: o.list("managed_services")?,
+        managed_services: o.map.contains_key("managed_services").then(|| o.list("managed_services")).transpose()?,
         is_system_service: o.bool("is_system_service", true)?,
         info_tags: o.list("info_tags")?,
         report_anomalies: o.bool("report_anomalies", true)?,
         hash: hash(map),
         kind,
     })
+}
+
+impl Entry {
+    /// The services an update restarts, as Moonraker's `_configure_managed_services` picks
+    /// them: by default the entry's own service, unless `is_system_service` is false. Only
+    /// the entry's name, `klipper`, and `moonraker` are allowed, in that order.
+    pub fn services(&self) -> Vec<String> {
+        let listed = match &self.managed_services {
+            Some(l) => l.clone(),
+            None if self.is_system_service => vec![self.name.clone()],
+            None => Vec::new(),
+        };
+        [self.name.as_str(), "klipper", "moonraker"]
+            .into_iter()
+            .filter(|c| listed.iter().any(|l| l == c))
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// Moonraker's warning for a `managed_services` value it doesn't allow.
+    pub fn services_warning(&self) -> Option<String> {
+        let listed = self.managed_services.as_ref()?;
+        let bad = listed.iter().find(|l| ![self.name.as_str(), "klipper", "moonraker"].contains(&l.as_str()))?;
+        Some(format!(
+            "[update_manager {}]: Option 'managed_services: {}' contains an invalid value '{bad}'. All values must be one of the following choices: {}, klipper, moonraker",
+            self.name,
+            listed.join(" "),
+            self.name
+        ))
+    }
 }
 
 /// FNV-1a over the options in key order: stable across builds, unlike `std`'s hasher.
@@ -313,7 +344,7 @@ mod tests {
             &g,
         )
         .unwrap();
-        assert_eq!(e.managed_services, ["klipper", "moonraker"]);
+        assert_eq!(e.services(), ["klipper", "moonraker"]);
         assert_eq!((e.channel, e.is_system_service, e.refresh_interval), (Channel::Dev, true, g.refresh_interval));
         let Kind::Git(git) = &e.kind;
         assert_eq!((git.primary_branch.as_str(), git.install_script.as_deref()), ("main", Some("install.sh")));
@@ -321,14 +352,25 @@ mod tests {
         // orrery.toml's types.
         let e = entry(
             "led_effect",
-            &map(json!({"type": "git_repo", "path": "/x", "origin": "o", "is_system_service": false, "managed_services": ["a"], "channel": "stable"})),
+            &map(json!({"type": "git_repo", "path": "/x", "origin": "o", "is_system_service": false, "managed_services": ["led_effect", "crowsnest"], "channel": "stable"})),
             &g,
         )
         .unwrap();
         assert_eq!(
-            (e.is_system_service, e.managed_services.clone(), e.channel),
-            (false, vec!["a".to_owned()], Channel::Stable)
+            (e.is_system_service, e.services(), e.channel),
+            (false, vec!["led_effect".to_owned()], Channel::Stable)
         );
+        assert!(e.services_warning().unwrap().contains("an invalid value 'crowsnest'"));
+        // Without managed_services, an entry restarts its own service unless it says it has none.
+        let own = entry("crowsnest", &map(json!({"type": "git_repo", "path": "/x", "origin": "o"})), &g).unwrap();
+        assert_eq!((own.services(), own.services_warning()), (vec!["crowsnest".to_owned()], None));
+        let none = entry(
+            "x",
+            &map(json!({"type": "git_repo", "path": "/x", "origin": "o", "is_system_service": "False"})),
+            &g,
+        )
+        .unwrap();
+        assert!(none.services().is_empty());
         let Kind::Git(git) = &e.kind;
         assert_eq!(git.primary_branch, "master");
 

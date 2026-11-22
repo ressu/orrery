@@ -160,7 +160,8 @@ already uses.
 - **Dirty:** a repo with changed tracked files is dirty, and an update refuses it. Untracked
   files don't make it dirty, as in Moonraker (`git describe --dirty`, `git_deploy.py:368`), so
   Klipper's plugin links don't block updates. They make `pristine` false.
-- **Update:** a fast-forward to the remote commit. orrery stores the commit it left as the
+- **Update:** a fetch and a fresh check, then a fast-forward to the commit the check found.
+  An invalid repo is refused, with the reason. orrery stores the commit it left as the
   rollback point. Then, if the files changed in the update:
   - `requirements` changed: `<virtualenv>/bin/pip install -r <requirements>`.
   - `system_dependencies` changed: PackageKit installs the listed packages for this Debian
@@ -171,11 +172,14 @@ already uses.
 - **Recover, soft:** `git checkout <primary_branch>` and `git reset --hard <remote>/<branch>`.
   Tracked changes are lost; untracked files stay.
 - **Recover, hard:** a fresh clone into a folder beside the repo, which then replaces the repo,
-  as in Moonraker (`git_deploy.py:926-956`). A failed clone leaves the repo as it was.
+  as in Moonraker (`git_deploy.py:926-956`). A failed clone leaves the repo as it was. The old
+  repo is moved aside first and removed only once the clone is in its place. A missing repo
+  is cloned from `origin`; Moonraker can't recover it, because it reads the URL from the repo.
   Untracked files are lost, such as Klipper's plugin links, so plugins need their install
   scripts run again.
 - **Rollback:** `git reset --hard` to the stored rollback commit, then the same dependency and
-  restart steps as an update.
+  restart steps as an update. A repo with changed files is refused, and a recover resets it.
+  Moonraker's rollback resets it, and the changes are lost.
 
 ### `executable`
 
@@ -224,7 +228,11 @@ updated by hand or with KIAUH.
   Moonraker depends on Moonraker itself, never on orrery, so no update needs orrery restarted.
   orrery skips the name with one log line. filter_monitor's `klipper moonraker` restarts only
   Klipper.
-- **`is_system_service: False`** means no restarts, as for led_effect and printerkeep.
+- **`is_system_service: False`** means the entry's own service isn't restarted by default, as
+  for led_effect and printerkeep. Without `managed_services`, an entry restarts only its own
+  service.
+- **A print that starts during an update** holds the restarts back until it ends. Moonraker
+  restarts the services anyway.
 
 ## Printing
 
@@ -337,11 +345,13 @@ Each one becomes an entry in `docs/regressions.md` when it's built.
 3. Stable and beta follow the highest tag, not the newest by date.
 4. `moved_origin` is matched by URL, without a request to GitHub.
 5. `full` refuses while printing.
-6. Each service restarts once per batch of updates.
-7. No `klipper` or `moonraker` entry, and `moonraker` in `managed_services` restarts nothing.
-8. No `sudo apt-get` fallback.
-9. `web` and `zip` entries are in the backlog, and `python` entries come later.
-10. Periodic checks are on by default, weekly unless `refresh_interval` says otherwise, with no
+6. Each service restarts once per batch of updates, and not while a print runs.
+7. A rollback refuses a repo with changed files.
+8. A hard recover of a missing repo clones it from `origin`.
+9. No `klipper` or `moonraker` entry, and `moonraker` in `managed_services` restarts nothing.
+10. No `sudo apt-get` fallback.
+11. `web` and `zip` entries are in the backlog, and `python` entries come later.
+12. Periodic checks are on by default, weekly unless `refresh_interval` says otherwise, with no
     `refresh_window`.
 
 ## The order of work

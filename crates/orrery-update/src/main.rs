@@ -34,6 +34,29 @@ async fn main() {
         let m = m.clone();
         async move { m.refresh(&params).await }
     });
+    for name in ["upgrade", "client", "full"] {
+        let m = manager.clone();
+        builder = builder.method(name, move |params| {
+            let m = m.clone();
+            // `full` has no name: it updates everything.
+            let params = if name == "full" { serde_json::Value::Null } else { params };
+            async move { m.update(&params).await }
+        });
+    }
+    let m = manager.clone();
+    builder = builder.method("recover", move |params| {
+        let m = m.clone();
+        async move { m.recover(&params).await }
+    });
+    let m = manager.clone();
+    builder = builder.method("rollback", move |params| {
+        let m = m.clone();
+        async move { m.rollback(&params).await }
+    });
+    // Debian packages come later.
+    builder = builder.method("system", |_| async {
+        Err::<serde_json::Value, _>(MethodError::new(404, "Updater system not available"))
+    });
     // Moonraker's own entries, which orrery doesn't have (see the design note).
     builder = builder.method("klipper", |_| async {
         Err::<serde_json::Value, _>(MethodError::new(400, "Klipper updates aren't available in orrery yet."))

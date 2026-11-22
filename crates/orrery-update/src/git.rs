@@ -488,6 +488,137 @@ pub fn tracking_of(s: &RepoState) -> Tracking {
     Tracking { branch: known(&s.branch), remote: known(&s.remote) }
 }
 
+/// Where a rollback goes: the commit and branch before the last update, as Moonraker's
+/// `capture_state_for_rollback` keeps them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Rollback {
+    pub commit: String,
+    /// The branch, or `<remote>/<branch>` for a detached repo; `?` when unknown.
+    pub branch: String,
+    pub version: String,
+}
+
+impl Rollback {
+    pub fn of(s: &RepoState) -> Self {
+        let branch = if !s.detached {
+            s.branch.clone()
+        } else if s.branch != "?" && s.remote != "?" {
+            format!("{}/{}", s.remote, s.branch)
+        } else {
+            "?".into()
+        };
+        Self { commit: s.current_commit.clone(), branch, version: s.current.short() }
+    }
+}
+
+/// Runs one git command for an update, with its error as text.
+async fn step(path: &Path, args: &[&str]) -> Result<String, String> {
+    git(path, args, FETCH_TIMEOUT).await.map_err(|e| e.to_string())
+}
+
+/// Moves the repo forward to `s.upstream_commit`, which a refresh just found. The repo must be
+/// valid, so it's on a branch that hasn't diverged, and the move is a fast-forward.
+pub async fn fast_forward(opts: &GitOptions, s: &RepoState) -> Result<(), String> {
+    step(&opts.path, &["merge", "--ff-only", "-q", &s.upstream_commit]).await.map(drop)
+}
+
+/// The commit a soft recover resets to: the pinned commit or the current one, if the remote
+/// branch has it, and the remote branch otherwise (Moonraker's `get_recovery_ref`).
+async fn recovery_ref(path: &Path, upstream: &str, pinned: Option<&str>, current: &str) -> String {
+    for commit in pinned.into_iter().chain((current != "?").then_some(current)) {
+        if git(path, &["merge-base", "--is-ancestor", commit, upstream], COMMAND_TIMEOUT).await.is_ok() {
+            return commit.to_owned();
+        }
+    }
+    upstream.to_owned()
+}
+
+/// A soft recover: tracked files back as committed, on `primary_branch`, at the commit
+/// [`recovery_ref`] picks. Untracked files stay.
+pub async fn soft_recover(opts: &GitOptions, s: &RepoState) -> Result<(), String> {
+    let path = opts.path.as_path();
+    let key = format!("branch.{}.remote", opts.primary_branch);
+    let remote = git(path, &["config", "--get", &key], COMMAND_TIMEOUT)
+        .await
+        .map_err(|_| format!("Failed to find remote for primary branch '{}'", opts.primary_branch))?;
+    let upstream = format!("{}/{}", remote.trim(), opts.primary_branch);
+    let to = recovery_ref(path, &upstream, opts.pinned_commit.as_deref(), &s.current_commit).await;
+    if s.current.dirty {
+        // Puts back the changed files. The reset below still runs if this fails.
+        let _ = step(path, &["checkout", "--", "."]).await;
+    }
+    step(path, &["checkout", "-q", &opts.primary_branch]).await?;
+    step(path, &["reset", "--hard", "-q", &to]).await.map(drop)
+}
+
+/// A hard recover: a fresh clone of `primary_branch` beside the repo, which then takes the
+/// repo's place. The old repo is removed only once the new one is in place. HEAD goes back to
+/// the commit the repo was at, when the clone has it.
+pub async fn hard_recover(opts: &GitOptions, s: &RepoState) -> Result<(), String> {
+    let path = opts.path.as_path();
+    // A submodule or worktree has a `.git` file that points into another repo.
+    if path.join(".git").is_file() {
+        return Err(format!(
+            "{} is a submodule or worktree of another git repo, so it can't be cloned again",
+            path.display()
+        ));
+    }
+    // A missing repo has no remote to read, so the configured origin is the one to clone.
+    let url = if s.recovery_url == "?" { opts.origin.as_str() } else { s.recovery_url.as_str() };
+    let (parent, base) = match (path.parent(), path.file_name()) {
+        (Some(p), Some(b)) => (p, b.to_string_lossy()),
+        _ => return Err(format!("{} can't be cloned again: it has no parent folder", path.display())),
+    };
+    let fresh = parent.join(format!(".{base}_repo_backup"));
+    let old = parent.join(format!(".{base}_repo_old"));
+    for leftover in [&fresh, &old] {
+        if leftover.exists() {
+            tokio::fs::remove_dir_all(leftover)
+                .await
+                .map_err(|e| format!("Can't remove {}: {e}", leftover.display()))?;
+        }
+    }
+    let target = fresh.display().to_string();
+    let clone = ["clone", "--branch", &opts.primary_branch, "--filter=blob:none", url, &target];
+    if let Err(e) = git(parent, &clone, FETCH_TIMEOUT).await {
+        let _ = tokio::fs::remove_dir_all(&fresh).await;
+        return Err(format!("Git Clone Error: {}", e.message));
+    }
+    let had_repo = path.exists();
+    if had_repo {
+        tokio::fs::rename(path, &old).await.map_err(|e| format!("Can't move {} aside: {e}", path.display()))?;
+    }
+    if let Err(e) = tokio::fs::rename(&fresh, path).await {
+        if had_repo {
+            let _ = tokio::fs::rename(&old, path).await;
+        }
+        return Err(format!("Can't move the new clone into {}: {e}", path.display()));
+    }
+    if had_repo && let Err(e) = tokio::fs::remove_dir_all(&old).await {
+        tracing::warn!("Can't remove the old repo at {}: {e}", old.display());
+    }
+    let to = recovery_ref(path, "HEAD", opts.pinned_commit.as_deref(), &s.current_commit).await;
+    if to != "HEAD" {
+        step(path, &["reset", "--hard", "-q", &to]).await?;
+    }
+    Ok(())
+}
+
+/// Goes back to `rb`. Returns false when the repo is there already.
+pub async fn rollback(opts: &GitOptions, s: &RepoState, rb: &Rollback) -> Result<bool, String> {
+    if rb.commit == "?" || rb.branch == "?" {
+        return Err("Incomplete rollback data stored, cannot rollback".into());
+    }
+    let path = opts.path.as_path();
+    if rb.branch != s.branch {
+        step(path, &["checkout", "-q", &rb.branch]).await?;
+    } else if rb.commit == s.current_commit {
+        return Ok(false);
+    }
+    step(path, &["reset", "--hard", "-q", &rb.commit]).await?;
+    Ok(true)
+}
+
 /// For tests and logs: the state's main facts in one line.
 pub fn summary(s: &RepoState) -> String {
     if !s.repo_detected {
@@ -677,6 +808,90 @@ mod tests {
         let s = refresh(&e, &opts, &Tracking::default(), true).await;
         assert!(!s.repo_detected && !s.is_valid());
         assert_eq!(s.warnings, ["No git repo detected at configured path"]);
+    }
+
+    #[tokio::test]
+    async fn update_and_roll_back() {
+        let r = Repos::new();
+        let (e, opts) = r.entry("dev");
+        r.push("two");
+        let before = r.refresh("dev").await;
+        let rb = Rollback::of(&before);
+        assert_eq!((rb.branch.as_str(), rb.version.as_str()), ("main", "v1.0.0-0"));
+        fast_forward(&opts, &before).await.unwrap();
+        let after = refresh(&e, &opts, &Tracking::default(), false).await;
+        assert_eq!((after.current.short(), after.commits_behind_count), ("v1.0.0-1".into(), 0));
+        assert!(rollback(&opts, &after, &rb).await.unwrap());
+        let back = refresh(&e, &opts, &Tracking::default(), false).await;
+        assert_eq!(back.current_commit, before.current_commit);
+        // Already there.
+        assert!(!rollback(&opts, &back, &rb).await.unwrap());
+        let unknown = Rollback { commit: "?".into(), ..rb };
+        assert!(rollback(&opts, &back, &unknown).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn soft_recover_resets_changes() {
+        let r = Repos::new();
+        let (e, opts) = r.entry("dev");
+        r.sh("cd clone && echo change >> file.txt && touch extra.py && git checkout -q -b other");
+        let s = refresh(&e, &opts, &Tracking::default(), false).await;
+        assert!(s.current.dirty);
+        soft_recover(&opts, &s).await.unwrap();
+        let s = refresh(&e, &opts, &Tracking::default(), false).await;
+        assert!(s.is_valid(), "{s:#?}");
+        assert_eq!(s.branch, "main");
+        // Untracked files stay.
+        assert!(r.path("clone/extra.py").exists());
+
+        // A diverged repo goes back to the remote branch, and its local commit is gone.
+        r.push("upstream");
+        r.commit("clone", "local");
+        let s = refresh(&e, &opts, &Tracking::default(), true).await;
+        assert!(s.diverged);
+        soft_recover(&opts, &s).await.unwrap();
+        let s = refresh(&e, &opts, &Tracking::default(), false).await;
+        assert!(s.is_valid() && !s.diverged, "{s:#?}");
+        assert_eq!(s.current.short(), "v1.0.0-1");
+    }
+
+    #[tokio::test]
+    async fn hard_recover_clones_again() {
+        let r = Repos::new();
+        let (e, opts) = r.entry("dev");
+        r.push("two");
+        r.sh("cd clone && touch extra.py && echo change >> file.txt && git checkout -q --detach");
+        let s = refresh(&e, &opts, &Tracking::default(), false).await;
+        assert!(!s.is_valid());
+        hard_recover(&opts, &s).await.unwrap();
+        let s = refresh(&e, &opts, &Tracking::default(), false).await;
+        assert!(s.is_valid(), "{s:#?}");
+        assert!(!r.path("clone/extra.py").exists());
+        assert!(!r.path(".clone_repo_backup").exists() && !r.path(".clone_repo_old").exists());
+
+        // A missing repo is cloned from the configured origin, and a failed clone leaves the
+        // repo as it was.
+        r.sh("rm -rf clone");
+        let s = refresh(&e, &opts, &Tracking::default(), false).await;
+        hard_recover(&opts, &s).await.unwrap();
+        assert!(refresh(&e, &opts, &Tracking::default(), false).await.is_valid());
+        let s = refresh(&e, &opts, &Tracking::default(), false).await;
+        let broken = RepoState { recovery_url: r.path("nothing.git").display().to_string(), ..s };
+        assert!(hard_recover(&opts, &broken).await.unwrap_err().starts_with("Git Clone Error"));
+        assert!(refresh(&e, &opts, &Tracking::default(), false).await.is_valid());
+    }
+
+    #[tokio::test]
+    async fn hard_recover_keeps_the_version() {
+        let r = Repos::new();
+        let (e, opts) = r.entry("dev");
+        r.push("two");
+        // The clone is behind; a hard recover keeps it at its commit.
+        let s = refresh(&e, &opts, &Tracking::default(), true).await;
+        assert_eq!(s.commits_behind_count, 1);
+        hard_recover(&opts, &s).await.unwrap();
+        let after = refresh(&e, &opts, &Tracking::default(), false).await;
+        assert_eq!(after.current_commit, s.current_commit);
     }
 
     #[tokio::test]
