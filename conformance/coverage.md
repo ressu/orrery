@@ -174,7 +174,8 @@ unit tests against local git repos and a stand-in for GitHub.
 | `machine.update.status`, `.refresh` | Covered | `update/agent`, `agents/builtin_update_manager` |
 | `machine.update.client`, `.full`, `.system` | Covered: refusals and errors (`update/agent`); updates checked by hand |
 | `machine.update.recover`, `.rollback` | Covered: refusals and errors (`update/agent`); actions checked by hand |
-| `machine.update.klipper`, `.moonraker` | Covered | `update/agent`: both are refused |
+| `machine.update.klipper` | Covered | `update/agent`: Klipper's entry from fake Klippy's paths; updates checked by hand |
+| `machine.update.moonraker` | Covered | `update/agent`: refused |
 
 | Notification | Status | Cases |
 |---|---|---|

@@ -6,8 +6,8 @@ detects whether the printer runs Klipper or Kalico, names the entry after it, `k
 the user learns that their setup changed, and the update still runs. The entry also reports
 which plugins changed Klipper's own folder.
 
-**Status (2026-11-22):** this note is for review. Nothing is built. Until it is,
-`machine.update.klipper` is refused, as `update-agent` in `docs/regressions.md` says.
+**Status (2026-11-22):** approved. Step 2 is built: the entry, and Klipper or Kalico with its
+name. Steps 3 to 5 aren't.
 
 "Klipper" here means Klipper or Kalico, Klipper's fork. Both printers run Kalico, and both
 work the same way for updates.
@@ -94,9 +94,6 @@ right setups don't get one.
 - **orrery adds the entry by itself**, as Moonraker does, from `printer.info`'s `klipper_path`
   and `python_path`. Fluidd expects it. `enabled = false` in the entry's section of
   `orrery.toml` leaves it out.
-- **The path has to be what runs.** The agent checks that `klipper.service`, the unit it
-  restarts, runs the Python that `printer.info` reports. Otherwise the entry is invalid: an
-  update would change code that the restart doesn't load.
 - **Python packages and system packages** work as for any `git_repo` entry:
   `scripts/klippy-requirements.txt` into Klippy's virtualenv, and the package list in
   `scripts/install-octopi.sh`. Both Klipper and Kalico have these files.
@@ -127,7 +124,9 @@ right setups don't get one.
   Mobileraker aren't checked yet.
 - **Its options** come from `[update_manager.kalico]` or `[update_manager.klipper]` in
   `orrery.toml`, or `[update_manager klipper]` in `moonraker.conf`, which Kalico's own docs
-  tell users to write.
+  tell users to write. Either name works for either project. Both sections at once is an
+  error, since neither is clearly the one meant: orrery leaves the entry out, and the warning
+  says to keep only one (user, 2026-11-22).
 
 ### Remotes
 
@@ -194,13 +193,14 @@ the highest version tag. Klipper's tags are `v0.13.0`, and Kalico's are monthly,
    warnings, one by one.
 6. A plugin entry that links into Klipper's folder always restarts Klipper.
 7. An update that collides with a plugin link stops before git does, and says why.
-8. The entry is invalid when `klipper.service` doesn't run the Python that Klippy reports.
-9. `enabled = false` in the entry's section leaves the entry out.
+8. `enabled = false` in the entry's section leaves the entry out.
 
 ## The order of work
 
 1. This note, reviewed.
-2. The entry: paths from `printer.info`, the unit check, Klipper or Kalico, and its name.
+2. The entry: paths from `printer.info`, Klipper or Kalico, and its name. A check that the
+   unit orrery restarts runs that Klippy was built and dropped as more than the entry needs
+   (user, 2026-11-22).
 3. Remotes: the detected project as the entry's `origin`, the anomaly for a remote
    without HTTPS, and `origin`, `primary_branch`, and `moved_origin` in `orrery.toml`.
 4. Plugin links: finding them, the warnings, the restarts, and the collision check.

@@ -15,9 +15,12 @@ use crate::deps::DepFiles;
 
 /// The section, and the agent's name.
 pub const SECTION: &str = "update_manager";
-/// Names Moonraker gives its own entries. orrery has none of them yet, and refuses them as
-/// entry names so a later built-in entry can't clash.
-const RESERVED: &[&str] = &["klipper", "moonraker", "system"];
+/// Names Moonraker gives its own entries, which a configured entry can't take. `klipper` and
+/// `kalico` sections hold options for Klipper's entry instead ([`is_klipper_section`]).
+const RESERVED: &[&str] = &["moonraker", "system"];
+/// The options Klipper's entry takes from its section: Moonraker's `OPTION_OVERRIDES`, and
+/// `enabled`.
+const KLIPPER_OPTIONS: &[&str] = &["channel", "pinned_commit", "refresh_interval", "report_anomalies", "enabled"];
 /// Moonraker's default `refresh_interval`, in hours: a weekly check.
 const DEFAULT_INTERVAL_HOURS: u64 = 168;
 
@@ -78,6 +81,138 @@ pub struct Entry {
     /// A hash of the entry's options: a changed entry is checked again at once.
     pub hash: String,
     pub kind: Kind,
+    /// For Klipper's own entry: the project it runs.
+    pub klippy: Option<Project>,
+}
+
+/// The projects Klipper's entry knows (docs/design/2026-11-22-klipper-updates.md).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Project {
+    Klipper,
+    Kalico,
+}
+
+impl Project {
+    /// The entry's name.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Klipper => "klipper",
+            Self::Kalico => "kalico",
+        }
+    }
+
+    pub fn origin(self) -> &'static str {
+        match self {
+            Self::Klipper => "https://github.com/Klipper3d/klipper.git",
+            Self::Kalico => "https://github.com/KalicoCrew/kalico.git",
+        }
+    }
+
+    pub fn primary_branch(self) -> &'static str {
+        match self {
+            Self::Klipper => "master",
+            Self::Kalico => "main",
+        }
+    }
+
+    pub fn moved_origin(self) -> &'static str {
+        match self {
+            Self::Klipper => "https://github.com/kevinoconnor/klipper.git",
+            Self::Kalico => "https://github.com/DangerKlippers/danger-klipper.git",
+        }
+    }
+
+    /// From `printer.info`'s `app`, which only Kalico sends, then from the repo's remote.
+    /// Anything else is Klipper, as Moonraker assumes.
+    pub fn detect(app: Option<&str>, remote: Option<&str>) -> Self {
+        let kalico = Self::Kalico;
+        let app_says = app.is_some_and(|a| matches!(a.to_ascii_lowercase().as_str(), "kalico" | "danger-klipper"));
+        let remote_says = remote.is_some_and(|r| {
+            crate::git::same_url(r, kalico.origin()) || crate::git::same_url(r, kalico.moved_origin())
+        });
+        if app_says || remote_says { kalico } else { Self::Klipper }
+    }
+}
+
+/// What Klippy reports about itself in `printer.info`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Klippy {
+    pub project: Project,
+    /// `klipper_path`: the repo.
+    pub path: PathBuf,
+    /// `python_path`: the Python that runs Klippy.
+    pub python: PathBuf,
+}
+
+/// Whether a section holds options for Klipper's entry.
+pub fn is_klipper_section(name: &str) -> bool {
+    matches!(name.to_ascii_lowercase().as_str(), "klipper" | "kalico")
+}
+
+/// Klipper's entry, from Klippy's paths and Moonraker's defaults, with the options of its
+/// section: `klipper` or `kalico`, whichever is there. Kalico's docs tell users to write
+/// `klipper`. Both at once is an error, since neither one is clearly meant. `None` when the
+/// section sets `enabled = false`. Options Moonraker doesn't allow for this entry are ignored,
+/// with a warning.
+pub fn klipper_entry(
+    k: &Klippy,
+    sections: &[(String, Map<String, Value>)],
+    global: &Global,
+    warnings: &mut Vec<String>,
+) -> Result<Option<Entry>, String> {
+    let name = k.project.name();
+    if sections.len() > 1 {
+        let names: Vec<String> = sections.iter().map(|(s, _)| format!("[{SECTION} {s}]")).collect();
+        return Err(format!(
+            "{} are both there, so orrery leaves out the entry for {name}. Keep only one of them.",
+            names.join(" and ")
+        ));
+    }
+    let chosen = sections.first();
+    let empty = Map::new();
+    let (section, map) = chosen.map_or((name, &empty), |(s, m)| (s.as_str(), m));
+    let o = Options { section: format!("{SECTION} {section}"), map };
+    if !o.bool("enabled", true)? {
+        return Ok(None);
+    }
+    let ignored: Vec<&str> = map.keys().map(String::as_str).filter(|k| !KLIPPER_OPTIONS.contains(k)).collect();
+    if !ignored.is_empty() {
+        let (what, these) = if ignored.len() == 1 { ("option", "it") } else { ("options", "them") };
+        warnings.push(format!(
+            "[{}]: orrery ignores the {what} {}, since it sets {these} for {name} itself",
+            o.section,
+            ignored.join(", ")
+        ));
+    }
+    // Two folders above Klippy's Python is its virtualenv, as for Moonraker's `env` option.
+    let virtualenv =
+        k.python.parent().and_then(Path::parent).filter(|v| v.join("bin/activate").is_file()).map(Path::to_path_buf);
+    let mut hashed = map.clone();
+    hashed.insert("klippy".into(), serde_json::json!([name, k.path, k.python]));
+    Ok(Some(Entry {
+        name: name.to_owned(),
+        channel: o.channel()?.or(global.channel).unwrap_or(Channel::Dev),
+        channel_warning: None,
+        refresh_interval: o.hours("refresh_interval")?.unwrap_or(global.refresh_interval),
+        managed_services: Some(vec!["klipper".into()]),
+        is_system_service: false,
+        info_tags: Vec::new(),
+        report_anomalies: o.bool("report_anomalies", true)?,
+        hash: hash(&hashed),
+        kind: Kind::Git(GitOptions {
+            path: k.path.clone(),
+            origin: k.project.origin().into(),
+            moved_origin: Some(k.project.moved_origin().into()),
+            primary_branch: k.project.primary_branch().into(),
+            pinned_commit: o.text("pinned_commit")?.map(|c| c.to_ascii_lowercase()),
+            virtualenv,
+            pip_env: Vec::new(),
+            requirements: Some("scripts/klippy-requirements.txt".into()),
+            system_dependencies: None,
+            install_script: Some("scripts/install-octopi.sh".into()),
+        }),
+        klippy: Some(k.project),
+    }))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -318,6 +453,7 @@ pub fn system_entry(global: &Global) -> Entry {
         report_anomalies: true,
         hash: "system".into(),
         kind: Kind::System,
+        klippy: None,
     }
 }
 
@@ -384,6 +520,7 @@ pub fn entry(name: &str, map: &Map<String, Value>, global: &Global) -> Result<En
         report_anomalies: o.bool("report_anomalies", true)?,
         hash: hash(map),
         kind,
+        klippy: None,
     })
 }
 
@@ -555,10 +692,81 @@ mod tests {
         assert!(err("x", json!({"type": "svn"})).contains("doesn't know the type"));
         assert!(err("x", json!({})).contains("needs a type"));
         assert!(err("x", json!({"type": "git_repo", "path": "/x"})).contains("needs the origin option"));
-        assert!(err("Klipper", json!({"type": "git_repo"})).contains("Moonraker uses"));
+        assert!(err("Moonraker", json!({"type": "git_repo"})).contains("Moonraker uses"));
         assert!(
             err("x", json!({"type": "git_repo", "path": "/x", "origin": "o", "is_system_service": "maybe"}))
                 .contains("expected true or false")
         );
+    }
+
+    fn klippy(project: Project, dir: &Path) -> Klippy {
+        Klippy { project, path: dir.join("klipper"), python: dir.join("klippy-env/bin/python") }
+    }
+
+    #[test]
+    fn detects_kalico_or_klipper() {
+        assert_eq!(Project::detect(Some("Kalico"), None), Project::Kalico);
+        // Klipper sends no app name: the remote decides.
+        assert_eq!(Project::detect(None, Some("https://github.com/KalicoCrew/kalico")), Project::Kalico);
+        assert_eq!(
+            Project::detect(None, Some("https://github.com/DangerKlippers/danger-klipper.git")),
+            Project::Kalico
+        );
+        assert_eq!(Project::detect(None, Some("https://github.com/Klipper3d/klipper.git")), Project::Klipper);
+        assert_eq!(Project::detect(None, None), Project::Klipper);
+    }
+
+    #[test]
+    fn klipper_entry_from_klippy() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("klippy-env/bin")).unwrap();
+        std::fs::write(dir.path().join("klippy-env/bin/activate"), "").unwrap();
+        let g = global(&Map::new(), &mut Vec::new());
+        let mut w = Vec::new();
+        let e = klipper_entry(&klippy(Project::Kalico, dir.path()), &[], &g, &mut w).unwrap().unwrap();
+        assert_eq!((e.name.as_str(), e.channel, e.services()), ("kalico", Channel::Dev, vec!["klipper".to_owned()]));
+        assert_eq!(e.klippy, Some(Project::Kalico));
+        let Kind::Git(o) = &e.kind else { panic!("a git entry") };
+        assert_eq!(
+            (o.origin.as_str(), o.primary_branch.as_str()),
+            ("https://github.com/KalicoCrew/kalico.git", "main")
+        );
+        assert_eq!(o.virtualenv.as_deref(), Some(dir.path().join("klippy-env").as_path()));
+        assert_eq!(o.requirements.as_deref(), Some("scripts/klippy-requirements.txt"));
+        assert!(w.is_empty(), "{w:?}");
+
+        // Kalico's docs say [update_manager klipper]; Moonraker's fixed options are ignored there.
+        let sections =
+            vec![("klipper".to_owned(), map(json!({"channel": "stable", "origin": "https://example.com/k"})))];
+        let e = klipper_entry(&klippy(Project::Kalico, dir.path()), &sections, &g, &mut w).unwrap().unwrap();
+        assert_eq!(e.channel, Channel::Stable);
+        let Kind::Git(o) = &e.kind else { panic!("a git entry") };
+        assert_eq!(o.origin, "https://github.com/KalicoCrew/kalico.git");
+        assert_eq!(
+            w,
+            ["[update_manager klipper]: orrery ignores the option origin, since it sets it for kalico itself"]
+        );
+
+        // Either name works, for either project; both at once is an error.
+        let sections = vec![("kalico".to_owned(), map(json!({"channel": "beta"})))];
+        let e = klipper_entry(&klippy(Project::Kalico, dir.path()), &sections, &g, &mut Vec::new()).unwrap().unwrap();
+        assert_eq!(e.channel, Channel::Beta);
+        let sections = vec![
+            ("klipper".to_owned(), map(json!({"channel": "stable"}))),
+            ("kalico".to_owned(), map(json!({"channel": "beta"}))),
+        ];
+        let err = klipper_entry(&klippy(Project::Kalico, dir.path()), &sections, &g, &mut Vec::new()).unwrap_err();
+        assert_eq!(
+            err,
+            "[update_manager klipper] and [update_manager kalico] are both there, so orrery leaves out the entry for kalico. Keep only one of them."
+        );
+
+        // Turned off, and a Klipper without a virtualenv.
+        let off = vec![("klipper".to_owned(), map(json!({"enabled": false})))];
+        assert!(klipper_entry(&klippy(Project::Klipper, dir.path()), &off, &g, &mut Vec::new()).unwrap().is_none());
+        let other = tempfile::tempdir().unwrap();
+        let e = klipper_entry(&klippy(Project::Klipper, other.path()), &[], &g, &mut Vec::new()).unwrap().unwrap();
+        let Kind::Git(o) = &e.kind else { panic!("a git entry") };
+        assert_eq!((e.name.as_str(), o.primary_branch.as_str(), o.virtualenv.as_ref()), ("klipper", "master", None));
     }
 }

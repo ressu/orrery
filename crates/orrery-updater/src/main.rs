@@ -71,10 +71,18 @@ async fn main() {
         let m = m.clone();
         async move { m.update(&serde_json::json!({"name": "system"})).await }
     });
-    // Moonraker's own entries, which orrery doesn't have (see the design note).
-    builder = builder.method("klipper", |_| async {
-        Err::<serde_json::Value, _>(MethodError::new(400, "Klipper updates aren't available in orrery yet."))
+    // Klipper's entry, named after the project Klippy runs (docs/design/2026-11-22-klipper-updates.md).
+    let m = manager.clone();
+    builder = builder.method("klipper", move |_| {
+        let m = m.clone();
+        async move {
+            match m.klipper_entry_name() {
+                Some(name) => m.update(&serde_json::json!({"name": name})).await,
+                None => Err(MethodError::new(404, "Updater klipper not available")),
+            }
+        }
     });
+    // Moonraker's own entry, which orrery doesn't have (see the update manager's design note).
     builder = builder.method("moonraker", |_| async {
         Err::<serde_json::Value, _>(MethodError::new(400, "orrery doesn't update Moonraker."))
     });

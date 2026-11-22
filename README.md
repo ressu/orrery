@@ -120,7 +120,8 @@ Mainsail reach it under Moonraker's names, so their update pages work as before.
   `[update_manager]` sections in `moonraker.conf` until you move them over.
 - It updates `git_repo` and `executable` entries, with their Python packages and
   `system_dependencies`, and the system's Debian packages.
-- It has no `klipper` or `moonraker` entry, and doesn't update `web` or `zip` entries yet.
+- It adds an entry for Klipper or Kalico, named after the one Klippy runs. It has no
+  `moonraker` entry, and doesn't update `web` or `zip` entries yet.
 - It checks for updates once a week by default, and never installs one by itself. Set
   `refresh_interval`, in hours, for another interval.
 - It refuses an update while a print runs, and restarts each service once, after the print.

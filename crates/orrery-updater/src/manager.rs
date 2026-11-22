@@ -10,7 +10,7 @@ use orrery_agent::{Agent, MethodError};
 use serde_json::{Map, Value, json};
 use tokio::sync::{Notify, watch};
 
-use crate::config::{self, Entry, Global, Kind, SECTION};
+use crate::config::{self, Entry, Global, Kind, Klippy, Project, SECTION};
 use crate::deps::{self, Deps};
 use crate::executable::{self, Github, Installed, Saved};
 use crate::git::{self, RepoState, Rollback, Tracking};
@@ -123,8 +123,11 @@ pub struct Manager {
     /// Wakes the schedule, when the config or the print state changes.
     wake: Notify,
     last_refresh_all: Mutex<Option<Instant>>,
-    /// Config problems, for `server.info`.
+    /// Config problems, for `server.info`: the config's, then the Klipper entry's.
     warnings: Mutex<Vec<String>>,
+    config_warnings: Mutex<Vec<String>>,
+    /// The `klipper` and `kalico` sections, for Klipper's entry once Klippy says where it runs.
+    klipper_sections: Mutex<Vec<(String, Map<String, Value>)>>,
     /// Commands waiting for the one that runs. While one waits, restarts wait for it too.
     waiting: AtomicUsize,
     /// Services to restart once the updates are done, in the order they were added.
@@ -217,6 +220,8 @@ impl Manager {
             wake: Notify::new(),
             last_refresh_all: Mutex::new(None),
             warnings: Mutex::new(Vec::new()),
+            config_warnings: Mutex::new(Vec::new()),
+            klipper_sections: Mutex::new(Vec::new()),
             waiting: AtomicUsize::new(0),
             pending: Mutex::new(Vec::new()),
             restart_after_print: AtomicBool::new(false),
@@ -280,7 +285,10 @@ impl Manager {
                     }
                     "notify_klippy_ready" => {
                         let m = m.clone();
-                        tokio::spawn(async move { m.subscribe().await });
+                        tokio::spawn(async move {
+                            m.subscribe().await;
+                            m.set_klipper_entry().await;
+                        });
                     }
                     "notify_klippy_disconnected" | "notify_klippy_shutdown" => m.set_print_state(""),
                     _ => {}
@@ -292,6 +300,8 @@ impl Manager {
         let info = agent.call("server.info", Value::Null).await?;
         if info["klippy_state"] == "ready" {
             self.subscribe().await;
+            let m = self.clone();
+            tokio::spawn(async move { m.set_klipper_entry().await });
         }
         Ok(())
     }
@@ -330,8 +340,13 @@ impl Manager {
         if global.enable_system_updates {
             entries.push(config::system_entry(&global));
         }
+        let mut klipper_sections = Vec::new();
         for name in agent.config_names(None).await? {
             let map = agent.config(Some(&format!("{SECTION} {name}"))).await?.unwrap_or_default();
+            if config::is_klipper_section(&name) {
+                klipper_sections.push((name, map));
+                continue;
+            }
             match config::entry(&name, &map, &global) {
                 Ok(e) => {
                     warnings.extend(e.services_warning());
@@ -347,8 +362,9 @@ impl Manager {
             Ok(reply) => reply["value"].as_object().cloned().unwrap_or_default(),
             Err(_) => Map::new(),
         };
-        // Entries that are gone from the config leave no state behind.
-        for key in stale_keys(&stored, &entries) {
+        // Entries that are gone from the config leave no state behind. Klipper's entry comes
+        // once Klippy connects, and cleans up after itself.
+        for key in stale_keys(&stored, &entries).into_iter().filter(|k| !config::is_klipper_section(k)) {
             let _ = agent.call("server.database.delete_item", json!({"namespace": SECTION, "key": key})).await;
         }
         let states: Vec<EntryState> = entries
@@ -367,9 +383,95 @@ impl Manager {
         *self.view.lock().expect("view lock") = states.iter().map(|s| (s.entry.name.clone(), view_of(s))).collect();
         *self.entries.lock().await = states;
         *self.global.lock().expect("global lock") = Some(global);
+        *self.klipper_sections.lock().expect("sections lock") = klipper_sections;
         agent.set_warnings(&warnings).await?;
+        *self.config_warnings.lock().expect("warnings lock") = warnings.clone();
         *self.warnings.lock().expect("warnings lock") = warnings;
         Ok(())
+    }
+
+    /// Adds, changes, or removes Klipper's entry from what Klippy reports, as Moonraker's
+    /// `_set_klipper_repo` does each time Klippy connects. A new entry is checked at once.
+    async fn set_klipper_entry(self: &Arc<Self>) {
+        let Some(agent) = self.agent() else { return };
+        let Some(global) = self.global.lock().expect("global lock").clone() else { return };
+        let info = match agent.call("printer.info", Value::Null).await {
+            Ok(info) => info,
+            Err(e) => {
+                tracing::warn!("Can't ask Klippy where it runs, so there's no entry for it: {e}");
+                return;
+            }
+        };
+        let (Some(path), Some(python)) = (info["klipper_path"].as_str(), info["python_path"].as_str()) else {
+            tracing::warn!("Klippy doesn't say where it runs, so there's no entry for it");
+            return;
+        };
+        let path = std::path::PathBuf::from(path);
+        let remote = git::remote_url(&path).await;
+        let k =
+            Klippy { project: Project::detect(info["app"].as_str(), remote.as_deref()), path, python: python.into() };
+        let sections = self.klipper_sections.lock().expect("sections lock").clone();
+        let mut warnings = Vec::new();
+        let entry = match config::klipper_entry(&k, &sections, &global, &mut warnings) {
+            Ok(e) => e,
+            Err(w) => {
+                warnings.push(w);
+                None
+            }
+        };
+        let mut all = self.config_warnings.lock().expect("warnings lock").clone();
+        all.extend(warnings);
+        if *self.warnings.lock().expect("warnings lock") != all {
+            let _ = agent.set_warnings(&all).await;
+            *self.warnings.lock().expect("warnings lock") = all;
+        }
+
+        let mut entries = self.entries.lock().await;
+        let old = entries.iter().position(|s| s.entry.klippy.is_some());
+        if let (Some(i), Some(e)) = (old, &entry)
+            && entries[i].entry == *e
+        {
+            return;
+        }
+        if let Some(i) = old {
+            let gone = entries.remove(i);
+            self.view.lock().expect("view lock").retain(|(n, _)| *n != gone.entry.name);
+            if entry.as_ref().is_none_or(|e| e.name != gone.entry.name) {
+                let _ = agent
+                    .call("server.database.delete_item", json!({"namespace": SECTION, "key": gone.entry.name}))
+                    .await;
+            }
+        }
+        let Some(entry) = entry else { return };
+        tracing::info!("Klippy runs {} from {}", entry.name, k.path.display());
+        let stored =
+            match agent.call("server.database.get_item", json!({"namespace": SECTION, "key": entry.name})).await {
+                Ok(reply) => Stored::from_json(&reply["value"]),
+                Err(_) => Stored::default(),
+            };
+        // After `system`, where Moonraker lists it.
+        let at = entries.iter().position(|s| matches!(s.entry.kind, Kind::System)).map_or(0, |i| i + 1);
+        let mut s = EntryState { entry, stored, repo: None, installed: None };
+        {
+            let mut view = self.view.lock().expect("view lock");
+            let at_view = at.min(view.len());
+            view.insert(at_view, (s.entry.name.clone(), view_of(&s)));
+        }
+        let due = is_due(&s.entry, &s.stored, now()) || s.stored.config_hash != s.entry.hash;
+        if due && !self.is_printing() {
+            self.refresh_one(&mut s).await;
+        }
+        entries.insert(at, s);
+        drop(entries);
+        if due {
+            self.notify_refreshed().await;
+        }
+        self.wake.notify_one();
+    }
+
+    /// The name of Klipper's entry, `klipper` or `kalico`, once Klippy has said where it runs.
+    pub fn klipper_entry_name(&self) -> Option<String> {
+        self.view.lock().expect("view lock").iter().map(|(n, _)| n).find(|n| config::is_klipper_section(n)).cloned()
     }
 
     /// `machine.update.status`: every entry's state. With `refresh`, everything is checked
@@ -963,13 +1065,21 @@ impl Manager {
                 let changed = entries.iter().any(|s| s.stored.config_hash != s.entry.hash);
                 if changed { Some(0.0) } else { next_due(&pairs) }
             };
-            let Some(due_at) = due_at else { return };
+            // Nothing to check yet, such as before Klipper's entry comes: wait for a change.
+            let Some(due_at) = due_at else {
+                self.wake.notified().await;
+                continue;
+            };
             let wait = (due_at - now()).max(0.0);
             if wait > 0.0 {
                 if first && !global.enable_auto_refresh {
                     return;
                 }
-                tokio::time::sleep(Duration::from_secs_f64(wait)).await;
+                // A new entry, or a print that ends, wakes this early, and the loop looks again.
+                tokio::select! {
+                    () = tokio::time::sleep(Duration::from_secs_f64(wait)) => {}
+                    () = self.wake.notified() => continue,
+                }
             }
             first = false;
             // Wait for the print to end, and for the window to open.

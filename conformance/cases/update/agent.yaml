@@ -2,7 +2,8 @@ name: orrery starts the update manager agent, which answers Moonraker's update m
 description: >
   orrery only. orrery starts orrery-updater from its own folder, so `cargo build -p
   orrery-updater` must come first. The git entry points at a folder that isn't a repo, so no
-  network is needed; the git refresh itself is in orrery-updater's unit tests.
+  network is needed; the git refresh itself is in orrery-updater's unit tests. Fake Klippy
+  reports /opt/klipper, which isn't a repo either, for Klipper's entry.
 targets: [orrery]
 transports: [ws]
 klippy: ready
@@ -36,6 +37,13 @@ steps:
       github_rate_limit: null
       version_info:
         $exact: true
+        # From printer.info, once Klippy is ready. Fake Klippy sends no app name, so it's Klipper.
+        klipper:
+          name: klipper
+          configured_type: git_repo
+          is_valid: false
+          repo_detected: false
+          warnings: [No git repo detected at configured path]
         missing:
           name: missing
           configured_type: git_repo
@@ -64,7 +72,9 @@ steps:
     params: {name: site}
     expect_error: {code: 400, message: "No updater registered for 'site'"}
   - call: machine.update.klipper
-    expect_error: {code: 400, message: "Klipper updates aren't available in orrery yet."}
+    expect_error: {code: 400, message: "Update aborted, repo not valid: No git repo detected at configured path"}
+  - expect_notification: notify_update_response
+    match: [{application: klipper, complete: true, message: "Error updating klipper: Update aborted, repo not valid: No git repo detected at configured path"}]
   - call: machine.update.moonraker
     expect_error: {code: 400, message: "orrery doesn't update Moonraker."}
   # Updates, recovers, and rollbacks, with Moonraker's messages.
@@ -78,12 +88,13 @@ steps:
     expect_error: {code: 400, message: "Update aborted, repo not valid: No git repo detected at configured path"}
   - expect_notification: notify_update_response
     match: [{application: missing, complete: true, message: "Error updating missing: Update aborted, repo not valid: No git repo detected at configured path"}]
+  # Klipper's entry comes first, and stops the update.
   - call: machine.update.full
     expect_error: {code: 400, message: "Update aborted, repo not valid: No git repo detected at configured path"}
   - expect_notification: notify_update_response
     match: [{application: full, complete: false, message: "Preparing full software update..."}]
   - expect_notification: notify_update_response
-    match: [{application: full, complete: true, message: "Error updating missing: Update aborted, repo not valid: No git repo detected at configured path"}]
+    match: [{application: full, complete: true, message: "Error updating klipper: Update aborted, repo not valid: No git repo detected at configured path"}]
   # The folder above the repo isn't there either, so the clone fails.
   - call: machine.update.recover
     params: {name: missing, hard: true}

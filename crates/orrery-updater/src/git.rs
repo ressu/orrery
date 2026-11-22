@@ -474,7 +474,16 @@ fn owner_and_name(url: &str) -> (String, String) {
 }
 
 /// URLs compared as Moonraker compares them: without case, and with `.git` at the end.
-fn same_url(a: &str, b: &str) -> bool {
+/// The URL of the repo's default remote, read from its config, without the network.
+pub async fn remote_url(path: &Path) -> Option<String> {
+    git(path, &["ls-remote", "--get-url"], COMMAND_TIMEOUT)
+        .await
+        .ok()
+        .map(|u| u.trim().to_owned())
+        .filter(|u| !u.is_empty())
+}
+
+pub fn same_url(a: &str, b: &str) -> bool {
     let norm = |u: &str| {
         let u = u.trim().to_ascii_lowercase();
         if u.ends_with(".git") { u } else { format!("{u}.git") }
