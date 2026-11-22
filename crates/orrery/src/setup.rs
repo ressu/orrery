@@ -5,7 +5,8 @@
 //!   `SupplementaryGroups`, so the printer's user's own shells aren't trusted.
 //! - `/etc/systemd/system/orrery.service`, which runs orrery as the user who ran sudo.
 //! - `/etc/polkit-1/rules.d/orrery.rules`, which lets processes of that user with the group
-//!   manage units, reboot, and shut down. The strict rule allows only orrery's allowed units.
+//!   manage units, reboot, shut down, and update packages. The strict rule allows only orrery's
+//!   allowed units.
 //!
 //! By default setup only writes the files, so it's also how orrery's setup is upgraded.
 //! `--disable-moonraker` and `--start` switch over from Moonraker, and `--migrate` does both.
@@ -35,6 +36,14 @@ const POWER_ACTIONS: &[&str] = &[
     "org.freedesktop.login1.halt-multiple-sessions",
 ];
 const MANAGE_UNITS: &str = "org.freedesktop.systemd1.manage-units";
+/// The actions the update manager needs from PackageKit: refresh the package lists, install
+/// packages that plugins depend on, and update the system. Moonraker's rule allows every
+/// PackageKit action; these three are all that `system_deploy.py:239-245` checks for.
+const PACKAGE_ACTIONS: &[&str] = &[
+    "org.freedesktop.packagekit.system-sources-refresh",
+    "org.freedesktop.packagekit.package-install",
+    "org.freedesktop.packagekit.system-update",
+];
 
 /// Runs the programs setup needs: `getent`, `groupadd`, `systemctl`, and so on.
 pub trait Host {
@@ -402,14 +411,15 @@ pub fn unit_file(user: &str, exe: &Path, args: &[String]) -> String {
 /// The part both rules share: the user, and the group check on the process.
 fn rule_body(user: &str, gid: u32, condition: &str) -> String {
     let user = serde_json::to_string(user).expect("a string serializes");
-    let power = serde_json::to_string(POWER_ACTIONS).expect("strings serialize");
+    let actions: Vec<&str> = POWER_ACTIONS.iter().chain(PACKAGE_ACTIONS).copied().collect();
+    let actions = serde_json::to_string(&actions).expect("strings serialize");
     // /proc/<pid>/status has "Groups:" then the process's group ids, separated by whitespace.
     let regex = serde_json::to_string(&format!(r"^Groups:.*\s{gid}(\s|$)")).expect("a string serializes");
     let mut out = String::new();
     let _ = write!(
         out,
         "polkit.addRule(function(action, subject) {{\n\
-         \x20   var power = {power};\n\
+         \x20   var actions = {actions};\n\
          {condition}\
          \x20   if (!allowed || subject.user != {user}) {{\n\
          \x20       return polkit.Result.NOT_HANDLED;\n\
@@ -426,13 +436,13 @@ fn rule_body(user: &str, gid: u32, condition: &str) -> String {
     out
 }
 
-/// Moonraker's rule for orrery's group: every unit, reboot, and shutdown. Moonraker's
-/// PackageKit actions are left out, since orrery doesn't update packages.
+/// Moonraker's rule for orrery's group: every unit, reboot, shutdown, and the PackageKit actions
+/// the update manager needs.
 pub fn normal_rule(user: &str, gid: u32) -> String {
-    let condition = format!("    var allowed = power.indexOf(action.id) >= 0 || action.id == \"{MANAGE_UNITS}\";\n");
+    let condition = format!("    var allowed = actions.indexOf(action.id) >= 0 || action.id == \"{MANAGE_UNITS}\";\n");
     format!(
         "// orrery setup: normal rule. Written by sudo orrery setup; run it again instead of editing this file.\n\
-         // orrery.service may manage every unit, reboot, and shut down.\n{}",
+         // orrery.service may manage every unit, reboot, shut down, and update packages.\n{}",
         rule_body(user, gid, &condition)
     )
 }
@@ -466,12 +476,12 @@ pub fn strict_rule(user: &str, gid: u32, units: &AllowedUnits) -> String {
          \x20       }}\n\
          \x20       return false;\n\
          \x20   }}\n\
-         \x20   var allowed = power.indexOf(action.id) >= 0 ||\n\
+         \x20   var allowed = actions.indexOf(action.id) >= 0 ||\n\
          \x20       (action.id == \"{MANAGE_UNITS}\" && allowedUnit(action.lookup(\"unit\")));\n"
     );
     format!(
         "{STRICT_MARK}. Written by sudo orrery setup; run it again instead of editing this file.\n\
-         // orrery.service may reboot, shut down, and manage only the units orrery allows:\n\
+         // orrery.service may reboot, shut down, update packages, and manage only the units orrery allows:\n\
          // moonraker.asvc, units whose names start with {}, and agents' units.\n{}",
         units.prefixes.join(", "),
         rule_body(user, gid, &condition)
@@ -710,12 +720,14 @@ mod tests {
         assert!(rule.contains(r#"subject.user != "printer""#));
         assert!(rule.contains(r#""^Groups:.*\\s994(\\s|$)""#));
         assert!(rule.contains("org.freedesktop.login1.reboot-multiple-sessions"));
-        assert!(!rule.contains("packagekit"));
+        assert!(rule.contains("org.freedesktop.packagekit.system-update"));
+        assert!(!rule.contains("packagekit.package-remove"));
         let units = AllowedUnits { names: vec!["crowsnest".into(), "it\"s".into()], prefixes: vec!["klipper".into()] };
         let rule = strict_rule("printer", 994, &units);
         assert!(rule.starts_with(STRICT_MARK));
         assert!(rule.contains(r#"var names = ["crowsnest","it\"s"];"#));
         assert!(rule.contains(r#"allowedUnit(action.lookup("unit"))"#));
+        assert!(rule.contains("org.freedesktop.packagekit.package-install"));
     }
 
     #[test]
