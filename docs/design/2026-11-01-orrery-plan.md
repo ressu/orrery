@@ -364,13 +364,11 @@ In order, as of 2026-11-22:
    allocator, and a check of Mainsail.
 5. **orrery edits `orrery.toml`** to give users roles, from Fluidd's add-user button or the CLI.
    See "Editing orrery.toml (later)" in [2026-11-21-logins.md](2026-11-21-logins.md).
-6. **How Fluidd's login flows are triggered,** to learn which kinds of login orrery can offer
-   without changing Fluidd, OIDC above all. See "OIDC (later)" in
-   [2026-11-21-logins.md](2026-11-21-logins.md).
-7. **Patches for the frontends,** from the entries in
+6. **Patches for the frontends,** from the entries in
    [frontend-issues.md](../frontend-issues.md), to send upstream. The first is
    `fluidd-login-error`: Fluidd's login form hides the server's reason, so a locked-out user
-   isn't told to wait.
-8. **orrery's own allowed-services list,** in `orrery.toml`, with `moonraker.asvc` read only for
+   isn't told to wait. How Fluidd's login flows work, and what that means for OIDC, is in the
+   logins note's "OIDC (later)".
+7. **orrery's own allowed-services list,** in `orrery.toml`, with `moonraker.asvc` read only for
    Moonraker compatibility. See "The allowed-services list" in
    [2026-11-19-service-control.md](2026-11-19-service-control.md).

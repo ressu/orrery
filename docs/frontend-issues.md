@@ -46,6 +46,36 @@ filed, add its link; when it's fixed upstream, remove the entry.
 - **Fix:** load the list and the key only when the section is opened, and hide the parts the
   server refuses.
 
+### fluidd-proxy-source: a proxy user's menu shows a raw label key
+
+- **Frontend:** Fluidd's source at commit `13d1816c` (2026-09-18, package version 1.37.5),
+  2026-11-22. Not yet seen in a browser.
+- **What happens (expected):** for a user logged in through a trusted proxy, the user menu
+  says "User managed by app.general.label.proxy authentication", or something like it.
+- **Cause:** the menu labels the user's source with `app.general.label.<source>`
+  (`src/components/layout/AppUserMenu.vue:44-50`), and only `moonraker` and `ldap` have
+  labels (`src/locales/en.yaml:430,440`). orrery reports a proxy user's source as `proxy`.
+- **Fix:** fall back to the source's own name when there's no label, or add a label for
+  `proxy`. orrery could also report a source Fluidd knows, but `proxy` is the true answer.
+- **Upstream:** not filed yet.
+
+### fluidd-proxy-logout: logging out can't log a proxy user out
+
+- **Frontend:** Fluidd's source at commit `13d1816c` (2026-09-18, package version 1.37.5),
+  2026-11-22. Not yet seen in a browser.
+- **What happens (expected):** a user logged in through a trusted proxy presses "Log out".
+  Without `force_logins`, nothing changes. With it, Fluidd shows its login form, and the next
+  reload logs the user in again through the proxy.
+- **Cause:** logging out asks `access.info`, and stays logged in when `trusted` is true and
+  `login_required` is false (`src/store/auth/actions.ts:97-118`). orrery reports a proxy user
+  as trusted. Otherwise Fluidd calls `access.logout`, which orrery refuses for a proxy user,
+  and shows the login form. The session the proxy keeps is what logs the user in, and Fluidd
+  has no way to end it.
+- **Fix:** a way for the server to give Fluidd a logout URL, such as the proxy's sign-out
+  page, for Fluidd to open. Until then, hide "Log out" for a proxy user, as Fluidd does for
+  `_TRUSTED_USER_`.
+- **Upstream:** not filed yet.
+
 ### fluidd-login-error: a refused login always says "Invalid credentials"
 
 - **Frontend:** Fluidd 1.38.1, from its source and on bluev2, 2026-11-21.
