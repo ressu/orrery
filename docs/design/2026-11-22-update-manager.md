@@ -226,10 +226,19 @@ already uses.
 PackageKit is the system's package service. orrery talks to it over D-Bus with the client it
 already has for systemd (`crates/orrery-dbus`).
 
-- **Refresh:** `RefreshCache`, then `GetUpdates`. `package_list` holds the package names.
-- **Update:** `UpdatePackages` with `ONLY_TRUSTED`, so packages from unsigned sources aren't
-  installed. PackageKit's progress signals become `notify_update_response` messages.
-- `enable_system_updates: False` turns the entry off, as in Moonraker.
+- **The entry** is there unless `enable_system_updates: False`, as in Moonraker. It comes first
+  in `version_info`, and `full` updates it first. Its object is Moonraker's: `name`,
+  `configured_type`, `package_count`, and `package_list`.
+- **Refresh:** `RefreshCache`, then `GetUpdates`. `package_list` holds the package names. When
+  the refresh fails, such as for one source with a bad signature, the updates still come from
+  the lists PackageKit has, and the error is logged. Moonraker lists nothing new then, and
+  keeps showing its last list.
+- **Update:** a fresh `RefreshCache` and `GetUpdates`, then `UpdatePackages` with
+  `ONLY_TRUSTED`, so packages from unsigned sources aren't installed. A failed refresh stops
+  the update. PackageKit's package and source signals become `notify_update_response`
+  messages, as in Moonraker; its percentages don't, yet. An error says why, where Moonraker
+  says only "Error updating system packages". Nothing restarts after it, as in Moonraker.
+- **Rollback** is refused: "Rollback not available for system". So is Recover.
 - **No `sudo apt-get` fallback.** Moonraker falls back to it without PackageKit. orrery reports
   that PackageKit isn't there instead. This is a regression, built only if someone asks.
 
@@ -378,10 +387,12 @@ Each one becomes an entry in `docs/regressions.md` when it's built.
 9. pip isn't upgraded before the Python packages are installed.
 10. An executable's update replaces the program in one step, and its rollback downloads the
     asset `release_info.json` names, not the release's first one.
-11. No `klipper` or `moonraker` entry, and `moonraker` in `managed_services` restarts nothing.
-12. No `sudo apt-get` fallback.
-13. `web` and `zip` entries are in the backlog, and `python` entries come later.
-14. Periodic checks are on by default, weekly unless `refresh_interval` says otherwise, with no
+11. The system check lists updates from the old package lists when a refresh fails, and a
+    failed system update says why.
+12. No `klipper` or `moonraker` entry, and `moonraker` in `managed_services` restarts nothing.
+13. No `sudo apt-get` fallback.
+14. `web` and `zip` entries are in the backlog, and `python` entries come later.
+15. Periodic checks are on by default, weekly unless `refresh_interval` says otherwise, with no
     `refresh_window`.
 
 ## The order of work

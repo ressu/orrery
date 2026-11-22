@@ -56,9 +56,10 @@ async fn main() {
         let m = m.clone();
         async move { m.rollback(&params).await }
     });
-    // Debian packages come later.
-    builder = builder.method("system", |_| async {
-        Err::<serde_json::Value, _>(MethodError::new(404, "Updater system not available"))
+    let m = manager.clone();
+    builder = builder.method("system", move |_| {
+        let m = m.clone();
+        async move { m.update(&serde_json::json!({"name": "system"})).await }
     });
     // Moonraker's own entries, which orrery doesn't have (see the design note).
     builder = builder.method("klipper", |_| async {

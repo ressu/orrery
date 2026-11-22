@@ -42,6 +42,8 @@ pub struct Stored {
     pub rollback: Option<Rollback>,
     /// An executable's release and rollback.
     pub release: Saved,
+    /// For the `system` entry: the packages with updates.
+    pub packages: Vec<String>,
 }
 
 impl Stored {
@@ -58,6 +60,10 @@ impl Stored {
                 version: text("rollback_version").unwrap_or_else(|| "?".into()),
             }),
             release: Saved::from_json(&v["release"]),
+            packages: v["packages"]
+                .as_array()
+                .map(|l| l.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+                .unwrap_or_default(),
         }
     }
 
@@ -72,6 +78,7 @@ impl Stored {
             "rollback_branch": self.rollback.as_ref().map(|r| &r.branch),
             "rollback_version": self.rollback.as_ref().map(|r| &r.version),
             "release": self.release.to_json(),
+            "packages": self.packages,
         })
     }
 }
@@ -318,7 +325,11 @@ impl Manager {
         let mut warnings = Vec::new();
         let global_map = agent.config(None).await?.unwrap_or_default();
         let global = config::global(&global_map, &mut warnings);
+        // Moonraker lists `system` first, and `full` updates it first.
         let mut entries = Vec::new();
+        if global.enable_system_updates {
+            entries.push(config::system_entry(&global));
+        }
         for name in agent.config_names(None).await? {
             let map = agent.config(Some(&format!("{SECTION} {name}"))).await?.unwrap_or_default();
             match config::entry(&name, &map, &global) {
@@ -425,7 +436,10 @@ impl Manager {
             (Some(repo), _) => git::summary(repo),
             (_, Some(i)) if s.stored.release.remote_version == i.version => format!("up to date at {}", i.version),
             (_, Some(i)) => format!("at {}, {} available", i.version, s.stored.release.remote_version),
-            _ => String::new(),
+            _ => match s.stored.packages.len() {
+                1 => "1 package update".into(),
+                n => format!("{n} package updates"),
+            },
         };
         tracing::info!("Checked {}: {summary}", s.entry.name);
     }
@@ -435,6 +449,26 @@ impl Manager {
     async fn read_repo(&self, s: &mut EntryState, fetch: bool) {
         let opts = match &s.entry.kind {
             Kind::Git(opts) => opts,
+            Kind::System => {
+                if fetch {
+                    match PackageKit::connect().await {
+                        Ok(pk) => match pk.updates(None).await {
+                            Ok((packages, refresh_error)) => {
+                                if let Some(e) = refresh_error {
+                                    tracing::warn!(
+                                        "Can't refresh the package lists, so the updates come from the old lists: {e}"
+                                    );
+                                }
+                                s.stored.packages = packages.iter().map(|p| p.name().to_owned()).collect();
+                            }
+                            Err(e) => tracing::warn!("Can't check the system packages: {e}"),
+                        },
+                        Err(e) => tracing::warn!("Can't check the system packages: {e}"),
+                    }
+                }
+                self.save(s).await;
+                return;
+            }
             Kind::Executable(opts) => {
                 let installed = executable::installed(opts).await;
                 if fetch {
@@ -465,6 +499,9 @@ impl Manager {
         }
         if let Some(installed) = &s.installed {
             s.stored.status = executable::status(&s.entry, installed, &s.stored.release);
+        }
+        if let Kind::System = s.entry.kind {
+            s.stored.status = system_status(&s.stored.packages);
         }
         s.stored.last_refresh_time = now();
         s.stored.config_hash = s.entry.hash.clone();
@@ -509,7 +546,7 @@ impl Manager {
             Some(name) => {
                 let s = entries.iter_mut().find(|s| &s.entry.name == name).expect("checked above");
                 match m.update_entry(s, p).await {
-                    Ok(true) => Ok(Some(format!("{}Update Finished...", s.entry.prefix()))),
+                    Ok(true) => Ok(Some(s.entry.finished())),
                     // Moonraker says nothing for an entry that's up to date.
                     Ok(false) => Ok(None),
                     Err(e) => Err(Failure { messages: vec![format!("Error updating {name}: {}", e.error)], ..e }),
@@ -614,8 +651,10 @@ impl Manager {
     /// Updates one entry to the version a fresh check finds. Returns false when it's up to
     /// date.
     async fn update_entry(&self, s: &mut EntryState, p: &Progress) -> Result<bool, Failure> {
-        if let Kind::Executable(_) = s.entry.kind {
-            return self.update_executable(s, p, None).await;
+        match s.entry.kind {
+            Kind::Executable(_) => return self.update_executable(s, p, None).await,
+            Kind::System => return self.update_system(s, p).await,
+            Kind::Git(_) => {}
         }
         let name = s.entry.name.clone();
         self.read_repo(s, true).await;
@@ -673,8 +712,10 @@ impl Manager {
     }
 
     async fn rollback_entry(&self, s: &mut EntryState, p: &Progress) -> Result<bool, Failure> {
-        if let Kind::Executable(_) = s.entry.kind {
-            return self.rollback_executable(s, p).await;
+        match s.entry.kind {
+            Kind::Executable(_) => return self.rollback_executable(s, p).await,
+            Kind::System => return Err(Failure::new(400, "Rollback not available for system")),
+            Kind::Git(_) => {}
         }
         self.read_repo(s, false).await;
         let repo = s.repo.as_ref().expect("just read");
@@ -792,6 +833,31 @@ impl Manager {
         self.update_deps(s, &before, false, p).await;
         self.read_repo(s, false).await;
         self.add_pending(&s.entry);
+        Ok(true)
+    }
+
+    /// Moonraker's `PackageDeploy.update`: every package update from the last check, from
+    /// signed sources only. Returns false when the last check found none.
+    async fn update_system(&self, s: &mut EntryState, p: &Progress) -> Result<bool, Failure> {
+        if s.stored.packages.is_empty() {
+            return Ok(false);
+        }
+        p.send("Updating packages...", false).await;
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let work = async move {
+            let pk = PackageKit::connect().await?;
+            pk.upgrade(&tx).await
+        };
+        let forward = async {
+            while let Some(line) = rx.recv().await {
+                p.output(&line).await;
+            }
+        };
+        let (upgraded, ()) = tokio::join!(work, forward);
+        // Moonraker says only "Error updating system packages", without the reason.
+        upgraded.map_err(|e| Failure::new(400, format!("Error updating system packages: {e}")))?;
+        s.stored.packages.clear();
+        self.save(s).await;
         Ok(true)
     }
 
@@ -961,11 +1027,19 @@ async fn local_time() -> (u32, u32, u32) {
     }
 }
 
+/// The `system` entry's object in `version_info`, as Moonraker's `PackageDeploy` gives it.
+fn system_status(packages: &[String]) -> Value {
+    json!({"name": "system", "configured_type": "system", "package_count": packages.len(), "package_list": packages})
+}
+
 /// An entry's object in `version_info` before its first check since the agent started: the
 /// stored one, or what Moonraker shows for a repo it hasn't read yet.
 fn view_of(s: &EntryState) -> Value {
     if s.stored.status.is_object() && s.stored.config_hash == s.entry.hash {
         return s.stored.status.clone();
+    }
+    if let Kind::System = s.entry.kind {
+        return system_status(&s.stored.packages);
     }
     json!({
         "name": s.entry.name,
@@ -1058,6 +1132,7 @@ mod tests {
                 rollback_version: "v1.1.0".into(),
                 rollback_repo: "ressu/printerkeep".into(),
             },
+            packages: vec!["libc6".into()],
         };
         assert_eq!(Stored::from_json(&s.to_json()), s);
     }

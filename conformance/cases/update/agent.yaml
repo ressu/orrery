@@ -9,6 +9,8 @@ klippy: ready
 config: |
   [update_manager]
   refresh_interval: 24
+  # The system entry would ask this machine's PackageKit for updates.
+  enable_system_updates: False
 
   [update_manager missing]
   type: git_repo

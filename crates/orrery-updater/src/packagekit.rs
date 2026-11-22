@@ -21,6 +21,7 @@ const fn bit(index: u32) -> u64 {
 }
 /// `NOT_INSTALLED | BASENAME | NEWEST | ARCH`: Moonraker's filter for packages to install.
 const INSTALL_FILTER: u64 = bit(3) | bit(14) | bit(16) | bit(18);
+pub const FILTER_NONE: u64 = bit(1);
 /// Only packages from signed sources.
 const ONLY_TRUSTED: u64 = bit(1);
 
@@ -157,6 +158,12 @@ pub struct Package {
     pub info: u32,
 }
 
+impl Package {
+    pub fn name(&self) -> &str {
+        self.id.split(';').next().unwrap_or(&self.id)
+    }
+}
+
 pub struct PackageKit {
     bus: Bus,
 }
@@ -180,6 +187,31 @@ impl PackageKit {
         tracing::info!("Installing packages: {}", ids.join(", "));
         let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
         self.run("InstallPackages", vec![Value::U64(ONLY_TRUSTED), Value::strs(&ids)], Some(on_message)).await.map(drop)
+    }
+
+    /// Fresh package lists, then the packages with updates, as Moonraker's `refresh_packages`
+    /// and `get_packages` find them. A failed refresh is the second value: the updates then
+    /// come from the lists PackageKit has, as apt keeps the old list of a source it can't
+    /// read. Moonraker lists nothing then.
+    pub async fn updates(&self, on_message: Option<&Messages>) -> Result<(Vec<Package>, Option<String>), String> {
+        let refreshed = self.run("RefreshCache", vec![Value::Bool(false)], on_message).await.err();
+        let packages = self.run("GetUpdates", vec![Value::U64(FILTER_NONE)], None).await?;
+        Ok((packages, refreshed))
+    }
+
+    /// Moonraker's `upgrade_system`: every update, from signed sources only. It needs fresh
+    /// package lists.
+    pub async fn upgrade(&self, on_message: &Messages) -> Result<(), String> {
+        let (packages, refresh_error) = self.updates(Some(on_message)).await?;
+        if let Some(e) = refresh_error {
+            return Err(e);
+        }
+        let ids: Vec<String> = packages.into_iter().map(|p| p.id).collect();
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
+        self.run("UpdatePackages", vec![Value::U64(ONLY_TRUSTED), Value::strs(&ids)], Some(on_message)).await.map(drop)
     }
 
     /// Runs `member` in a new transaction, and returns the packages it reported. With
@@ -313,7 +345,9 @@ mod tests {
     #[test]
     fn flags_match_moonraker() {
         // Moonraker sends 344072 for its install filter, and 2 for ONLY_TRUSTED.
-        assert_eq!((INSTALL_FILTER, ONLY_TRUSTED), (344_072, 2));
+        assert_eq!((INSTALL_FILTER, FILTER_NONE, ONLY_TRUSTED), (344_072, 2, 2));
+        let p = Package { id: "libc6;2.41-12;arm64;debian-security".into(), info: 0 };
+        assert_eq!(p.name(), "libc6");
         assert_eq!(name(INFO, INFO_FINISHED), "Finished");
         assert_eq!(name(EXIT, EXIT_SUCCESS), "Success");
         assert_eq!(name(ERRORS, 13), "DEP_RESOLUTION_FAILED");

@@ -58,6 +58,8 @@ pub struct Global {
     /// when `start > end`. None by default.
     pub refresh_window: Option<(u32, u32)>,
     pub channel: Option<Channel>,
+    /// The `system` entry, for Debian's packages; on by default, as in Moonraker.
+    pub enable_system_updates: bool,
 }
 
 /// One `[update_manager <name>]` entry.
@@ -82,6 +84,8 @@ pub struct Entry {
 pub enum Kind {
     Git(GitOptions),
     Executable(ExecOptions),
+    /// Moonraker's `system` entry: the system's packages, through PackageKit.
+    System,
 }
 
 impl Kind {
@@ -89,6 +93,7 @@ impl Kind {
         match self {
             Self::Git(_) => "git_repo",
             Self::Executable(_) => "executable",
+            Self::System => "system",
         }
     }
 
@@ -109,6 +114,7 @@ impl Kind {
                 system_dependencies: e.system_dependencies.clone(),
                 ..DepFiles::default()
             },
+            Self::System => DepFiles::default(),
         }
     }
 }
@@ -276,7 +282,8 @@ pub fn global(map: &Map<String, Value>, warnings: &mut Vec<String>) -> Global {
     let window = o.text("refresh_window").and_then(|w| w.map(|w| parse_window(&w)).transpose());
     let refresh_window = or_warn(window, None, warnings);
     let channel = or_warn(o.channel(), None, warnings);
-    Global { refresh_interval, enable_auto_refresh, refresh_window, channel }
+    let enable_system_updates = or_warn(o.bool("enable_system_updates", true), true, warnings);
+    Global { refresh_interval, enable_auto_refresh, refresh_window, channel, enable_system_updates }
 }
 
 /// The value, or the default and a warning.
@@ -296,6 +303,22 @@ fn parse_window(text: &str) -> Result<(u32, u32), String> {
         return Err(bad());
     }
     Ok((start, end))
+}
+
+/// Moonraker's `system` entry, checked as often as the others. It has no options of its own.
+pub fn system_entry(global: &Global) -> Entry {
+    Entry {
+        name: "system".into(),
+        channel: Channel::Stable,
+        channel_warning: None,
+        refresh_interval: global.refresh_interval,
+        managed_services: Some(Vec::new()),
+        is_system_service: false,
+        info_tags: Vec::new(),
+        report_anomalies: true,
+        hash: "system".into(),
+        kind: Kind::System,
+    }
 }
 
 /// Reads one entry. `Err` is the warning that says why it's left out.
@@ -335,7 +358,7 @@ pub fn entry(name: &str, map: &Map<String, Value>, global: &Global) -> Result<En
         None => return Err(format!("[{}] needs a type option, such as git_repo", o.section)),
     };
     let (channel, channel_warning) = match &kind {
-        Kind::Git(_) => (o.channel()?.or(global.channel).unwrap_or(Channel::Dev), None),
+        Kind::Git(_) | Kind::System => (o.channel()?.or(global.channel).unwrap_or(Channel::Dev), None),
         // Releases have no dev channel. Moonraker warns about one in the entry, and falls back
         // to stable.
         Kind::Executable(_) => match o.channel()? {
@@ -370,6 +393,15 @@ impl Entry {
         match self.kind {
             Kind::Git(_) => format!("Git Repo {}: ", self.name),
             Kind::Executable(_) => format!("Executable {}: ", self.name),
+            Kind::System => "PackageKit: ".into(),
+        }
+    }
+
+    /// The message that ends a successful update of this entry.
+    pub fn finished(&self) -> String {
+        match self.kind {
+            Kind::System => "Package update finished...".into(),
+            _ => format!("{}Update Finished...", self.prefix()),
         }
     }
 
