@@ -4,6 +4,14 @@ What changes in each release of orrery. Read it before you update, so you know w
 
 Fluidd and Mainsail link to the release page on GitHub, which shows the same notes.
 
+## Unreleased
+
+### Fixed
+
+- The `orrery` update entry no longer warns "orrery put v0.1.1 in place, but runs v0.1.2"
+  after orrery is installed again over an older install's database. The warning now compares
+  the programs in `~/orrery` with the orrery that runs.
+
 ## 0.1.2 (2026-11-22)
 
 ### New

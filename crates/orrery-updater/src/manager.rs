@@ -431,7 +431,7 @@ impl Manager {
         for s in states.iter_mut().filter(|s| release::is_own(&s.entry)) {
             if let Kind::Executable(opts) = &s.entry.kind {
                 s.installed = Some(executable::installed(opts).await);
-                release::restarted(&mut s.stored.release);
+                release::restarted(&mut s.stored.release, valid_version(s.installed.as_ref()));
                 s.stored.status = own_status(s);
             }
         }
@@ -649,7 +649,7 @@ impl Manager {
             Kind::Executable(opts) => {
                 let installed = executable::installed(opts).await;
                 if opts.orrery {
-                    release::restarted(&mut s.stored.release);
+                    release::restarted(&mut s.stored.release, valid_version(Some(&installed)));
                 }
                 if fetch {
                     match &self.github {
@@ -1163,7 +1163,7 @@ impl Manager {
             s.stored.release.expected_version = s.installed.as_ref().map(|i| i.version.clone());
             self.save(s).await;
         }
-        if done || release::not_restarted(&s.stored.release).is_some() {
+        if done || release::not_restarted(valid_version(s.installed.as_ref())).is_some() {
             self.add_pending(&s.entry);
             return Ok(true);
         }
@@ -1351,9 +1351,14 @@ fn own_status(s: &EntryState) -> Value {
     let Some(installed) = &s.installed else { return s.stored.status.clone() };
     let mut status = executable::status(&s.entry, installed, &s.stored.release);
     if release::is_own(&s.entry) {
-        release::adjust_status(&mut status, &s.stored.release);
+        release::adjust_status(&mut status, valid_version(Some(installed)));
     }
     status
+}
+
+/// The version of an executable entry's install, when its `release_info.json` is valid.
+fn valid_version(installed: Option<&executable::Installed>) -> Option<&str> {
+    installed.filter(|i| i.valid).map(|i| i.version.as_str())
 }
 
 /// An entry's object in `version_info` before its first check since the agent started: the

@@ -29,36 +29,41 @@ pub fn is_own(entry: &Entry) -> bool {
     matches!(&entry.kind, Kind::Executable(o) if o.orrery)
 }
 
-/// The warning for an update or a rollback that hasn't taken effect: orrery runs another
-/// version than the one it put in place.
-pub fn not_restarted(saved: &Saved) -> Option<String> {
-    let expected = saved.expected_version.as_deref()?;
-    (expected != orrery_build::VERSION).then(|| {
+/// The warning for programs that haven't taken effect: `installed`, the version in orrery's
+/// `release_info.json`, isn't the one that runs, as after an update or a rollback from a shell
+/// before the restart. `None` when orrery's folder has no valid release.
+pub fn not_restarted(installed: Option<&str>) -> Option<String> {
+    let installed = installed?;
+    (installed != orrery_build::VERSION).then(|| {
         format!(
-            "orrery put {expected} in place, but runs {}. It takes effect when orrery restarts: sudo systemctl restart orrery",
+            "orrery put {installed} in place, but runs {}. It takes effect when orrery restarts: sudo systemctl restart orrery",
             orrery_build::VERSION
         )
     })
 }
 
 /// The check after the restart that follows an update or a rollback: when orrery runs the
-/// version it put in place, the record goes, and the log says so.
-pub fn restarted(saved: &mut Saved) {
-    if saved.expected_version.as_deref() == Some(orrery_build::VERSION) {
+/// version it put in place, the log says so. The record goes once the programs on disk are
+/// the ones that run, so an old one can't outlive a reinstall.
+pub fn restarted(saved: &mut Saved, installed: Option<&str>) {
+    let Some(expected) = saved.expected_version.as_deref() else { return };
+    if expected == orrery_build::VERSION {
         tracing::info!("orrery runs {}, which the last update or rollback put in place", orrery_build::VERSION);
+    }
+    if expected == orrery_build::VERSION || installed == Some(orrery_build::VERSION) {
         saved.expected_version = None;
     }
 }
 
 /// Adds what's particular to orrery's entry to its executable status: a development build
 /// isn't valid, and a version not yet running is a warning.
-pub fn adjust_status(status: &mut Value, saved: &Saved) {
+pub fn adjust_status(status: &mut Value, installed: Option<&str>) {
     let problem = problem();
     if problem.is_some() {
         status["is_valid"] = json!(false);
     }
     if let Some(warnings) = status["warnings"].as_array_mut() {
-        warnings.extend(problem.into_iter().chain(not_restarted(saved)).map(Value::from));
+        warnings.extend(problem.into_iter().chain(not_restarted(installed)).map(Value::from));
     }
 }
 
@@ -218,19 +223,29 @@ mod tests {
     fn own_status() {
         let mut status = json!({"is_valid": true, "warnings": []});
         let mut saved = Saved::default();
-        adjust_status(&mut status, &saved);
+        adjust_status(&mut status, Some(orrery_build::VERSION));
         if orrery_build::RELEASE {
             assert_eq!(status, json!({"is_valid": true, "warnings": []}));
         } else {
             assert_eq!(status["is_valid"], false);
             assert_eq!(status["warnings"], json!(["This is a development build, so orrery doesn't update itself."]));
         }
-        // Put in place, not yet running.
-        saved.expected_version = Some("v9.9.9".into());
-        let w = not_restarted(&saved).unwrap();
+        // Put in place, not yet running; no valid release on disk says nothing.
+        let w = not_restarted(Some("v9.9.9")).unwrap();
         assert!(w.starts_with("orrery put v9.9.9 in place, but runs v"), "{w}");
+        assert_eq!(not_restarted(Some(orrery_build::VERSION)), None);
+        assert_eq!(not_restarted(None), None);
+
+        // The record after an update: it goes once orrery runs what's on disk, even when that
+        // isn't what it expected, as after a reinstall (pink-0, 2026-11-22).
+        saved.expected_version = Some("v9.9.9".into());
+        restarted(&mut saved, Some("v9.9.9"));
+        assert_eq!(saved.expected_version.as_deref(), Some("v9.9.9"), "not restarted yet");
+        restarted(&mut saved, Some(orrery_build::VERSION));
+        assert_eq!(saved.expected_version, None);
         saved.expected_version = Some(orrery_build::VERSION.into());
-        assert_eq!(not_restarted(&saved), None);
+        restarted(&mut saved, None);
+        assert_eq!(saved.expected_version, None);
     }
 
     #[test]
