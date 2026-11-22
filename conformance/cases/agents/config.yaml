@@ -6,11 +6,17 @@ config: |
   [test-agent]
   server: http://old.invalid
   timeout: 5
+
+  [test-agent front]
+  path: ~/front
 files:
   config/orrery.toml: |
     [test-agent]
     server = "http://spoolman.invalid:7912"
     sync_rate = 5
+
+    [test-agent.back]
+    path = "~/back"
 steps:
   - agent: {connect: {name: test-agent}}
   # orrery.toml's values keep their types and win; moonraker.conf's are text.
@@ -20,6 +26,12 @@ steps:
       section: test-agent
       exists: true
       options: {$exact: true, server: "http://spoolman.invalid:7912", timeout: "5", sync_rate: 5}
+      # Its named sections, from both files.
+      named: [front, back]
+  - call: orrery.agent.config
+    as_agent: true
+    params: {section: test-agent front}
+    expect: {exists: true, options: {$exact: true, path: "~/front"}, named: []}
   - call: orrery.agent.config
     as_agent: true
     params: {section: test-agent extra}

@@ -316,14 +316,14 @@ know, so the check would mostly get in the way.
   matches wins. Every other method needs `call_role`:
 
   ```toml
-  [agent.update]
+  [agent.update_manager]
   call_role = "admin"
 
-  [agent.update.call_roles]
-  status = "viewer"   # agent.update.status, and machine.update.status through maps
+  [agent.update_manager.call_roles]
+  status = "viewer"   # agent.update_manager.status, and machine.update.status through maps
   ```
 
-  The refusal then names the method: "Only an admin can call refresh on the agent update."
+  The refusal then names the method: "Only an admin can call refresh on the agent update_manager."
 - **Gcode can reach an agent past `call_role`.** That's a known gap, to revisit later.
   - An agent can register a remote method with `connection.register_remote_method`
     (`crates/orrery/src/extensions.rs:164`). orrery registers it with Klipper.

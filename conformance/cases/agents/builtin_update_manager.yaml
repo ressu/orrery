@@ -1,0 +1,51 @@
+name: an [update_manager] section turns on the built-in update manager agent
+description: >
+  orrery only. With [update_manager] in moonraker.conf, the fallback, the agent gets Moonraker's
+  machine.update.* names and notifications. command = false keeps orrery from starting
+  orrery-update, so the runner's test agent stands in for it.
+targets: [orrery]
+transports: [ws, http]
+klippy: none
+config: |
+  [update_manager]
+  refresh_interval: 168
+
+  [update_manager crowsnest]
+  type: git_repo
+  path: ~/crowsnest
+files:
+  config/orrery.toml: |
+    [agent.update_manager]
+    command = false
+
+    [update_manager.printerkeep]
+    type = "executable"
+steps:
+  - call: server.info
+    expect: {components: {$contains: [update_manager]}, warnings: []}
+  - call: machine.update.status
+    http: {verb: GET, path: /machine/update/status}
+    expect_error: {code: 400, message: Agent update_manager not connected}
+  - agent:
+      connect:
+        name: update_manager
+        via: unix
+        replies:
+          status: {result: {busy: false, version_info: {}}}
+  - call: orrery.agent.register_endpoint
+    as_agent: true
+    params: {path: status, request_methods: [GET]}
+    expect: ok
+  - call: machine.update.status
+    http: {verb: GET, path: /machine/update/status}
+    expect: {busy: false, version_info: {}}
+  # The agent finds its entries in both files.
+  - call: orrery.agent.config
+    as_agent: true
+    expect: {section: update_manager, options: {refresh_interval: "168"}, named: [crowsnest, printerkeep]}
+  - call: connection.send_event
+    as_agent: true
+    params: {event: update_refreshed, data: {busy: false, version_info: {}}}
+    expect: ok
+  - expect_notification: notify_update_refreshed
+    match: [{busy: false}]

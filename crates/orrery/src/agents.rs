@@ -14,7 +14,9 @@
 //!   it isn't running.
 //! - Some agents are built in: a `server` option in `[spoolman]` turns on the Spoolman agent,
 //!   with Moonraker's names, and starts `orrery-spoolman` from orrery's own folder. An
-//!   `[agent.spoolman]` table overrides the built-in options one at a time.
+//!   `[update_manager]` section, or one of its entries, turns on the update manager agent,
+//!   which orrery starts as `orrery-update`. An `[agent.<name>]` table overrides a built-in
+//!   agent's options one at a time.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -97,6 +99,7 @@ impl Agents {
         }
         let mut warnings = Vec::new();
         builtin_spoolman(config, agent_dir, &mut configs, &mut warnings);
+        builtin_update_manager(config, agent_dir, &mut configs, &mut warnings);
         Ok((Self { configs, ..Self::default() }, warnings))
     }
 
@@ -360,11 +363,65 @@ fn builtin_spoolman(
     let section = config.section("spoolman");
     section.get_str("server", "");
     let _ = section.get_int("sync_rate", 5);
-    let c = match configs.iter().position(|c| c.name == "spoolman") {
-        Some(i) => &mut configs[i],
+    let c = builtin_entry(configs, "spoolman");
+    if c.component.is_none() {
+        c.component = Some("spoolman".into());
+    }
+    if c.history_fields.is_empty() {
+        c.history_fields = vec!["spool_ids".into()];
+    }
+    if c.methods.is_empty() && c.notifications.is_empty() {
+        c.methods = vec![("server.spoolman".into(), "agent.spoolman".into())];
+        c.notifications = ["active_spool_set", "spoolman_status_changed"].map(|e| (e.to_owned(), e.to_owned())).into();
+    }
+    builtin_command(c, agent_dir, "orrery-spoolman", "Spoolman is set up in [spoolman]", warnings);
+}
+
+/// The built-in update manager agent (docs/design/2026-11-22-update-manager.md). It's on when
+/// `[update_manager]` or an `[update_manager <name>]` entry is in `orrery.toml`, or, as the
+/// fallback, in `moonraker.conf`. It gets Moonraker's `machine.update.*` names, the admin role,
+/// since it restarts services, and admin to call it, except `status`, which viewers may call.
+/// orrery starts `orrery-update` from `agent_dir`. `[agent.update_manager]` overrides each of
+/// these.
+fn builtin_update_manager(
+    config: &Config,
+    agent_dir: Option<&Path>,
+    configs: &mut Vec<AgentConfig>,
+    warnings: &mut Vec<String>,
+) {
+    const NAME: &str = "update_manager";
+    if config.section_json(NAME).is_none() && config.section_names(&format!("{NAME} ")).is_empty() {
+        return;
+    }
+    // What [agent.update_manager] sets itself, so the built-in defaults don't replace it.
+    let table = config.section_json(&format!("agent {NAME}")).unwrap_or_default();
+    let c = builtin_entry(configs, NAME);
+    if c.component.is_none() {
+        c.component = Some(NAME.into());
+    }
+    if c.methods.is_empty() && c.notifications.is_empty() {
+        c.methods = vec![("machine.update".into(), format!("agent.{NAME}"))];
+        c.notifications = ["update_response", "update_refreshed"].map(|e| (e.to_owned(), e.to_owned())).into();
+    }
+    if !table.contains_key("role") {
+        c.role = Role::Admin;
+    }
+    if !table.contains_key("call_role") {
+        c.call_role = Role::Admin;
+    }
+    if !table.contains_key("call_roles") {
+        c.call_roles = vec![("status".into(), Role::Viewer)];
+    }
+    builtin_command(c, agent_dir, "orrery-update", "The update manager is set up in [update_manager]", warnings);
+}
+
+/// A built-in agent's table: the one `[agent.<name>]` made, or a new one with the defaults.
+fn builtin_entry<'a>(configs: &'a mut Vec<AgentConfig>, name: &str) -> &'a mut AgentConfig {
+    let i = match configs.iter().position(|c| c.name == name) {
+        Some(i) => i,
         None => {
             configs.push(AgentConfig {
-                name: "spoolman".into(),
+                name: name.into(),
                 component: None,
                 methods: Vec::new(),
                 notifications: Vec::new(),
@@ -376,31 +433,33 @@ fn builtin_spoolman(
                 call_role: Role::Operator,
                 call_roles: Vec::new(),
             });
-            configs.last_mut().expect("just pushed")
+            configs.len() - 1
         }
     };
-    if c.component.is_none() {
-        c.component = Some("spoolman".into());
+    &mut configs[i]
+}
+
+/// Starts a built-in agent's `program` from `agent_dir`, unless its table says how it starts.
+/// Warns while the program is missing; `what` says what turned the agent on.
+fn builtin_command(
+    c: &mut AgentConfig,
+    agent_dir: Option<&Path>,
+    program: &str,
+    what: &str,
+    warnings: &mut Vec<String>,
+) {
+    if c.command != Command::Unset || c.unit.is_some() {
+        return;
     }
-    if c.history_fields.is_empty() {
-        c.history_fields = vec!["spool_ids".into()];
-    }
-    if c.methods.is_empty() && c.notifications.is_empty() {
-        c.methods = vec![("server.spoolman".into(), "agent.spoolman".into())];
-        c.notifications = ["active_spool_set", "spoolman_status_changed"].map(|e| (e.to_owned(), e.to_owned())).into();
-    }
-    if c.command == Command::Unset && c.unit.is_none() {
-        match agent_dir.map(|dir| dir.join("orrery-spoolman")) {
-            Some(program) if program.is_file() => {
-                c.command = Command::Run(vec![program.to_string_lossy().into_owned()])
-            }
-            program => {
-                let place = program.map_or_else(|| "orrery's folder".to_owned(), |p| p.display().to_string());
-                warnings.push(format!(
-                    "Spoolman is set up in [spoolman], but orrery can't find its agent at {place}. Put \
-                     orrery-spoolman there, or set command in [agent.spoolman] in orrery.toml."
-                ));
-            }
+    match agent_dir.map(|dir| dir.join(program)) {
+        Some(path) if path.is_file() => c.command = Command::Run(vec![path.to_string_lossy().into_owned()]),
+        path => {
+            let place = path.map_or_else(|| "orrery's folder".to_owned(), |p| p.display().to_string());
+            warnings.push(format!(
+                "{what}, but orrery can't find its agent at {place}. Put {program} there, or set command in \
+                 [agent.{}] in orrery.toml.",
+                c.name
+            ));
         }
     }
 }
@@ -648,7 +707,10 @@ async fn agent_config(app: Arc<App>, req: Request) -> ApiResult {
         return Err(ApiError::bad_request(format!("Agent {agent} may not read the section [{section}]")));
     }
     let options = app.config.section_json(&section);
-    Ok(json!({"section": section, "exists": options.is_some(), "options": options.unwrap_or_default()}))
+    // The names of its named sections, such as `crowsnest` for `[update_manager crowsnest]`.
+    let prefix = format!("{section} ");
+    let named: Vec<String> = app.config.section_names(&prefix).iter().map(|n| n[prefix.len()..].to_owned()).collect();
+    Ok(json!({"section": section, "exists": options.is_some(), "options": options.unwrap_or_default(), "named": named}))
 }
 
 #[cfg(test)]
@@ -697,6 +759,51 @@ mod tests {
         assert!(w.is_empty());
         assert_eq!((c.command.clone(), c.user, c.component.as_deref()), (Command::Off, Some(1000), Some("spoolman")));
         assert_eq!(a.commands().count(), 0);
+    }
+
+    #[test]
+    fn update_manager_is_built_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, w) = with_spoolman("[server]\n", "", Some(dir.path())).unwrap();
+        assert!(a.get("update_manager").is_none() && w.is_empty());
+
+        // An entry alone turns it on, in either file; a missing program is a warning.
+        let (a, w) = with_spoolman("[update_manager crowsnest]\ntype: git_repo\n", "", Some(dir.path())).unwrap();
+        let c = a.get("update_manager").unwrap();
+        assert_eq!(c.component.as_deref(), Some("update_manager"));
+        assert_eq!(c.methods, vec![("machine.update".to_owned(), "agent.update_manager".to_owned())]);
+        assert_eq!(a.notification("update_manager", "update_refreshed"), Some("update_refreshed"));
+        assert_eq!((c.role, c.call_role), (Role::Admin, Role::Admin));
+        assert_eq!(a.call_role("update_manager", "status"), Role::Viewer);
+        assert_eq!(a.call_role("update_manager", "refresh"), Role::Admin);
+        assert!(w[0].starts_with("The update manager is set up in [update_manager]"), "{w:?}");
+        assert!(w[0].contains("Put orrery-update there"), "{w:?}");
+        let (a, _) =
+            with_spoolman("[server]\n", "[update_manager]\nrefresh_interval = 24\n", Some(dir.path())).unwrap();
+        assert!(a.get("update_manager").is_some());
+
+        // The program in orrery's folder starts it.
+        let program = dir.path().join("orrery-update");
+        std::fs::write(&program, "").unwrap();
+        let (a, w) = with_spoolman("[update_manager]\n", "", Some(dir.path())).unwrap();
+        assert!(w.is_empty(), "{w:?}");
+        assert_eq!(
+            a.get("update_manager").unwrap().command,
+            Command::Run(vec![program.to_string_lossy().into_owned()])
+        );
+
+        // [agent.update_manager] overrides each default it sets, and keeps the rest.
+        let toml = "[agent.update_manager]\ncall_role = \"operator\"\ncommand = false\n";
+        let (a, _) = with_spoolman("[update_manager]\n", toml, Some(dir.path())).unwrap();
+        let c = a.get("update_manager").unwrap();
+        assert_eq!((c.role, c.call_role, c.command.clone()), (Role::Admin, Role::Operator, Command::Off));
+        assert_eq!(a.call_role("update_manager", "status"), Role::Viewer);
+        let toml =
+            "[agent.update_manager]\nrole = \"agent\"\n[agent.update_manager.call_roles]\nrefresh = \"operator\"\n";
+        let (a, _) = with_spoolman("[update_manager]\n", toml, Some(dir.path())).unwrap();
+        assert_eq!(a.get("update_manager").unwrap().role, Role::Viewer);
+        assert_eq!(a.call_role("update_manager", "status"), Role::Admin);
+        assert_eq!(a.call_role("update_manager", "refresh"), Role::Operator);
     }
 
     #[test]

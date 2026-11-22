@@ -310,10 +310,12 @@ on. It's a small change, left for when someone wants it.
 
 - orrery turns it on when `orrery.toml` has `[update_manager]`, or, as the fallback,
   `moonraker.conf` has it. orrery starts it from its own folder with `command`.
-- It maps `machine.update` to `agent.update`, and the events `update_response` and
+- The agent's name is `update_manager`, so `[update_manager]` and `[update_manager.<name>]`
+  are its own sections, which it may read, as `[spoolman]` is the Spoolman agent's.
+- It maps `machine.update` to `agent.update_manager`, and the events `update_response` and
   `update_refreshed` to Moonraker's notifications. `server.info` lists the component
   `update_manager`.
-- An `[agent.update]` table in `orrery.toml` overrides the built-in options one at a time.
+- An `[agent.update_manager]` table in `orrery.toml` overrides the built-in options one at a time.
 - The agent reads its config with `orrery.agent.config`, the way the Spoolman agent does.
 - For PackageKit, the agent uses orrery's D-Bus client, which moved from
   `crates/orrery/src/dbus/` into its own crate, `crates/orrery-dbus`, so both can use it.
@@ -336,7 +338,7 @@ Each one becomes an entry in `docs/regressions.md` when it's built.
 ## The order of work
 
 1. This note, reviewed.
-2. orrery: roles per mapped method, the built-in `update` agent, the shared D-Bus crate, and
+2. orrery: roles per mapped method, the built-in `update_manager` agent, the shared D-Bus crate, and
    PackageKit in `orrery setup`'s rules.
 3. `orrery-update`: config, state, `status` and `refresh`, the command lock, the print check,
    and progress notifications.
