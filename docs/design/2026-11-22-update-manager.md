@@ -148,10 +148,15 @@ already uses.
 
 - **Refresh:** `git fetch --prune` from the configured remote, then `git status --porcelain -b`,
   `git describe`, and `git log HEAD..<remote branch>` for the commits behind. Channel `dev`
-  follows the branch. Channels `stable` and `beta` follow its newest release tag, or any tag
-  for `beta`.
-- **Validity:** the repo is valid when its remote URL matches `origin` (or `moved_origin`), and
-  it's on `primary_branch`. Otherwise `is_valid` is false and `warnings` says why.
+  follows the branch. Channels `stable` and `beta` follow its highest release tag, or its
+  highest tag that isn't an alpha for `beta`. Moonraker takes the newest tag by date instead,
+  and two tags made in the same second then come in either order.
+- **Validity,** as in Moonraker (`git_deploy.py:1087-1106`): the repo is valid when its branch
+  and the remote it tracks are known, and it's not dirty, detached, or diverged. Then
+  `warnings` says why. A remote URL other than `origin`, or a branch other than
+  `primary_branch`, is only an anomaly.
+- **`moved_origin`:** when the remote's URL is `moved_origin`, orrery points the remote at
+  `origin`. Moonraker instead requests the old URL and follows GitHub's redirect to find out.
 - **Dirty:** a repo with changed tracked files is dirty, and an update refuses it. Untracked
   files don't make it dirty, as in Moonraker (`git describe --dirty`, `git_deploy.py:368`), so
   Klipper's plugin links don't block updates. They make `pristine` false.
@@ -325,15 +330,19 @@ on. It's a small change, left for when someone wants it.
 Each one becomes an entry in `docs/regressions.md` when it's built.
 
 1. Methods have roles: `status` for viewers, the rest for admins.
-2. A diverged branch isn't reset on an update. Moonraker runs `git reset --hard` and loses the
-   local commits. orrery reports it in `anomalies`, and the user picks Recover.
-3. `full` refuses while printing.
-4. Each service restarts once per batch of updates.
-5. No `klipper` or `moonraker` entry, and `moonraker` in `managed_services` restarts nothing.
-6. No `sudo apt-get` fallback.
-7. `web` and `zip` entries are in the backlog, and `python` entries come later.
-8. Periodic checks are on by default, weekly unless `refresh_interval` says otherwise, with no
-   `refresh_window`.
+2. A branch that diverges during an update isn't reset. A diverged repo is invalid in Moonraker
+   too, but Moonraker fetches again as it updates, and runs `git reset --hard` if the branch
+   diverged since the last check, such as after a force-push (`git_deploy.py:169-174`). That
+   loses local commits. orrery stops the update instead, and the user picks Recover.
+3. Stable and beta follow the highest tag, not the newest by date.
+4. `moved_origin` is matched by URL, without a request to GitHub.
+5. `full` refuses while printing.
+6. Each service restarts once per batch of updates.
+7. No `klipper` or `moonraker` entry, and `moonraker` in `managed_services` restarts nothing.
+8. No `sudo apt-get` fallback.
+9. `web` and `zip` entries are in the backlog, and `python` entries come later.
+10. Periodic checks are on by default, weekly unless `refresh_interval` says otherwise, with no
+    `refresh_window`.
 
 ## The order of work
 

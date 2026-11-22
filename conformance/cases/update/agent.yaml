@@ -1,0 +1,58 @@
+name: orrery starts the update manager agent, which answers Moonraker's update methods
+description: >
+  orrery only. orrery starts orrery-update from its own folder, so `cargo build -p
+  orrery-update` must come first. The git entry points at a folder that isn't a repo, so no
+  network is needed; the git refresh itself is in orrery-update's unit tests.
+targets: [orrery]
+transports: [ws]
+klippy: ready
+config: |
+  [update_manager]
+  refresh_interval: 24
+
+  [update_manager missing]
+  type: git_repo
+  path: /nonexistent/orrery-update-case
+  origin: https://example.invalid/missing.git
+
+  [update_manager site]
+  type: web
+  repo: fluidd-core/fluidd
+steps:
+  # The agent connects after orrery starts.
+  - call: machine.update.status
+    retry_ms: 10000
+    expect:
+      busy: false
+      github_rate_limit: null
+      version_info:
+        $exact: true
+        missing:
+          name: missing
+          configured_type: git_repo
+          is_valid: false
+          repo_detected: false
+          warnings: [No git repo detected at configured path]
+  # An entry it can't use is a warning, and the others keep working.
+  - call: server.info
+    expect: {components: {$contains: [update_manager]}, warnings: ["[update_manager site]: orrery doesn't update web entries yet, so this entry is left out"]}
+  - call: machine.update.refresh
+    params: {name: site}
+    expect_error: {code: 400, message: "No updater registered for 'site'"}
+  - call: machine.update.klipper
+    expect_error: {code: 400, message: "Klipper updates aren't available in orrery yet."}
+  # The check is saved in the agent's namespace.
+  - call: server.database.get_item
+    params: {namespace: update_manager, key: missing}
+    expect: {value: {config_hash: "$regex:^[0-9a-f]{16}$", status: {is_valid: false}}}
+  # No checks while a print runs.
+  - klippy: {update: {print_stats: {state: printing}}}
+  - call: machine.update.refresh
+    retry_ms: 2000
+    expect_error: {code: 503, message: "Server is busy, cannot perform refresh"}
+  - klippy: {update: {print_stats: {state: standby}}}
+  - call: machine.update.refresh
+    retry_ms: 2000
+    expect: {busy: false, version_info: {missing: {is_valid: false}}}
+  - expect_notification: notify_update_refreshed
+    match: [{busy: false}]

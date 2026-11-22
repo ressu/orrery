@@ -19,7 +19,7 @@ lint:
 
 # Run the conformance cases. Usage: just conformance [reference|orrery] [extra runner flags]
 conformance target="reference" *flags:
-    cargo build -p conformance {{ if target == "orrery" { "-p orrery" } else { "" } }}
+    cargo build -p conformance {{ if target == "orrery" { "-p orrery -p orrery-update" } else { "" } }}
     cargo run -q -p conformance -- --target {{target}} {{flags}}
 
 # Run the real-klippy cases against real Klipper in batch mode.
