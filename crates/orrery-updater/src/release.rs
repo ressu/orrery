@@ -41,6 +41,15 @@ pub fn not_restarted(saved: &Saved) -> Option<String> {
     })
 }
 
+/// The check after the restart that follows an update or a rollback: when orrery runs the
+/// version it put in place, the record goes, and the log says so.
+pub fn restarted(saved: &mut Saved) {
+    if saved.expected_version.as_deref() == Some(orrery_build::VERSION) {
+        tracing::info!("orrery runs {}, which the last update or rollback put in place", orrery_build::VERSION);
+        saved.expected_version = None;
+    }
+}
+
 /// Adds what's particular to orrery's entry to its executable status: a development build
 /// isn't valid, and a version not yet running is a warning.
 pub fn adjust_status(status: &mut Value, saved: &Saved) {
@@ -54,10 +63,12 @@ pub fn adjust_status(status: &mut Value, saved: &Saved) {
 }
 
 /// The options orrery runs with, from the command line of the agent's parent, which is
-/// orrery. The program's own name is left out.
+/// orrery. The program's own name is left out. The preflight runs in another folder, so
+/// relative paths are made absolute against orrery's.
 pub fn orrery_args() -> Vec<String> {
     let parent = rustix::process::getppid().map_or(0, |p| p.as_raw_nonzero().get());
-    std::fs::read(format!("/proc/{parent}/cmdline"))
+    let cwd = std::fs::read_link(format!("/proc/{parent}/cwd")).unwrap_or_default();
+    let words: Vec<String> = std::fs::read(format!("/proc/{parent}/cmdline"))
         .map(|raw| {
             raw.split(|b| *b == 0)
                 .skip(1)
@@ -65,7 +76,39 @@ pub fn orrery_args() -> Vec<String> {
                 .map(|w| String::from_utf8_lossy(w).into_owned())
                 .collect()
         })
-        .unwrap_or_default()
+        .unwrap_or_default();
+    absolute_paths(&words, &cwd)
+}
+
+/// orrery's options that take a path.
+const PATH_OPTIONS: [&str; 8] = ["-d", "--datapath", "-c", "--configfile", "--orrery-config", "-l", "--logfile", "-u"];
+
+/// `words` with each path option's relative path joined to `cwd`. `~` paths stay, since
+/// orrery expands them itself.
+fn absolute_paths(words: &[String], cwd: &Path) -> Vec<String> {
+    let fix = |path: &str| {
+        if path.starts_with('~') || Path::new(path).is_absolute() {
+            path.to_owned()
+        } else {
+            cwd.join(path).to_string_lossy().into_owned()
+        }
+    };
+    let mut out = Vec::with_capacity(words.len());
+    let mut takes_path = false;
+    for word in words {
+        if takes_path {
+            out.push(fix(word));
+            takes_path = false;
+        } else if let Some((flag, path)) = word.split_once('=')
+            && PATH_OPTIONS.contains(&flag)
+        {
+            out.push(format!("{flag}={}", fix(path)));
+        } else {
+            takes_path = PATH_OPTIONS.contains(&word.as_str()) || word == "--unixsocket";
+            out.push(word.clone());
+        }
+    }
+    out
 }
 
 /// orrery's folder: this program's, which orrery starts its agents from. When this program
@@ -188,5 +231,33 @@ mod tests {
         assert!(w.starts_with("orrery put v9.9.9 in place, but runs v"), "{w}");
         saved.expected_version = Some(orrery_build::VERSION.into());
         assert_eq!(not_restarted(&saved), None);
+    }
+
+    #[test]
+    fn paths_made_absolute() {
+        let words = [
+            "-c",
+            "config/moonraker.conf",
+            "--orrery-config=o.toml",
+            "-d",
+            "~/printer_data",
+            "-n",
+            "-u",
+            "/run/m.sock",
+        ]
+        .map(str::to_owned);
+        assert_eq!(
+            absolute_paths(&words, Path::new("/home/pi")),
+            [
+                "-c",
+                "/home/pi/config/moonraker.conf",
+                "--orrery-config=/home/pi/o.toml",
+                "-d",
+                "~/printer_data",
+                "-n",
+                "-u",
+                "/run/m.sock"
+            ]
+        );
     }
 }

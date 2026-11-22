@@ -5,15 +5,18 @@ agent gets an `orrery` entry that installs a release over the running binaries, 
 the download and running the new version's preflight. A command-line `self-update` and
 `rollback` work when orrery itself doesn't.
 
-**Status (2026-11-22):** approved. Steps 2 to 5 are built:
+**Status (2026-11-22):** approved. Steps 2 to 6 are built:
 - the `LICENSE` file, the build's version and release flag, and `just dist`;
 - the CI workflows and the release notes in `CHANGELOG.md`, which haven't run yet, since the
   repository isn't on GitHub;
 - `preflight` and `.previous/` for the existing update entries;
 - archives, checksums, and a `repo` that wins, for every executable entry, and the `orrery`
-  entry as an executable entry that uses them; `orrery-updater self-update` and `rollback`.
-  No release exists yet to update to, so only the unit tests have run them.
-  `orrery preflight` comes in step 6.
+  entry as an executable entry that uses them; `orrery-updater self-update` and `rollback`;
+- `orrery preflight`, `orrery self-update` and `rollback`, and the warning for an agent of
+  another version.
+
+An update and a rollback ran end to end on a PC, from a shell and through a running orrery,
+with a release archive and a local stand-in for GitHub. No printer has run them yet.
 
 ## What exists today
 
@@ -129,9 +132,16 @@ the download and running the new version's preflight. A command-line `self-updat
    orrery's options aren't global. Preflight starts nothing, opens no port, and checks the
    minimum a new orrery needs to start:
    - the binary runs on this CPU;
-   - each new agent binary answers `--version` with the same version;
    - `orrery.toml` and `moonraker.conf` parse;
-   - the database opens, read-only, in a layout this version can read.
+   - the database opens, read-only, in a layout this version can read. During an update the
+     running orrery holds it open, and redb lets no second process in, so the check passes
+     with a note; the new orrery reads it when it starts. The check matters for a rollback
+     or a self-update while orrery is stopped. A missing database passes too.
+
+   It doesn't run the new agents: they come from the same archive, checked against its
+   checksum, and CI's smoke test runs each program of a release (user, 2026-11-22: running
+   every binary's `--version` was overkill). It writes nothing, and runs in orrery's folder;
+   orrery's path options are made absolute against orrery's own working folder first.
 
    A failed preflight deletes the hidden files and stops the update, with preflight's
    message. Nothing has changed then, not even `.previous/`.
@@ -170,8 +180,12 @@ back to the latest release on the next update.
 
 `orrery self-update` is for a printer whose orrery won't start, or won't answer:
 
-- **If orrery answers** on its unix socket, the command asks orrery for the update. The print
-  check and the restart then work as from Fluidd.
+- **If orrery answers** on its unix socket, the command asks orrery for the update, and
+  prints the update dialog's messages as they come. The print check and the restart then
+  work as from Fluidd. orrery's restart may close the connection before the answer; after
+  the update's last message, that's success. When orrery has no update manager, the command
+  goes on as if orrery didn't answer. `--version` and `--repo` always go to the updater, since
+  orrery's update method takes neither.
 - **If it doesn't,** the updater runs the same steps without orrery: download, check, unpack,
   preflight, and rename. It doesn't write the database, which is orrery's. It can't see
   whether a print runs, and doesn't need to: the renames change nothing for running
@@ -199,9 +213,11 @@ binary can't run at all, the updater can be run directly, and the README says so
 
 ## Mixed versions
 
-Agents send their version when they connect. orrery adds a warning to `server.info` when an
-agent's version differs from its own. That catches a set that was only partly replaced, such
-as after a crash during step 6.
+Agents send their version when they connect, in `server.connection.identify`. When one of
+orrery's own agents, one it starts from its own folder, has another version than orrery's,
+orrery adds a warning to `server.info` until it disconnects. That catches a set that was only
+partly replaced, as after a crash during step 6 or a program copied by hand. An agent from
+elsewhere has its own version, and gets no warning.
 
 ## Preflight for every entry
 

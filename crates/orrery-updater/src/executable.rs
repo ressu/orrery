@@ -554,18 +554,19 @@ async fn set_mode(old: &Path, new: &Path) -> std::io::Result<()> {
 }
 
 /// The entry's preflight, run from the new or the old `files` in `dir`, before they take
-/// effect. For one program, the words are its arguments. For an archive's programs, the
-/// first word names the one to run, and it runs in `dir`, beside the others.
+/// effect, in the entry's folder. For one program, the words are its arguments. For an
+/// archive's programs, the first word names the one to run; it finds the others beside its
+/// own path.
 async fn check(entry: &Entry, files: &[String], dir: &Path, out: &Messages) -> Result<(), String> {
     let crate::config::Kind::Executable(opts) = &entry.kind else { return Ok(()) };
     let Some(first) = entry.preflight.first() else { return Ok(()) };
     let _ = out.send(format!("{}Running the preflight check...", entry.prefix()));
-    let (program, args, cwd) = if opts.programs.is_empty() {
-        (files.first().map(String::as_str).unwrap_or_default(), &entry.preflight[..], opts.path.as_path())
+    let (program, args) = if opts.programs.is_empty() {
+        (files.first().map(String::as_str).unwrap_or_default(), &entry.preflight[..])
     } else {
-        (first.as_str(), &entry.preflight[1..], dir)
+        (first.as_str(), &entry.preflight[1..])
     };
-    crate::preflight::run(program, &dir.join(program), args, cwd, crate::preflight::LIMIT).await
+    crate::preflight::run(program, &dir.join(program), args, &opts.path, crate::preflight::LIMIT).await
 }
 
 /// The checksum a `SHA256SUMS` file gives for `name`, in lowercase hex.
@@ -977,7 +978,7 @@ pub(crate) mod tests {
         for program in ["tool-helper", "tool"] {
             let body = if program == "tool" {
                 format!(
-                    "#!/bin/sh\nfor a; do last=$a; done\nif [ \"$last\" = check ]; then\n  [ {tag} != broken ] || {{ echo the config is broken >&2; exit 1; }}\n  [ \"$1\" = -c ] && [ -x ./tool-helper ] || exit 9\nfi\necho {program} {tag}\n"
+                    "#!/bin/sh\nfor a; do last=$a; done\nif [ \"$last\" = check ]; then\n  [ {tag} != broken ] || {{ echo the config is broken >&2; exit 1; }}\n  [ \"$1\" = -c ] && [ -x \"$(dirname \"$0\")/tool-helper\" ] || exit 9\nfi\necho {program} {tag}\n"
                 )
             } else {
                 format!("#!/bin/sh\necho {program} {tag}\n")

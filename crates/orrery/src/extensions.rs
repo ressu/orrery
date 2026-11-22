@@ -87,6 +87,9 @@ pub async fn register_agent(app: &App, conn: ConnId, name: &str, identity: &Valu
         inner.agents.push((name.to_owned(), conn));
     }
     tracing::info!("Agent {name} connected");
+    if let Some(warning) = app.agents.version_warning(name, identity["version"].as_str()) {
+        app.set_version_warning(name, Some(warning));
+    }
     let event = json!({"agent": name, "event": "connected", "data": identity});
     app.notify_except("agent_event", vec![event], conn);
     Ok(())

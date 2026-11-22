@@ -84,6 +84,9 @@ pub enum Command {
 #[derive(Debug, Default)]
 pub struct Agents {
     configs: Vec<AgentConfig>,
+    /// The agents orrery runs from its own folder: its release's programs, which should be
+    /// its version.
+    own: Vec<String>,
     /// The process orrery started for each agent with a `command`, while it runs.
     processes: std::sync::Mutex<std::collections::HashMap<String, u32>>,
 }
@@ -100,7 +103,31 @@ impl Agents {
         let mut warnings = Vec::new();
         builtin_spoolman(config, agent_dir, &mut configs, &mut warnings);
         builtin_update_manager(config, agent_dir, &mut configs, &mut warnings);
-        Ok((Self { configs, ..Self::default() }, warnings))
+        let own = configs
+            .iter()
+            .filter(|c| match (&c.command, agent_dir) {
+                (Command::Run(argv), Some(dir)) => argv.first().is_some_and(|p| Path::new(p).parent() == Some(dir)),
+                _ => false,
+            })
+            .map(|c| c.name.clone())
+            .collect();
+        Ok((Self { configs, own, ..Self::default() }, warnings))
+    }
+
+    /// The warning for an agent of orrery's own that connected with another version than
+    /// orrery's, as after a program copied by hand. `None` for any other agent.
+    pub fn version_warning(&self, name: &str, version: Option<&str>) -> Option<String> {
+        if !self.own.iter().any(|n| n == name) {
+            return None;
+        }
+        let version = version.unwrap_or("?");
+        (version != orrery_build::VERSION).then(|| {
+            format!(
+                "The agent {name} is {version}, but orrery is {}. To put a matching set of orrery's programs in place, run: orrery self-update --version {}",
+                orrery_build::VERSION,
+                orrery_build::VERSION
+            )
+        })
     }
 
     fn get(&self, name: &str) -> Option<&AgentConfig> {
@@ -615,6 +642,7 @@ fn parent_of(pid: u32) -> Option<u32> {
 /// Removes an agent's endpoints when it disconnects.
 pub fn remove_agent(app: &App, name: &str) {
     app.set_agent_warnings(name, Vec::new());
+    app.set_version_warning(name, None);
     app.registry.write().expect("registry lock").unregister_prefix(&format!("/agent/{name}/"));
 }
 
@@ -834,12 +862,23 @@ mod tests {
             a.get("update_manager").unwrap().command,
             Command::Run(vec![program.to_string_lossy().into_owned()])
         );
+        // It's orrery's own, so it should be orrery's version.
+        assert_eq!(a.version_warning("update_manager", Some(orrery_build::VERSION)), None);
+        let w = a.version_warning("update_manager", Some("v0.0.1")).unwrap();
+        assert!(
+            w.starts_with(&format!("The agent update_manager is v0.0.1, but orrery is {}.", orrery_build::VERSION)),
+            "{w}"
+        );
+        assert!(a.version_warning("update_manager", None).unwrap().contains(" is ?, "));
+        // An agent orrery doesn't run from its own folder has a version of its own.
+        assert_eq!(a.version_warning("someone_else", Some("v9")), None);
 
         // [agent.update_manager] overrides each default it sets, and keeps the rest.
         let toml = "[agent.update_manager]\ncall_role = \"operator\"\ncommand = false\n";
         let (a, _) = with_spoolman("[update_manager]\n", toml, Some(dir.path())).unwrap();
         let c = a.get("update_manager").unwrap();
         assert_eq!((c.role, c.call_role, c.command.clone()), (Role::Admin, Role::Operator, Command::Off));
+        assert_eq!(a.version_warning("update_manager", Some("v0.0.1")), None);
         assert_eq!(a.call_role("update_manager", "status"), Role::Viewer);
         let toml =
             "[agent.update_manager]\nrole = \"agent\"\n[agent.update_manager.call_roles]\nrefresh = \"operator\"\n";

@@ -46,16 +46,60 @@ pub struct Database {
 /// redb's page cache, in bytes. Half of it may also hold a write transaction's pages.
 const CACHE_SIZE: usize = 1024 * 1024;
 
+/// Where the store is: `orrery.redb` in `[database] database_path`, or in the data folder's
+/// `database`.
+pub fn file(config: &Config, paths: &Paths) -> std::path::PathBuf {
+    let dir = match config.section("database").get_opt_str("database_path") {
+        Some(p) => Path::new(&p).to_path_buf(),
+        None => paths.database_dir(),
+    };
+    dir.join("orrery.redb")
+}
+
+/// What `orrery preflight` finds of the store.
+#[derive(Debug, PartialEq)]
+pub enum Readable {
+    /// This version reads it.
+    Yes,
+    /// There's none yet; orrery makes one when it starts.
+    Missing,
+    /// Another process, the running orrery, has it open.
+    InUse,
+}
+
+/// Opens the store read-only, without changing it, to check that this version reads it.
+pub fn check_readable(path: &Path) -> Result<Readable> {
+    if !path.exists() {
+        return Ok(Readable::Missing);
+    }
+    let db = match redb::Builder::new().set_cache_size(CACHE_SIZE).open_read_only(path) {
+        Ok(db) => db,
+        Err(redb::DatabaseError::DatabaseAlreadyOpen) => return Ok(Readable::InUse),
+        Err(e) => return Err(e).with_context(|| format!("opening {}", path.display())),
+    };
+    let tx = db.begin_read()?;
+    // A table that isn't there yet is one orrery makes when it starts.
+    let tables = [
+        tx.open_table(NAMESPACES).map(drop),
+        tx.open_table(LOCAL).map(drop),
+        tx.open_table(JOB_HISTORY).map(drop),
+        tx.open_table(JOB_TOTALS).map(drop),
+    ];
+    for table in tables {
+        match table {
+            Ok(()) | Err(redb::TableError::TableDoesNotExist(_)) => {}
+            Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+        }
+    }
+    Ok(Readable::Yes)
+}
+
 impl Database {
     pub fn open(config: &Config, paths: &Paths) -> Result<Self> {
-        let section = config.section("database");
-        let dir = match section.get_opt_str("database_path") {
-            Some(p) => Path::new(&p).to_path_buf(),
-            None => paths.database_dir(),
-        };
-        section.get_bool("enable_database_debug", false)?;
-        std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-        let path = dir.join("orrery.redb");
+        config.section("database").get_bool("enable_database_debug", false)?;
+        let path = file(config, paths);
+        let dir = path.parent().unwrap_or(Path::new("."));
+        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
         // redb's default cache is 1 GiB, so it grows to hold every page orrery reads: 3.7 MB on
         // bluev2 (2026-11-22), and more as the history grows. The kernel caches the file anyway.
         let db = redb::Builder::new()

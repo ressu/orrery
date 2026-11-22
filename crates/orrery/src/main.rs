@@ -55,6 +55,23 @@ enum Command {
         #[command(subcommand)]
         action: UserAction,
     },
+    /// Check that this orrery can start with the config and the database, without starting it.
+    /// An update runs it from the new version, before the new version takes effect.
+    Preflight,
+    /// Update orrery to its latest release. The running orrery does the update and restarts;
+    /// when it doesn't answer, orrery-updater replaces the programs, and orrery runs them once
+    /// it restarts.
+    SelfUpdate {
+        /// Install this release instead, such as v0.2.0. orrery-updater installs it.
+        #[arg(long = "version", value_name = "version")]
+        tag: Option<String>,
+        /// The repository to take the release from, as owner/name. orrery-updater installs it.
+        #[arg(long, value_name = "owner/name")]
+        repo: Option<String>,
+    },
+    /// Put back the programs the last update replaced, from .previous/. The running orrery
+    /// restarts with them; when it doesn't answer, they take effect once it restarts.
+    Rollback,
     /// Run with sudo. Writes orrery.service, the orrery-admin group, and a polkit rule that lets
     /// orrery.service manage services, reboot, and shut down. Run it again after an upgrade.
     /// -d, -c, and --orrery-config go into the service; without them, the installed ones stay.
@@ -359,6 +376,17 @@ fn main() -> ExitCode {
     match &cli.command {
         Some(Command::Key { action }) => return key_command(&socket_path, action),
         Some(Command::User { action }) => return user_command(&socket_path, action),
+        Some(Command::Preflight) => {
+            let report = orrery::preflight::run(&paths, (&toml.0, toml.1));
+            for line in &report.lines {
+                println!("{line}");
+            }
+            return if report.ok { ExitCode::SUCCESS } else { ExitCode::FAILURE };
+        }
+        Some(Command::SelfUpdate { tag, repo }) => {
+            return self_update_command(&cli, &socket_path, false, tag.as_deref(), repo.as_deref());
+        }
+        Some(Command::Rollback) => return self_update_command(&cli, &socket_path, true, None, None),
         Some(Command::Setup(_)) | None => {}
     }
     let (_log_guard, log_warning) = init_logging(&cli, &paths);
@@ -382,6 +410,83 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// How long `orrery self-update` waits for the running orrery's update: a download on a slow
+/// connection, and the preflight.
+const SELF_UPDATE_LIMIT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+/// `orrery self-update` and `orrery rollback`: asks the running orrery, which checks for a
+/// print and restarts, or runs orrery-updater beside this program when orrery doesn't answer,
+/// or has no update manager. `--version` and `--repo` always go to orrery-updater.
+fn self_update_command(cli: &Cli, socket: &Path, rollback: bool, tag: Option<&str>, repo: Option<&str>) -> ExitCode {
+    let (method, application) =
+        if rollback { ("machine.update.rollback", "rollback_orrery") } else { ("machine.update.upgrade", "orrery") };
+    if tag.is_none() && repo.is_none() {
+        let (mut said, mut complete) = (Vec::<String>::new(), false);
+        let watched = unix_socket::call_watching(
+            socket,
+            method,
+            serde_json::json!({"name": "orrery"}),
+            SELF_UPDATE_LIMIT,
+            |event, params| {
+                let message = &params[0];
+                if event == "notify_update_response" && message["application"] == application {
+                    let line = message["message"].as_str().unwrap_or_default().to_owned();
+                    println!("{line}");
+                    said.push(line);
+                    complete |= message["complete"] == true;
+                }
+            },
+        );
+        match watched {
+            // orrery restarts at the end, which may close the connection before the answer.
+            Ok(unix_socket::Watched::Closed) if !complete => {
+                eprintln!("orrery closed the connection before the update finished. Its log says why.");
+                return ExitCode::FAILURE;
+            }
+            Ok(unix_socket::Watched::Answered(_) | unix_socket::Watched::Closed) => {
+                if said.is_empty() {
+                    println!("orrery {} is the latest release.", orrery_build::VERSION);
+                }
+                return ExitCode::SUCCESS;
+            }
+            // No update manager, so no method or no entry for orrery.
+            Ok(unix_socket::Watched::Refused(404 | -32601, message)) => {
+                println!("orrery has no update manager running ({message}), so orrery-updater does it without orrery.");
+            }
+            Ok(unix_socket::Watched::Refused(_, message)) => {
+                // The update dialog's messages usually said it already.
+                if !said.iter().any(|line| line.ends_with(&message)) {
+                    eprintln!("{message}");
+                }
+                return ExitCode::FAILURE;
+            }
+            Err(e) => println!("orrery doesn't answer ({e:#}), so orrery-updater does it without orrery."),
+        }
+    }
+    let dir = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf)).unwrap_or_default();
+    let updater = dir.join("orrery-updater");
+    let mut command = std::process::Command::new(&updater);
+    command.arg(if rollback { "rollback" } else { "self-update" });
+    if let Some(tag) = tag {
+        command.args(["--version", tag]);
+    }
+    if let Some(repo) = repo {
+        command.args(["--repo", repo]);
+    }
+    command.arg("--");
+    // orrery's own options, for the preflight, which runs in another folder.
+    let cwd = std::env::current_dir().unwrap_or_default();
+    for (flag, path) in [("-d", &cli.data_path), ("-c", &cli.config_file), ("--orrery-config", &cli.orrery_config)] {
+        if let Some(path) = path {
+            let path = expand_home(path).unwrap_or_else(|_| path.clone());
+            command.arg(flag).arg(cwd.join(path));
+        }
+    }
+    let e = command.exec();
+    eprintln!("orrery can't run {}: {e}", updater.display());
+    ExitCode::FAILURE
 }
 
 /// `orrery key list|show|rotate`: one request to the running orrery, over the unix socket,

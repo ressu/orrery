@@ -1541,6 +1541,7 @@ dependencies = [
 name = "orrery-spoolman"
 version = "0.1.0"
 dependencies = [
+ "clap",
  "futures-util",
  "orrery-agent",
  "orrery-build",

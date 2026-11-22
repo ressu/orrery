@@ -169,6 +169,62 @@ async fn read_messages(
     }
 }
 
+/// How a request that orrery may end by restarting went.
+#[derive(Debug, PartialEq)]
+pub enum Watched {
+    /// orrery answered.
+    Answered(serde_json::Value),
+    /// orrery refused it, with its code and message.
+    Refused(i64, String),
+    /// The connection closed without an answer, as when orrery restarts.
+    Closed,
+}
+
+/// Sends one request to a running orrery, waits up to `limit` for the answer, and passes each
+/// notification to `notified` meanwhile. `Err` when orrery can't be reached.
+pub fn call_watching(
+    path: &Path,
+    method: &str,
+    params: serde_json::Value,
+    limit: std::time::Duration,
+    mut notified: impl FnMut(&str, &serde_json::Value),
+) -> Result<Watched> {
+    use std::io::{BufRead, Write};
+    let mut stream = std::os::unix::net::UnixStream::connect(path)
+        .with_context(|| format!("can't reach orrery at {}", path.display()))?;
+    stream.set_read_timeout(Some(limit))?;
+    let request = serde_json::json!({"jsonrpc": "2.0", "method": method, "params": params, "id": 1});
+    let mut data = request.to_string().into_bytes();
+    data.push(ETX);
+    stream.write_all(&data)?;
+    let mut reader = std::io::BufReader::new(stream);
+    loop {
+        let mut message = Vec::new();
+        match reader.read_until(ETX, &mut message) {
+            Ok(_) => {}
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {
+                anyhow::bail!("orrery didn't answer in {} seconds", limit.as_secs())
+            }
+            Err(_) => return Ok(Watched::Closed),
+        }
+        if message.pop() != Some(ETX) {
+            return Ok(Watched::Closed);
+        }
+        let reply: serde_json::Value = serde_json::from_slice(&message)?;
+        if reply["id"] != 1 {
+            if let Some(method) = reply["method"].as_str() {
+                notified(method, &reply["params"]);
+            }
+            continue;
+        }
+        if let Some(error) = reply.get("error") {
+            let message = error["message"].as_str().unwrap_or("orrery refused the request").to_owned();
+            return Ok(Watched::Refused(error["code"].as_i64().unwrap_or(0), message));
+        }
+        return Ok(Watched::Answered(reply["result"].clone()));
+    }
+}
+
 /// Sends one JSON-RPC request to a running orrery over its unix socket and returns the result,
 /// for the `orrery` command line. Blocking: the command line has no runtime.
 pub fn call(path: &Path, method: &str, params: serde_json::Value) -> Result<serde_json::Value> {

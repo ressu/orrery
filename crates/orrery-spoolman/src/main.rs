@@ -76,8 +76,17 @@ impl State {
     }
 }
 
+/// Moonraker's Spoolman integration, as an orrery agent. orrery starts it.
+#[derive(clap::Parser)]
+#[command(version = orrery_build::LONG_VERSION)]
+struct Cli {
+    /// The unix socket to reach orrery at, for tests. orrery gives its agents their socket.
+    socket: Option<String>,
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
+    let cli = <Cli as clap::Parser>::parse();
     orrery_agent::init_logging();
     let spoolman = Arc::new(Spoolman {
         server: OnceLock::new(),
@@ -86,7 +95,7 @@ async fn main() {
         state: Mutex::new(State { extruder: "extruder".into(), ..State::default() }),
     });
     let mut builder = AgentBuilder::new(NAME).version(orrery_build::VERSION);
-    if let Some(socket) = std::env::args().nth(1) {
+    if let Some(socket) = cli.socket {
         builder = builder.socket(socket);
     }
     let s = spoolman.clone();

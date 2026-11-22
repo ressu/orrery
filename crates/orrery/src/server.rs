@@ -109,6 +109,8 @@ pub struct App {
     warnings: Mutex<Vec<String>>,
     /// Each connected agent's own warnings, from `orrery.agent.set_warnings`.
     agent_warnings: Mutex<std::collections::BTreeMap<String, Vec<String>>>,
+    /// A connected agent of orrery's own whose version isn't orrery's.
+    version_warnings: Mutex<std::collections::BTreeMap<String, String>>,
     /// Set when a client asks orrery to restart; `main` waits for it beside the stop signals.
     pub restart: tokio::sync::Notify,
 }
@@ -188,6 +190,7 @@ impl App {
             agents,
             warnings: Mutex::new(warnings),
             agent_warnings: Mutex::default(),
+            version_warnings: Mutex::default(),
             restart: tokio::sync::Notify::new(),
         });
         app.register_endpoints();
@@ -238,6 +241,23 @@ impl App {
         }
         if !warnings.is_empty() {
             all.insert(agent.to_owned(), warnings);
+        }
+    }
+
+    /// Sets or clears the warning for an agent of orrery's own of another version, and logs a
+    /// new one.
+    pub fn set_version_warning(&self, agent: &str, warning: Option<String>) {
+        let mut all = self.version_warnings.lock().expect("version warnings lock");
+        match warning {
+            Some(w) => {
+                if all.get(agent) != Some(&w) {
+                    tracing::warn!("{w}");
+                }
+                all.insert(agent.to_owned(), w);
+            }
+            None => {
+                all.remove(agent);
+            }
         }
     }
 
@@ -526,6 +546,7 @@ async fn server_info(app: Arc<App>, req: Request) -> ApiResult {
     let raw = req.args.opt_bool("raw")?.unwrap_or(false);
     let mut warnings: Vec<String> = app.warnings.lock().expect("warnings lock").clone();
     warnings.extend(app.agent_warnings.lock().expect("agent warnings lock").values().flatten().cloned());
+    warnings.extend(app.version_warnings.lock().expect("version warnings lock").values().cloned());
     let warnings: Vec<String> = warnings.into_iter().map(|w| if raw { w } else { w.replace('\n', "<br/>") }).collect();
     let state = app.klippy.state();
     Ok(json!({

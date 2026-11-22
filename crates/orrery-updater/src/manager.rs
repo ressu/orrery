@@ -431,6 +431,7 @@ impl Manager {
         for s in states.iter_mut().filter(|s| release::is_own(&s.entry)) {
             if let Kind::Executable(opts) = &s.entry.kind {
                 s.installed = Some(executable::installed(opts).await);
+                release::restarted(&mut s.stored.release);
                 s.stored.status = own_status(s);
             }
         }
@@ -647,13 +648,8 @@ impl Manager {
             }
             Kind::Executable(opts) => {
                 let installed = executable::installed(opts).await;
-                // The check after the restart that follows orrery's own update.
-                if opts.orrery && s.stored.release.expected_version.as_deref() == Some(orrery_build::VERSION) {
-                    tracing::info!(
-                        "orrery runs {}, which the last update or rollback put in place",
-                        orrery_build::VERSION
-                    );
-                    s.stored.release.expected_version = None;
+                if opts.orrery {
+                    release::restarted(&mut s.stored.release);
                 }
                 if fetch {
                     match &self.github {
