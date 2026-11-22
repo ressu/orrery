@@ -7,6 +7,7 @@
 //! [moonraker_compat]
 //! legacy_api_key = "admin"  # Moonraker's one API key and its role; false: no such key
 //! user_source_fix = true    # Moonraker's replies call local users' source "moonraker"
+//! service_alias = true      # `orrery setup` makes moonraker.service a name for orrery.service
 //! ```
 //!
 //! OctoPrint's compatibility will get a section of its own.
@@ -31,6 +32,9 @@ pub struct MoonrakerCompat {
     pub api_key: Option<Role>,
     /// Moonraker's replies call local users' source `moonraker`, which Fluidd needs.
     pub user_source_fix: bool,
+    /// `orrery setup` makes `moonraker.service` a name for `orrery.service`, so units that start
+    /// or wait for Moonraker get orrery.
+    pub service_alias: bool,
 }
 
 impl MoonrakerCompat {
@@ -48,7 +52,7 @@ impl MoonrakerCompat {
             Some(other) => bail!("[moonraker_compat] enabled: {other} isn't true or false"),
         };
         if !enabled {
-            return Ok(Self { enabled, api_key: None, user_source_fix: false });
+            return Ok(Self { enabled, api_key: None, user_source_fix: false, service_alias: false });
         }
         let api_key = match table.as_ref().and_then(|t| t.get("legacy_api_key")) {
             // Moonraker's own option, from moonraker.conf: on unless it's turned off.
@@ -70,7 +74,12 @@ impl MoonrakerCompat {
             Some(Value::Bool(on)) => *on,
             Some(other) => bail!("[moonraker_compat] user_source_fix: {other} isn't true or false"),
         };
-        Ok(Self { enabled, api_key, user_source_fix })
+        let service_alias = match table.as_ref().and_then(|t| t.get("service_alias")) {
+            None => true,
+            Some(Value::Bool(on)) => *on,
+            Some(other) => bail!("[moonraker_compat] service_alias: {other} isn't true or false"),
+        };
+        Ok(Self { enabled, api_key, user_source_fix, service_alias })
     }
 
     /// The name of a user's source in Moonraker's replies.
@@ -134,11 +143,15 @@ mod tests {
         assert_eq!(c.parse_source("moonraker"), "moonraker");
         let c = compat(Some(""), "[moonraker_compat]\nenabled = false\n").unwrap();
         assert_eq!((c.enabled, c.api_key, c.source_name(LOCAL_SOURCE)), (false, None, "local"));
+        assert!(!c.service_alias);
+        assert!(compat(Some(""), "").unwrap().service_alias);
+        assert!(!compat(Some(""), "[moonraker_compat]\nservice_alias = false\n").unwrap().service_alias);
         assert_eq!(compat(Some(""), "").unwrap().source_name(LOCAL_SOURCE), "moonraker");
         for bad in [
             "[moonraker_compat]\nlegacy_api_key = \"owner\"\n",
             "[moonraker_compat]\nlegacy_api_key = true\n",
             "[moonraker_compat]\nuser_source_fix = \"moonraker\"\n",
+            "[moonraker_compat]\nservice_alias = \"yes\"\n",
             "[authorization]\nenable_api_key = false\n",
         ] {
             assert!(compat(Some(""), bad).is_err(), "{bad}");

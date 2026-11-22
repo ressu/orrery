@@ -63,14 +63,13 @@ To see which one the printer needs, run `uname -m`. It prints `aarch64`, `armv7l
    Setup stops and disables Moonraker, then starts orrery on Moonraker's port. Fluidd,
    Mainsail, and KlipperScreen connect to orrery as they did to Moonraker.
 
-If other services on the printer start Moonraker, add `--alias-moonraker`. aldis is one of
-these. The flag makes `moonraker.service` another name for orrery's service, so they start orrery
-instead. Moonraker's own service file is usually in the way: setup then stops and changes
-nothing. To disable Moonraker and move its file aside, add `--force` too:
+   Setup also makes `moonraker.service` another name for orrery's service, so services that
+   start Moonraker start orrery instead. aldis is one of these. For that, it moves Moonraker's
+   own service file aside, to `/etc/systemd/system/moonraker.service.orrery-saved`.
 
-```
-sudo ~/orrery/orrery setup --migrate --alias-moonraker --force
-```
+To try orrery beside Moonraker, keep Moonraker's service file: add `--no-alias-moonraker`.
+Later runs of setup keep that choice. Without `--migrate`, setup moves Moonraker's file only
+with `--force`, and otherwise says how to choose.
 
 To go back to Moonraker, run `sudo ~/orrery/orrery setup --remove`. It removes orrery's service,
 puts Moonraker's service file back if setup moved it, and prints the command that starts

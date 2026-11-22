@@ -10,8 +10,10 @@
 //!
 //! By default setup only writes the files, so it's also how orrery's setup is upgraded.
 //! `--disable-moonraker` and `--start` switch over from Moonraker, and `--migrate` does both.
-//! `--alias-moonraker` makes `moonraker.service` a name for `orrery.service`; Moonraker's own
-//! unit file is moved aside only with `--force`.
+//! With Moonraker compatibility, `moonraker.service` becomes a name for `orrery.service`.
+//! `--alias-moonraker` and `--no-alias-moonraker` choose, then `[moonraker_compat]
+//! service_alias`, then the last choice, recorded in the unit. Moonraker's own unit file is
+//! moved aside only with `--force` or `--migrate`.
 //! Every system path is joined to a root folder, and every command goes through [`Host`], so
 //! the tests run in a temporary folder.
 
@@ -31,6 +33,8 @@ const MOONRAKER_PATH: &str = "etc/systemd/system/moonraker.service";
 const SAVED_PATH: &str = "etc/systemd/system/moonraker.service.orrery-saved";
 /// The line in orrery's unit that makes it answer for Moonraker.
 const ALIAS_LINE: &str = "Alias=moonraker.service";
+/// The line in orrery's unit that records `--no-alias-moonraker`, so later runs keep it.
+const NO_ALIAS_LINE: &str = "# moonraker.service isn't a name for this unit: setup ran with --no-alias-moonraker.";
 /// The first line of the strict rule, so `--check` knows which rule is installed.
 const STRICT_MARK: &str = "// orrery setup: strict rule";
 
@@ -83,9 +87,10 @@ pub struct Options {
     pub disable_moonraker: bool,
     /// Enable `orrery.service`, and start or restart it.
     pub start: bool,
-    /// Make `moonraker.service` a name for `orrery.service`.
-    pub alias_moonraker: bool,
-    /// Move Moonraker's own unit file aside for the alias.
+    /// `--alias-moonraker` or `--no-alias-moonraker`: whether `moonraker.service` is a name
+    /// for `orrery.service`. `None`: the config or the last choice decides.
+    pub alias: Option<bool>,
+    /// Move Moonraker's own unit file aside, so `moonraker.service` can be orrery's name.
     pub force: bool,
     /// The server's path options, as given. They go into `ExecStart`.
     pub data_path: Option<PathBuf>,
@@ -137,14 +142,45 @@ pub fn run(options: &Options, root: &Path, host: &mut dyn Host) -> Result<Report
     check_polkit(host)?;
     let installed_unit = std::fs::read_to_string(sys(UNIT_PATH)).ok();
     let args = server_args(options, &account, installed_unit.as_deref())?;
-    // Like the path options, an installed alias stays until --remove.
-    let alias = options.alias_moonraker || installed_unit.as_deref().is_some_and(has_alias);
-    let unit = unit_file(&account.name, &options.exe, &args, alias);
+    let config = load_config(&account, &args)?;
     let moonraker_unit = moonraker_unit(&sys(MOONRAKER_PATH))?;
+    // Whether moonraker.service is orrery's name: the flag, then orrery.toml, then the choice
+    // recorded in the installed unit, then the default, on with Moonraker compatibility.
+    let compat = crate::compat::MoonrakerCompat::new(&config)?;
+    let recorded = installed_unit.as_deref().and_then(|u| {
+        if u.lines().any(|l| l == ALIAS_LINE) {
+            Some(true)
+        } else if u.lines().any(|l| l == NO_ALIAS_LINE) {
+            Some(false)
+        } else {
+            None
+        }
+    });
+    let from_toml = config.toml_has("moonraker_compat", "service_alias").then_some(compat.service_alias);
+    let want_alias = options.alias.or(from_toml).or(recorded).unwrap_or(compat.service_alias);
+    // Off by a flag, now or before: the unit records it. orrery.toml records its own.
+    let declined = !want_alias && from_toml.is_none() && options.alias.or(recorded) == Some(false);
+    // The command that repeats this run's choice, for the messages.
+    let flag = match options.alias {
+        Some(true) => " --alias-moonraker",
+        Some(false) => " --no-alias-moonraker",
+        None => "",
+    };
+    let blocked = want_alias && moonraker_unit == MoonrakerUnit::Own && !options.force;
+    let has_name = moonraker_unit == MoonrakerUnit::Alias;
+    // systemd loses track of a running unit whose names change at the reload: it reports it
+    // stopped while its processes run on. So the names change only while orrery is stopped:
+    // with --start, setup stops it for the change; without, it leaves the names as they are.
+    let wanted = want_alias && !blocked;
+    let waits = wanted != has_name && !options.check && !options.start && is_active(host, "orrery")?;
+    let alias = if waits { has_name } else { wanted };
+    let name_changes = alias != has_name;
+    let declined = declined && !waits;
+    let unit = unit_file(&account.name, &options.exe, &args, alias, declined);
     let gid = group_gid(host)?;
     let strict = options.strict
         || (options.check && std::fs::read_to_string(sys(RULE_PATH)).is_ok_and(|r| r.starts_with(STRICT_MARK)));
-    let units = if strict { Some(allowed_units(&account, &args)?) } else { None };
+    let units = if strict { Some(allowed_units(&account, &args, &config)?) } else { None };
     let rule = |gid: u32| match &units {
         Some(units) => strict_rule(&account.name, gid, units),
         None => normal_rule(&account.name, gid),
@@ -165,15 +201,17 @@ pub fn run(options: &Options, root: &Path, host: &mut dyn Host) -> Result<Report
         let rule = rule(gid.unwrap_or(u32::MAX));
         check_file(&mut report, &sys(RULE_PATH), &format!("/{RULE_PATH} ({rule_kind})"), &rule);
         report.line(format!("  {SERVICE} is {}.", unit_state(host, "orrery")?));
-        match moonraker_unit {
-            MoonrakerUnit::Alias => report.line(format!("  {MOONRAKER} is a name for {SERVICE}.")),
-            MoonrakerUnit::Own if alias => {
+        match (moonraker_unit, want_alias) {
+            (MoonrakerUnit::Alias, true) => report.line(format!("  {MOONRAKER} is a name for {SERVICE}.")),
+            (MoonrakerUnit::Alias, false) => {
                 report.ok = false;
-                report.line(format!(
-                    "  /{MOONRAKER_PATH} is Moonraker's own unit, as after a Moonraker install, so it isn't a name for {SERVICE}."
-                ));
+                report.line(format!("  {MOONRAKER} is a name for {SERVICE}, but it shouldn't be."));
             }
-            MoonrakerUnit::Missing if alias => {
+            (MoonrakerUnit::Own, true) => {
+                report.ok = false;
+                report.line(format!("  /{MOONRAKER_PATH} is Moonraker's own unit, so it isn't a name for {SERVICE}."));
+            }
+            (MoonrakerUnit::Missing, true) => {
                 report.ok = false;
                 report.line(format!("  /{MOONRAKER_PATH}, the name for {SERVICE}, is missing."));
             }
@@ -184,23 +222,18 @@ pub fn run(options: &Options, root: &Path, host: &mut dyn Host) -> Result<Report
         }
         if !report.ok {
             report.line("To put the missing parts in place, run:");
-            let force = alias && moonraker_unit == MoonrakerUnit::Own;
             report.line(format!(
                 "  sudo orrery setup{}{}",
                 if strict { " --strict" } else { "" },
-                if force { " --force" } else { "" }
+                if blocked { " --force" } else { "" }
             ));
+            if blocked {
+                keep_moonraker(&mut report);
+            }
         }
         return Ok(report);
     }
 
-    if alias && moonraker_unit == MoonrakerUnit::Own && !options.force {
-        bail!(
-            "/{MOONRAKER_PATH} is Moonraker's own unit, so orrery can't take its name. Nothing has changed.\n\
-             With --force, setup stops and disables Moonraker, and moves its unit to /{SAVED_PATH}. orrery setup --remove puts it back. To do that, run:\n  \
-             sudo orrery setup --alias-moonraker --force"
-        );
-    }
     let mut report = Report { ok: true, ..Report::default() };
     report.line(format!("orrery setup for the user {}:", account.name));
     let gid = match gid {
@@ -217,20 +250,16 @@ pub fn run(options: &Options, root: &Path, host: &mut dyn Host) -> Result<Report
     };
     let unit_changed = install(&mut report, &sys(UNIT_PATH), &format!("/{UNIT_PATH}"), &unit)?;
     install(&mut report, &sys(RULE_PATH), &format!("/{RULE_PATH} ({rule_kind})"), &rule(gid))?;
-    // systemd loses track of a running unit that gets a new name at the reload: it reports it
-    // stopped while its processes run on. So orrery stops first, and starts after the reload.
-    let stopped_for_alias = alias && moonraker_unit != MoonrakerUnit::Alias && is_active(host, "orrery")?;
-    if stopped_for_alias {
+    let stopped_for_name = name_changes && is_active(host, "orrery")?;
+    if stopped_for_name {
         command(host, "systemctl", &["stop", SERVICE])?;
     }
     if alias {
         take_moonrakers_name(&mut report, host, &sys, moonraker_unit)?;
+    } else if moonraker_unit == MoonrakerUnit::Alias {
+        give_back_moonrakers_name(&mut report, &sys)?;
     }
     command(host, "systemctl", &["daemon-reload"])?;
-    if stopped_for_alias && !options.start {
-        command(host, "systemctl", &["start", SERVICE])?;
-        report.line(format!("  Stopped {SERVICE} while it got its new name, and started it again."));
-    }
     if alias {
         // Moonraker's unit is aside, and its name is orrery's: disabling it would disable orrery.
     } else if options.disable_moonraker {
@@ -242,16 +271,17 @@ pub fn run(options: &Options, root: &Path, host: &mut dyn Host) -> Result<Report
         }
     }
     let running = is_active(host, "orrery")?;
-    if options.start && stopped_for_alias {
+    if options.start && stopped_for_name {
         command(host, "systemctl", &["enable", SERVICE])?;
         command(host, "systemctl", &["start", SERVICE])?;
-        report.line(format!("  Enabled {SERVICE}, and restarted it for its new name."));
+        report.line(format!("  Enabled {SERVICE}, and restarted it for its new names."));
     } else if options.start {
         command(host, "systemctl", &["enable", SERVICE])?;
         // restart, not start: an upgraded unit or binary must take effect.
         command(host, "systemctl", &[if running { "restart" } else { "start" }, SERVICE])?;
         report.line(format!("  Enabled {SERVICE} and {} it.", if running { "restarted" } else { "started" }));
-    } else if running && unit_changed {
+    } else if running && unit_changed && !waits {
+        // When setup leaves the names, its own message says to restart.
         report.line(format!("{SERVICE} runs with the old unit. To use the new one, run:"));
         report.line(format!("  sudo systemctl restart {SERVICE}"));
     } else if !running {
@@ -262,7 +292,36 @@ pub fn run(options: &Options, root: &Path, host: &mut dyn Host) -> Result<Report
         report.line("The strict rule names each allowed service. After adding a service, run setup again:");
         report.line("  sudo orrery setup --strict");
     }
+    if waits {
+        let (what, force) = if wanted {
+            (format!("give {SERVICE} the name {MOONRAKER}"), if options.force { " --force" } else { "" })
+        } else {
+            (format!("take the name {MOONRAKER} away from {SERVICE}"), "")
+        };
+        report.line(format!(
+            "{SERVICE} runs, and has to restart for its names to change, so setup leaves them as they are."
+        ));
+        report.line(format!("To restart orrery and {what}, run:"));
+        report.line(format!("  sudo orrery setup{flag} --start{force}"));
+    } else if name_changes && alias {
+        report.line(format!("{MOONRAKER} is now a name for {SERVICE}. To give the name back, run:"));
+        report.line("  sudo orrery setup --no-alias-moonraker --start");
+    }
+    if blocked {
+        report.line(format!(
+            "/{MOONRAKER_PATH} is Moonraker's own unit, so orrery doesn't take its name, and services that start Moonraker stop orrery."
+        ));
+        report.line("To disable Moonraker and move its unit aside, so those services get orrery, run:");
+        report.line(format!("  sudo orrery setup{flag} --force{}", if running { " --start" } else { "" }));
+        keep_moonraker(&mut report);
+    }
     Ok(report)
+}
+
+/// How to keep Moonraker's own unit, as when trying orrery beside Moonraker.
+fn keep_moonraker(report: &mut Report) {
+    report.line("To keep Moonraker's unit, and stop this note, run:");
+    report.line("  sudo orrery setup --no-alias-moonraker");
 }
 
 /// What's at `/etc/systemd/system/moonraker.service`.
@@ -285,10 +344,6 @@ fn moonraker_unit(path: &Path) -> Result<MoonrakerUnit> {
         }
         Ok(_) => Ok(MoonrakerUnit::Own),
     }
-}
-
-fn has_alias(unit: &str) -> bool {
-    unit.lines().any(|l| l == ALIAS_LINE)
 }
 
 /// Makes `moonraker.service` a name for orrery's unit: stops and disables Moonraker, moves its
@@ -316,6 +371,17 @@ fn take_moonrakers_name(
     std::os::unix::fs::symlink(SERVICE, sys(MOONRAKER_PATH))
         .with_context(|| format!("can't make /{MOONRAKER_PATH}"))?;
     report.line(format!("  Made {MOONRAKER} a name for {SERVICE}."));
+    Ok(())
+}
+
+/// Takes `moonraker.service` away from orrery. Moonraker's own unit stays where `--force` put
+/// it; `--remove` puts it back.
+fn give_back_moonrakers_name(report: &mut Report, sys: &dyn Fn(&str) -> PathBuf) -> Result<()> {
+    std::fs::remove_file(sys(MOONRAKER_PATH)).with_context(|| format!("can't remove /{MOONRAKER_PATH}"))?;
+    report.line(format!("  Removed {MOONRAKER}, the name for {SERVICE}."));
+    if sys(SAVED_PATH).exists() {
+        report.line(format!("  Moonraker's own unit stays at /{SAVED_PATH}."));
+    }
     Ok(())
 }
 
@@ -512,7 +578,7 @@ fn quote(word: &str) -> String {
     out
 }
 
-pub fn unit_file(user: &str, exe: &Path, args: &[String], alias: bool) -> String {
+pub fn unit_file(user: &str, exe: &Path, args: &[String], alias: bool, declined: bool) -> String {
     let mut exec = quote(&exe.display().to_string());
     for arg in args {
         exec.push(' ');
@@ -528,7 +594,10 @@ pub fn unit_file(user: &str, exe: &Path, args: &[String], alias: bool) -> String
     } else {
         (
             "orrery, an API server for Klipper",
-            format!("# Both listen on port 7125, so starting one stops the other.\nConflicts={MOONRAKER}\n"),
+            format!(
+                "{}# Both listen on port 7125, so starting one stops the other.\nConflicts={MOONRAKER}\n",
+                if declined { format!("{NO_ALIAS_LINE}\n") } else { String::new() }
+            ),
             String::new(),
         )
     };
@@ -634,26 +703,40 @@ pub fn strict_rule(user: &str, gid: u32, units: &AllowedUnits) -> String {
     )
 }
 
-/// The units orrery allows, read as orrery reads them: `moonraker.asvc` in the data folder,
-/// the names that are always allowed, and the system units of agents in the config.
-fn allowed_units(account: &Account, args: &[String]) -> Result<AllowedUnits> {
-    let arg = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).map(PathBuf::from);
-    let data = arg("-d").unwrap_or_else(|| account.home.join("printer_data"));
-    let config_file = arg("-c").unwrap_or_else(|| data.join("config/moonraker.conf"));
-    let (toml, required) = match arg("--orrery-config") {
+/// The value of one of orrery's path options in `ExecStart`'s arguments.
+fn arg_path(args: &[String], flag: &str) -> Option<PathBuf> {
+    args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).map(PathBuf::from)
+}
+
+fn data_folder(account: &Account, args: &[String]) -> PathBuf {
+    arg_path(args, "-d").unwrap_or_else(|| account.home.join("printer_data"))
+}
+
+/// The config the service will read, as orrery reads it: `moonraker.conf`, then `orrery.toml`.
+fn load_config(account: &Account, args: &[String]) -> Result<crate::config::Config> {
+    let data = data_folder(account, args);
+    let config_file = arg_path(args, "-c").unwrap_or_else(|| data.join("config/moonraker.conf"));
+    let (toml, required) = match arg_path(args, "--orrery-config") {
         Some(path) => (path, true),
         None => (config_file.with_file_name("orrery.toml"), false),
     };
-    let mut config = crate::config::Config::load(&config_file)
-        .with_context(|| format!("the strict rule lists the agents' units, so it needs {}", config_file.display()))?;
+    let mut config = crate::config::Config::load(&config_file).with_context(|| {
+        format!("setup reads the service's config, as orrery does, and can't read {}", config_file.display())
+    })?;
     if required || toml.exists() {
         config.load_toml(&toml)?;
     }
-    let asvc = data.join("moonraker.asvc");
+    Ok(config)
+}
+
+/// The units orrery allows, read as orrery reads them: `moonraker.asvc` in the data folder,
+/// the names that are always allowed, and the system units of agents in the config.
+fn allowed_units(account: &Account, args: &[String], config: &crate::config::Config) -> Result<AllowedUnits> {
+    let asvc = data_folder(account, args).join("moonraker.asvc");
     // Read only: unlike orrery, setup runs as root, so it doesn't write the default list.
     let text = std::fs::read_to_string(&asvc).unwrap_or_else(|_| crate::services::DEFAULT_ALLOWED.to_owned());
     let mut names = crate::services::parse_allowed(&text);
-    let (agents, _) = crate::agents::Agents::new(&config, None)?;
+    let (agents, _) = crate::agents::Agents::new(config, None)?;
     for (_, unit) in agents.units() {
         if unit.scope == crate::agents::Scope::System {
             let name = unit.name.strip_suffix(".service").unwrap_or(&unit.name).to_owned();
@@ -822,6 +905,20 @@ mod tests {
         }
     }
 
+    /// orrery.toml for a printer that keeps Moonraker's unit.
+    const NO_ALIAS: &str = "[moonraker_compat]\nservice_alias = false\n";
+
+    /// Options whose service reads a moonraker.conf in `root`, and `toml` as orrery.toml.
+    fn options_in(root: &Path, toml: &str) -> Options {
+        let config = root.join("printer_data/config");
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(config.join("moonraker.conf"), "[server]\n").unwrap();
+        if !toml.is_empty() {
+            std::fs::write(config.join("orrery.toml"), toml).unwrap();
+        }
+        Options { data_path: Some(root.join("printer_data")), ..options() }
+    }
+
     fn options() -> Options {
         Options {
             sudo_user: Some("printer".into()),
@@ -836,7 +933,7 @@ mod tests {
     #[test]
     fn units_quote_their_words_and_keep_options_on_upgrade() {
         let args = vec!["--orrery-config".to_owned(), "/home/printer/my 100% \"x\".toml".to_owned()];
-        let unit = unit_file("printer", Path::new("/opt/orrery/orrery"), &args, false);
+        let unit = unit_file("printer", Path::new("/opt/orrery/orrery"), &args, false, false);
         assert!(unit.contains("User=printer\nSupplementaryGroups=orrery-admin\n"));
         assert!(
             unit.contains(r#"ExecStart="/opt/orrery/orrery" "--orrery-config" "/home/printer/my 100%% \"x\".toml""#)
@@ -883,14 +980,15 @@ mod tests {
     #[test]
     fn setup_installs_checks_and_removes() {
         let root = tempfile::tempdir().unwrap();
+        let base = options_in(root.path(), NO_ALIAS);
         let mut host = Fake::new();
         // --check before anything is there.
-        let check = Options { check: true, ..options() };
+        let check = Options { check: true, ..base.clone() };
         let report = run(&check, root.path(), &mut host).unwrap();
         assert!(!report.ok, "{:#?}", report.lines);
         assert!(host.ran.is_empty(), "--check changes nothing: {:?}", host.ran);
 
-        let report = run(&options(), root.path(), &mut host).unwrap();
+        let report = run(&base, root.path(), &mut host).unwrap();
         assert!(
             report.lines.iter().any(|l| l.contains("Made the group orrery-admin (gid 994)")),
             "{:#?}",
@@ -899,12 +997,13 @@ mod tests {
         assert_eq!(host.ran, ["groupadd --system orrery-admin", "systemctl daemon-reload"]);
         let unit = std::fs::read_to_string(root.path().join(UNIT_PATH)).unwrap();
         assert!(unit.contains(r#"ExecStart="/home/printer/orrery-test/bin/orrery""#));
+        assert!(unit.contains("Conflicts=moonraker.service\n") && !unit.contains("Alias="), "{unit}");
         let rule = std::fs::read_to_string(root.path().join(RULE_PATH)).unwrap();
         assert!(rule.contains(r"\\s994(\\s|$)"));
         assert!(run(&check, root.path(), &mut host).unwrap().ok);
 
         // Again: nothing to change.
-        let report = run(&options(), root.path(), &mut host).unwrap();
+        let report = run(&base, root.path(), &mut host).unwrap();
         assert_eq!(report.lines.iter().filter(|l| l.contains("already current")).count(), 2, "{:#?}", report.lines);
 
         // --check finds a file someone changed.
@@ -914,7 +1013,7 @@ mod tests {
 
         // --migrate: Moonraker stops and orrery starts.
         host.ran.clear();
-        let migrate = Options { disable_moonraker: true, start: true, ..options() };
+        let migrate = Options { disable_moonraker: true, start: true, ..base.clone() };
         run(&migrate, root.path(), &mut host).unwrap();
         assert_eq!(
             host.ran,
@@ -927,11 +1026,11 @@ mod tests {
         );
         // An upgrade with --start restarts it.
         host.ran.clear();
-        run(&Options { start: true, ..options() }, root.path(), &mut host).unwrap();
+        run(&Options { start: true, ..base.clone() }, root.path(), &mut host).unwrap();
         assert_eq!(host.ran.last().unwrap(), "systemctl restart orrery.service");
 
         host.ran.clear();
-        let report = run(&Options { remove: true, ..options() }, root.path(), &mut host).unwrap();
+        let report = run(&Options { remove: true, ..base }, root.path(), &mut host).unwrap();
         assert_eq!(
             host.ran,
             ["systemctl disable --now orrery.service", "groupdel orrery-admin", "systemctl daemon-reload"]
@@ -941,26 +1040,34 @@ mod tests {
     }
 
     #[test]
-    fn alias_takes_moonrakers_name_only_with_force() {
+    fn moonrakers_name_follows_the_config_and_needs_force_for_its_unit() {
         let root = tempfile::tempdir().unwrap();
-        let dir = root.path().join("etc/systemd/system");
-        std::fs::create_dir_all(&dir).unwrap();
+        let base = options_in(root.path(), "");
+        std::fs::create_dir_all(root.path().join("etc/systemd/system")).unwrap();
         let moonraker = root.path().join(MOONRAKER_PATH);
         std::fs::write(&moonraker, "[Unit]\nDescription=Moonraker's own\n").unwrap();
         let mut host = Fake::new();
-        let alias = Options { alias_moonraker: true, ..options() };
 
-        // Moonraker's own unit stops setup, and nothing changes.
-        let e = run(&alias, root.path(), &mut host).unwrap_err();
-        assert!(format!("{e:#}").contains("sudo orrery setup --alias-moonraker --force"), "{e:#}");
-        assert!(host.ran.is_empty() && !root.path().join(UNIT_PATH).exists(), "{:?}", host.ran);
+        // On by default, but Moonraker's own unit is in the way: setup works as without the
+        // name, and says how to take it or keep Moonraker's.
+        let report = run(&base, root.path(), &mut host).unwrap();
+        assert_eq!(host.ran, ["groupadd --system orrery-admin", "systemctl daemon-reload"]);
+        assert!(std::fs::read_to_string(&moonraker).unwrap().contains("Moonraker's own"));
+        let unit = std::fs::read_to_string(root.path().join(UNIT_PATH)).unwrap();
+        assert!(unit.contains("Conflicts=moonraker.service\n") && !unit.contains("Alias="), "{unit}");
+        assert!(report.lines.contains(&"  sudo orrery setup --force".to_owned()), "{:#?}", report.lines);
+        assert_eq!(report.lines.last().unwrap(), "  sudo orrery setup --no-alias-moonraker", "{:#?}", report.lines);
+        let check = Options { check: true, ..base.clone() };
+        let report = run(&check, root.path(), &mut host).unwrap();
+        assert!(!report.ok, "{:#?}", report.lines);
+        assert!(report.lines.contains(&"  sudo orrery setup --force".to_owned()), "{:#?}", report.lines);
 
         // --force: Moonraker stops, its unit goes aside, and the name is orrery's.
-        let report = run(&Options { force: true, start: true, ..alias.clone() }, root.path(), &mut host).unwrap();
+        host.ran.clear();
+        let report = run(&Options { force: true, start: true, ..base.clone() }, root.path(), &mut host).unwrap();
         assert_eq!(
             host.ran,
             [
-                "groupadd --system orrery-admin",
                 "systemctl disable --now moonraker.service",
                 "systemctl daemon-reload",
                 "systemctl enable orrery.service",
@@ -975,66 +1082,160 @@ mod tests {
         assert!(unit.ends_with("WantedBy=multi-user.target\nAlias=moonraker.service\n"), "{unit}");
         assert!(!unit.contains("Conflicts="), "{unit}");
 
-        // Again, without the flag: the alias stays, and Moonraker isn't touched.
+        // An upgrade: the name stays, and only the restart touches orrery.
         host.ran.clear();
-        let report = run(&Options { disable_moonraker: true, ..options() }, root.path(), &mut host).unwrap();
-        assert_eq!(host.ran, ["systemctl daemon-reload"], "{:#?}", report.lines);
-        assert!(report.lines.iter().any(|l| l.contains("already a name for orrery.service")), "{:#?}", report.lines);
-        let check = Options { check: true, ..options() };
+        let report = run(&Options { start: true, ..base.clone() }, root.path(), &mut host).unwrap();
+        assert_eq!(
+            host.ran,
+            ["systemctl daemon-reload", "systemctl enable orrery.service", "systemctl restart orrery.service"],
+            "{:#?}",
+            report.lines
+        );
         let report = run(&check, root.path(), &mut host).unwrap();
         assert!(report.ok, "{:#?}", report.lines);
         assert!(report.lines.contains(&"  moonraker.service is a name for orrery.service.".to_owned()));
         assert!(report.lines.iter().any(|l| l.contains("saved as /etc/systemd/system/moonraker.service.orrery-saved")));
 
-        // A Moonraker install writes its unit again: --check says so, and setup needs --force.
+        // A Moonraker install writes its unit again: --check says so, and --force takes it back.
         std::fs::remove_file(&moonraker).unwrap();
         std::fs::write(&moonraker, "[Unit]\nDescription=Moonraker, again\n").unwrap();
         let report = run(&check, root.path(), &mut host).unwrap();
-        assert!(!report.ok && report.lines.last().unwrap() == "  sudo orrery setup --force", "{:#?}", report.lines);
-        assert!(run(&options(), root.path(), &mut host).is_err());
-        std::fs::remove_file(&moonraker).unwrap();
-        std::os::unix::fs::symlink(SERVICE, &moonraker).unwrap();
-
-        // --remove: the name goes, and Moonraker's own unit comes back, disabled.
+        assert!(!report.ok, "{:#?}", report.lines);
         host.ran.clear();
-        let report = run(&Options { remove: true, ..options() }, root.path(), &mut host).unwrap();
+        run(&Options { force: true, start: true, ..base.clone() }, root.path(), &mut host).unwrap();
+        assert_eq!(std::fs::read_link(&moonraker).unwrap(), Path::new(SERVICE));
+        assert!(std::fs::read_to_string(root.path().join(SAVED_PATH)).unwrap().contains("again"));
+
+        // service_alias = false: while orrery runs, the name stays until setup may restart it.
+        std::fs::write(root.path().join("printer_data/config/orrery.toml"), NO_ALIAS).unwrap();
+        host.ran.clear();
+        let report = run(&base, root.path(), &mut host).unwrap();
+        assert_eq!(host.ran, ["systemctl daemon-reload"], "{:#?}", report.lines);
+        assert_eq!(moonraker_unit(&moonraker).unwrap(), MoonrakerUnit::Alias);
+        assert_eq!(report.lines.last().unwrap(), "  sudo orrery setup --start", "{:#?}", report.lines);
+        // With --start, it goes, and Moonraker's unit stays aside.
+        host.ran.clear();
+        let report = run(&Options { start: true, ..base.clone() }, root.path(), &mut host).unwrap();
+        assert_eq!(
+            host.ran,
+            [
+                "systemctl stop orrery.service",
+                "systemctl daemon-reload",
+                "systemctl enable orrery.service",
+                "systemctl start orrery.service"
+            ],
+            "{:#?}",
+            report.lines
+        );
+        assert_eq!(moonraker_unit(&moonraker).unwrap(), MoonrakerUnit::Missing);
+        assert!(std::fs::read_to_string(root.path().join(SAVED_PATH)).unwrap().contains("again"));
+        assert!(report.lines.iter().any(|l| l.contains("stays at /etc/systemd/system/moonraker.service.orrery-saved")));
+        let unit = std::fs::read_to_string(root.path().join(UNIT_PATH)).unwrap();
+        assert!(unit.contains("Conflicts=moonraker.service\n") && !unit.contains("Alias="), "{unit}");
+        assert!(run(&check, root.path(), &mut host).unwrap().ok);
+    }
+
+    #[test]
+    fn the_flags_choose_and_later_runs_keep_the_choice() {
+        let root = tempfile::tempdir().unwrap();
+        let base = options_in(root.path(), "");
+        let mut host = Fake::new();
+        host.enabled.insert(MOONRAKER, "not-found");
+        host.active.clear();
+        let unit = || std::fs::read_to_string(root.path().join(UNIT_PATH)).unwrap();
+
+        // --no-alias-moonraker: no name, and the unit records the choice.
+        let report = run(&Options { alias: Some(false), ..base.clone() }, root.path(), &mut host).unwrap();
+        assert_eq!(moonraker_unit(&root.path().join(MOONRAKER_PATH)).unwrap(), MoonrakerUnit::Missing);
+        assert!(unit().contains(NO_ALIAS_LINE) && unit().contains("Conflicts="), "{}", unit());
+        assert!(!report.lines.iter().any(|l| l.contains("--no-alias")), "{:#?}", report.lines);
+        // A run without a flag, as after an upgrade, keeps it, and --check agrees.
+        run(&base, root.path(), &mut host).unwrap();
+        assert!(unit().contains(NO_ALIAS_LINE));
+        assert_eq!(moonraker_unit(&root.path().join(MOONRAKER_PATH)).unwrap(), MoonrakerUnit::Missing);
+        assert!(run(&Options { check: true, ..base.clone() }, root.path(), &mut host).unwrap().ok);
+
+        // --alias-moonraker: the name, with the hint to give it back.
+        let report = run(&Options { alias: Some(true), ..base.clone() }, root.path(), &mut host).unwrap();
+        assert_eq!(moonraker_unit(&root.path().join(MOONRAKER_PATH)).unwrap(), MoonrakerUnit::Alias);
+        assert!(unit().contains(ALIAS_LINE) && !unit().contains(NO_ALIAS_LINE), "{}", unit());
+        assert_eq!(
+            report.lines.last().unwrap(),
+            "  sudo orrery setup --no-alias-moonraker --start",
+            "{:#?}",
+            report.lines
+        );
+        run(&base, root.path(), &mut host).unwrap();
+        assert_eq!(moonraker_unit(&root.path().join(MOONRAKER_PATH)).unwrap(), MoonrakerUnit::Alias);
+
+        // orrery.toml wins over the recorded choice, and records its own.
+        std::fs::write(root.path().join("printer_data/config/orrery.toml"), NO_ALIAS).unwrap();
+        run(&base, root.path(), &mut host).unwrap();
+        assert_eq!(moonraker_unit(&root.path().join(MOONRAKER_PATH)).unwrap(), MoonrakerUnit::Missing);
+        assert!(!unit().contains(NO_ALIAS_LINE), "{}", unit());
+        // A flag wins over orrery.toml, for that run.
+        run(&Options { alias: Some(true), ..base.clone() }, root.path(), &mut host).unwrap();
+        assert_eq!(moonraker_unit(&root.path().join(MOONRAKER_PATH)).unwrap(), MoonrakerUnit::Alias);
+
+        // While orrery runs, a flag's change waits for --start, and the message repeats the flag.
+        std::fs::remove_file(root.path().join("printer_data/config/orrery.toml")).unwrap();
+        host.active = [SERVICE].into_iter().collect();
+        let report = run(&Options { alias: Some(false), ..base.clone() }, root.path(), &mut host).unwrap();
+        assert_eq!(moonraker_unit(&root.path().join(MOONRAKER_PATH)).unwrap(), MoonrakerUnit::Alias);
+        assert_eq!(
+            report.lines.last().unwrap(),
+            "  sudo orrery setup --no-alias-moonraker --start",
+            "{:#?}",
+            report.lines
+        );
+        run(&Options { alias: Some(false), start: true, ..base }, root.path(), &mut host).unwrap();
+        assert_eq!(moonraker_unit(&root.path().join(MOONRAKER_PATH)).unwrap(), MoonrakerUnit::Missing);
+        assert!(unit().contains(NO_ALIAS_LINE));
+    }
+
+    #[test]
+    fn remove_puts_moonrakers_unit_back() {
+        let root = tempfile::tempdir().unwrap();
+        let base = options_in(root.path(), "");
+        std::fs::create_dir_all(root.path().join("etc/systemd/system")).unwrap();
+        let moonraker = root.path().join(MOONRAKER_PATH);
+        std::fs::write(&moonraker, "[Unit]\nDescription=Moonraker's own\n").unwrap();
+        let mut host = Fake::new();
+        run(&Options { force: true, ..base.clone() }, root.path(), &mut host).unwrap();
+        assert_eq!(std::fs::read_link(&moonraker).unwrap(), Path::new(SERVICE));
+        let report = run(&Options { remove: true, ..base }, root.path(), &mut host).unwrap();
         assert!(std::fs::read_to_string(&moonraker).unwrap().contains("Moonraker's own"), "{:#?}", report.lines);
         assert!(!root.path().join(SAVED_PATH).exists());
         assert!(report.lines.iter().any(|l| l.contains("enable --now moonraker.service")), "{:#?}", report.lines);
     }
 
     #[test]
-    fn a_running_orrery_stops_while_it_gets_moonrakers_name() {
+    fn a_running_orrery_gets_moonrakers_name_only_with_start() {
         let root = tempfile::tempdir().unwrap();
+        let base = options_in(root.path(), "");
+        std::fs::create_dir_all(root.path().join("etc/systemd/system")).unwrap();
+        let moonraker = root.path().join(MOONRAKER_PATH);
+        std::fs::write(&moonraker, "[Unit]\nDescription=Moonraker's own\n").unwrap();
         let mut host = Fake::new();
-        host.enabled.insert(MOONRAKER, "not-found");
         host.active = [SERVICE].into_iter().collect();
-        let alias = Options { alias_moonraker: true, ..options() };
-        let report = run(&alias, root.path(), &mut host).unwrap();
-        assert_eq!(
-            host.ran,
-            [
-                "groupadd --system orrery-admin",
-                "systemctl stop orrery.service",
-                "systemctl daemon-reload",
-                "systemctl start orrery.service"
-            ],
-            "{:#?}",
-            report.lines
-        );
-        assert!(host.active.contains(SERVICE));
-        // Once it has the name, a run changes nothing that runs.
-        host.ran.clear();
-        run(&Options { start: true, ..alias.clone() }, root.path(), &mut host).unwrap();
-        assert_eq!(
-            host.ran,
-            ["systemctl daemon-reload", "systemctl enable orrery.service", "systemctl restart orrery.service"]
-        );
-        // With --start, it's one stop and one start.
+        // Without --start, setup restarts nothing, and moves nothing: the names stay.
+        let report = run(&Options { force: true, ..base.clone() }, root.path(), &mut host).unwrap();
+        assert_eq!(host.ran, ["groupadd --system orrery-admin", "systemctl daemon-reload"], "{:#?}", report.lines);
+        assert!(std::fs::read_to_string(&moonraker).unwrap().contains("Moonraker's own"));
+        let unit = std::fs::read_to_string(root.path().join(UNIT_PATH)).unwrap();
+        assert!(unit.contains("Conflicts=moonraker.service\n") && !unit.contains("Alias="), "{unit}");
+        assert_eq!(report.lines.last().unwrap(), "  sudo orrery setup --start --force", "{:#?}", report.lines);
+        assert!(!report.lines.iter().any(|l| l.contains("old unit")), "{:#?}", report.lines);
+        // Without --force too, it says both.
+        let report = run(&base, root.path(), &mut host).unwrap();
+        assert!(report.lines.contains(&"  sudo orrery setup --force --start".to_owned()), "{:#?}", report.lines);
+        // With --start, it's one stop and one start, with no Moonraker unit to move.
         let root = tempfile::tempdir().unwrap();
+        let base = options_in(root.path(), "");
+        host.enabled.insert(MOONRAKER, "not-found");
         host.ran.clear();
         host.group = None;
-        let report = run(&Options { start: true, ..alias }, root.path(), &mut host).unwrap();
+        let report = run(&Options { start: true, ..base }, root.path(), &mut host).unwrap();
         assert_eq!(
             host.ran,
             [
@@ -1045,35 +1246,28 @@ mod tests {
                 "systemctl start orrery.service"
             ]
         );
-        assert!(report.lines.iter().any(|l| l.contains("restarted it for its new name")), "{:#?}", report.lines);
-    }
-
-    #[test]
-    fn alias_without_moonrakers_unit_needs_no_force() {
-        let root = tempfile::tempdir().unwrap();
-        let mut host = Fake::new();
-        host.enabled.insert(MOONRAKER, "not-found");
-        host.active.clear();
-        run(&Options { alias_moonraker: true, ..options() }, root.path(), &mut host).unwrap();
-        assert_eq!(host.ran, ["groupadd --system orrery-admin", "systemctl daemon-reload"]);
-        assert_eq!(std::fs::read_link(root.path().join(MOONRAKER_PATH)).unwrap(), Path::new(SERVICE));
-        assert!(!root.path().join(SAVED_PATH).exists());
+        assert!(report.lines.iter().any(|l| l.contains("restarted it for its new names")), "{:#?}", report.lines);
     }
 
     #[test]
     fn setup_refuses_without_root_and_on_old_polkit() {
         let root = tempfile::tempdir().unwrap();
+        let base = options_in(root.path(), NO_ALIAS);
         let mut host = Fake::new();
-        let e = run(&Options { is_root: false, ..options() }, root.path(), &mut host).unwrap_err();
+        let e = run(&Options { is_root: false, ..base.clone() }, root.path(), &mut host).unwrap_err();
         assert!(format!("{e:#}").contains("sudo orrery setup"));
         host.polkit = "pkaction version 0.105\n";
-        let e = run(&options(), root.path(), &mut host).unwrap_err();
+        let e = run(&base, root.path(), &mut host).unwrap_err();
         assert!(format!("{e:#}").contains("polkit 0.105"), "{e:#}");
         assert!(host.ran.is_empty(), "nothing changes: {:?}", host.ran);
         // --check works without sudo, for the user running it.
-        let check = Options { check: true, is_root: false, sudo_user: None, uid: 1000, ..options() };
+        let check = Options { check: true, is_root: false, sudo_user: None, uid: 1000, ..base };
         host.polkit = "pkaction version 122\n";
         assert!(run(&check, root.path(), &mut host).unwrap().lines[0].contains("printer"));
+        // A config that can't be read stops setup before it changes anything.
+        let e = run(&options(), root.path(), &mut host).unwrap_err();
+        assert!(format!("{e:#}").contains("setup reads the service's config"), "{e:#}");
+        assert!(host.ran.is_empty(), "nothing changes: {:?}", host.ran);
     }
 
     #[test]
@@ -1085,7 +1279,8 @@ mod tests {
         std::fs::write(data.join("config/orrery.toml"), "[agent.cam]\nsystemd_unit = \"orrery-cam\"\n").unwrap();
         std::fs::write(data.join("moonraker.asvc"), "crowsnest\nsonar.service\n").unwrap();
         let account = Account { name: "printer".into(), uid: 1000, home: home.path().to_path_buf() };
-        let units = allowed_units(&account, &[]).unwrap();
+        let config = load_config(&account, &[]).unwrap();
+        let units = allowed_units(&account, &[], &config).unwrap();
         assert_eq!(units.names, ["crowsnest", "orrery-cam", "sonar"]);
         assert_eq!(units.prefixes, ["moonraker", "klipper", "orrery"]);
     }

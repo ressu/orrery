@@ -81,10 +81,10 @@ enum Command {
 #[derive(clap::Args)]
 struct SetupArgs {
     /// Report what's in place, and change nothing. It works without sudo.
-    #[arg(long, conflicts_with_all = ["remove", "disable_moonraker", "start", "migrate", "alias_moonraker", "force"])]
+    #[arg(long, conflicts_with_all = ["remove", "disable_moonraker", "start", "migrate", "force", "alias_moonraker", "no_alias_moonraker"])]
     check: bool,
     /// Stop and disable orrery.service, then remove the unit, the polkit rule, and the group.
-    #[arg(long, conflicts_with_all = ["strict", "disable_moonraker", "start", "migrate", "alias_moonraker", "force"])]
+    #[arg(long, conflicts_with_all = ["strict", "disable_moonraker", "start", "migrate", "force", "alias_moonraker", "no_alias_moonraker"])]
     remove: bool,
     /// Let orrery manage only its allowed services: moonraker.asvc, Klipper's and orrery's own,
     /// and agents' units. Run setup again after adding one.
@@ -96,15 +96,21 @@ struct SetupArgs {
     /// Enable orrery.service and start it, or restart it if it runs.
     #[arg(long)]
     start: bool,
-    /// Switch from Moonraker to orrery: --disable-moonraker and --start.
+    /// Switch from Moonraker to orrery: --disable-moonraker, --start, and --force.
     #[arg(long)]
     migrate: bool,
-    /// Make moonraker.service a name for orrery.service, so units that start or wait for
-    /// Moonraker get orrery. Moonraker can't run then. --remove takes it away.
-    #[arg(long)]
+    /// Make moonraker.service a name for orrery.service, so services that start or wait for
+    /// Moonraker get orrery. It's the default with Moonraker compatibility; later runs keep
+    /// the choice.
+    #[arg(long, conflicts_with = "no_alias_moonraker")]
     alias_moonraker: bool,
-    /// With --alias-moonraker: stop and disable Moonraker, and move its own unit file aside to
-    /// moonraker.service.orrery-saved. --remove puts it back.
+    /// Leave moonraker.service to Moonraker, as when trying orrery beside it. Later runs keep
+    /// the choice.
+    #[arg(long)]
+    no_alias_moonraker: bool,
+    /// Stop and disable Moonraker, and move its own unit file aside to
+    /// moonraker.service.orrery-saved, so moonraker.service can be a name for orrery.service.
+    /// --remove puts it back.
     #[arg(long)]
     force: bool,
 }
@@ -264,8 +270,12 @@ fn setup_command(cli: &Cli, args: &SetupArgs) -> ExitCode {
         strict: args.strict,
         disable_moonraker: args.disable_moonraker || args.migrate,
         start: args.start || args.migrate,
-        alias_moonraker: args.alias_moonraker,
-        force: args.force,
+        alias: match (args.alias_moonraker, args.no_alias_moonraker) {
+            (true, _) => Some(true),
+            (_, true) => Some(false),
+            _ => None,
+        },
+        force: args.force || args.migrate,
         data_path: cli.data_path.clone(),
         config_file: cli.config_file.clone(),
         orrery_config: cli.orrery_config.clone(),

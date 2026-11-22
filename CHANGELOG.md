@@ -4,6 +4,24 @@ What changes in each release of orrery. Read it before you update, so you know w
 
 Fluidd and Mainsail link to the release page on GitHub, which shows the same notes.
 
+## Unreleased
+
+### Changed
+
+- With Moonraker compatibility on, `sudo orrery setup` makes `moonraker.service` another name
+  for orrery's service by default, so services that start Moonraker start orrery.
+  `--migrate` now moves Moonraker's own service file aside for that, as `--force` does.
+- To keep Moonraker's service file, as when you try orrery beside Moonraker, run setup with
+  `--no-alias-moonraker`, or set `service_alias = false` under `[moonraker_compat]` in
+  `orrery.toml`. Later runs of setup keep the choice.
+
+### Fixed
+
+- `sudo orrery setup` no longer restarts orrery without `--start`. When orrery runs and its
+  service has to restart to take or give up the name `moonraker.service`, setup leaves it as it
+  is, and tells you to run it again with `--start`. It also no longer says orrery runs the old
+  service file right after restarting it.
+
 ## 0.1.1 (2026-11-22)
 
 ### New
