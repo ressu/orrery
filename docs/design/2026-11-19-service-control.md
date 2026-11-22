@@ -174,7 +174,8 @@ call the same command, so the files have one source. It writes:
   `orrery.service` gets it, so the user's own shells aren't trusted.
 - **`/etc/systemd/system/orrery.service`,** which runs orrery as the user who ran sudo, with
   `SupplementaryGroups=orrery-admin`, `Restart=always`, and `Conflicts=moonraker.service`, since
-  both listen on port 7125. `ExecStart` runs the binary setup ran from, with the `-d`, `-c`,
+  both listen on port 7125. With `--alias-moonraker`, `Alias=moonraker.service` takes the
+  place of `Conflicts=` (below). `ExecStart` runs the binary setup ran from, with the `-d`, `-c`,
   and `--orrery-config` options it was given. Without them, setup keeps the installed unit's
   options, so an upgrade doesn't lose them.
 - **`/etc/polkit-1/rules.d/orrery.rules`,** in the local admin's folder. Like Moonraker's rule,
@@ -192,6 +193,8 @@ applied (user, 2026-11-22). Switching over takes explicit flags:
 | `--disable-moonraker` | Stops and disables `moonraker.service` |
 | `--start` | Enables `orrery.service` and starts it, or restarts it if it runs |
 | `--migrate` | Both |
+| `--alias-moonraker` | Makes `moonraker.service` a name for `orrery.service` (below) |
+| `--force` | With `--alias-moonraker`: moves Moonraker's own unit file aside |
 | `--strict` | Writes the strict rule (below) |
 | `--check` | Reports what's in place and changes nothing; works without sudo |
 | `--remove` | Stops and disables `orrery.service`, then removes the unit, the rule, and the group |
@@ -199,6 +202,45 @@ applied (user, 2026-11-22). Switching over takes explicit flags:
 **polkit 0.105** (Debian 11, Raspberry Pi OS Bullseye) has no JavaScript rules, so a rule can't
 check a process's groups. Moonraker's installer then trusts the user in every process. orrery's
 setup refuses instead, and says that Moonraker's rule and group keep working (user, 2026-11-22).
+
+### orrery as `moonraker.service`
+
+**Decision (2026-11-22):** `--alias-moonraker` makes `moonraker.service` another name for
+`orrery.service`, so units that start or wait for Moonraker get orrery. On pink-0, aldis's
+unit has `Wants=moonraker.service`. Starting aldis started Moonraker, a disabled unit, and
+`Conflicts=` then stopped orrery. systemd has no "provides" field; `Alias=` is the nearest.
+
+It's a flag, off by default, so trying orrery beside Moonraker stays a small change (user,
+2026-11-22). With it:
+
+- **orrery's unit** gets `Alias=moonraker.service` under `[Install]`, and loses
+  `Conflicts=moonraker.service`, which would name orrery itself.
+- **Setup makes the symlink** `/etc/systemd/system/moonraker.service` → `orrery.service`
+  itself, so the alias works without `--start`. `systemctl enable` and `disable` keep it in
+  step from then on.
+- **A running orrery stops** while it gets the name, and starts again after the reload. When
+  setup made the name for a running orrery on bluev2, `daemon-reload` lost track of it:
+  systemd reported orrery stopped while its process ran on. Setup then started a second
+  orrery, which couldn't open the database, until `Restart=` recovered (2026-11-22).
+- **Moonraker's own unit file** is usually at that same path, so setup stops there and changes
+  nothing, unless `--force` is given. The message says what `--force` does. A unit from a
+  package, in `/lib/systemd/system`, needs no `--force`: the symlink in `/etc` takes its place,
+  and removing it brings it back.
+- **With `--force`,** setup stops and disables Moonraker, then renames its unit file to
+  `moonraker.service.orrery-saved`, in the same folder. systemd ignores the name, and the file
+  stays where an admin looks for it. A saved copy that's already there is replaced, since the
+  file setup found is the newer one.
+- **Running setup again** without the flag keeps the alias, as it keeps the path options.
+  `--remove` takes it away.
+- **`--remove`** removes the symlink and renames the saved file back. Moonraker is then
+  installed and disabled again, and setup prints the command that starts it.
+- **`--check`** says whether `moonraker.service` is orrery's alias, Moonraker's own unit, or
+  missing, and whether a saved copy is there.
+
+Moonraker can't run while the alias is in place: its unit file is aside. An installer that
+writes Moonraker's unit again, such as KIAUH, replaces the symlink, and `--check` then says
+so. `systemctl status moonraker` shows orrery. That's the point, but it can surprise someone
+fixing the printer, so `orrery.service`'s description says it answers for Moonraker.
 
 **Checked on bluev2 (2026-11-22),** with polkit 122:
 

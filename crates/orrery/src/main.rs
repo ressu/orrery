@@ -81,10 +81,10 @@ enum Command {
 #[derive(clap::Args)]
 struct SetupArgs {
     /// Report what's in place, and change nothing. It works without sudo.
-    #[arg(long, conflicts_with_all = ["remove", "disable_moonraker", "start", "migrate"])]
+    #[arg(long, conflicts_with_all = ["remove", "disable_moonraker", "start", "migrate", "alias_moonraker", "force"])]
     check: bool,
     /// Stop and disable orrery.service, then remove the unit, the polkit rule, and the group.
-    #[arg(long, conflicts_with_all = ["strict", "disable_moonraker", "start", "migrate"])]
+    #[arg(long, conflicts_with_all = ["strict", "disable_moonraker", "start", "migrate", "alias_moonraker", "force"])]
     remove: bool,
     /// Let orrery manage only its allowed services: moonraker.asvc, Klipper's and orrery's own,
     /// and agents' units. Run setup again after adding one.
@@ -99,6 +99,14 @@ struct SetupArgs {
     /// Switch from Moonraker to orrery: --disable-moonraker and --start.
     #[arg(long)]
     migrate: bool,
+    /// Make moonraker.service a name for orrery.service, so units that start or wait for
+    /// Moonraker get orrery. Moonraker can't run then. --remove takes it away.
+    #[arg(long)]
+    alias_moonraker: bool,
+    /// With --alias-moonraker: stop and disable Moonraker, and move its own unit file aside to
+    /// moonraker.service.orrery-saved. --remove puts it back.
+    #[arg(long)]
+    force: bool,
 }
 
 #[derive(clap::Subcommand)]
@@ -256,6 +264,8 @@ fn setup_command(cli: &Cli, args: &SetupArgs) -> ExitCode {
         strict: args.strict,
         disable_moonraker: args.disable_moonraker || args.migrate,
         start: args.start || args.migrate,
+        alias_moonraker: args.alias_moonraker,
+        force: args.force,
         data_path: cli.data_path.clone(),
         config_file: cli.config_file.clone(),
         orrery_config: cli.orrery_config.clone(),
