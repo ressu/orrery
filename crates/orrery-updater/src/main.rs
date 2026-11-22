@@ -1,4 +1,4 @@
-//! orrery-update: Moonraker's update manager as an orrery agent
+//! orrery-updater: Moonraker's update manager as an orrery agent
 //! (docs/design/2026-11-22-update-manager.md).
 //!
 //! orrery starts it when `[update_manager]`, or one of its entries, is in `orrery.toml` or, as

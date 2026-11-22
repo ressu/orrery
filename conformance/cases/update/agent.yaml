@@ -1,8 +1,8 @@
 name: orrery starts the update manager agent, which answers Moonraker's update methods
 description: >
-  orrery only. orrery starts orrery-update from its own folder, so `cargo build -p
-  orrery-update` must come first. The git entry points at a folder that isn't a repo, so no
-  network is needed; the git refresh itself is in orrery-update's unit tests.
+  orrery only. orrery starts orrery-updater from its own folder, so `cargo build -p
+  orrery-updater` must come first. The git entry points at a folder that isn't a repo, so no
+  network is needed; the git refresh itself is in orrery-updater's unit tests.
 targets: [orrery]
 transports: [ws]
 klippy: ready
@@ -12,12 +12,12 @@ config: |
 
   [update_manager missing]
   type: git_repo
-  path: /nonexistent/orrery-update-case
+  path: /nonexistent/orrery-updater-case
   origin: https://example.invalid/missing.git
 
   [update_manager tool]
   type: executable
-  path: /nonexistent/orrery-update-tool
+  path: /nonexistent/orrery-updater-tool
   repo: example/tool
   channel: dev
   is_system_service: False
@@ -50,7 +50,7 @@ steps:
           repo_name: tool
           version: "?"
           remote_version: "?"
-          warnings: ["Location at option 'path: /nonexistent/orrery-update-tool' is not a directory.", Failed to validate installation]
+          warnings: ["Location at option 'path: /nonexistent/orrery-updater-tool' is not a directory.", Failed to validate installation]
   # An entry it can't use is a warning, and the others keep working.
   - call: server.info
     expect:

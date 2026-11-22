@@ -231,7 +231,7 @@ impl Github {
     pub fn with_api(api: &str) -> Result<Self, String> {
         let http = reqwest::Client::builder()
             .tls_backend_preconfigured(tls_config()?)
-            .user_agent(concat!("orrery-update/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("orrery-updater/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(Duration::from_secs(10))
             .read_timeout(Duration::from_secs(60))
             .build()

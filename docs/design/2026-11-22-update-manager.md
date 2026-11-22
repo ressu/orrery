@@ -1,6 +1,6 @@
 # Update manager
 
-**Decision (2026-11-22):** orrery gets an update manager as a built-in agent, `orrery-update`,
+**Decision (2026-11-22):** orrery gets an update manager as a built-in agent, `orrery-updater`,
 started as `orrery-spoolman` is. Moonraker's `machine.update.*` names map to it, so Fluidd's
 update page works without changes. Its config lives in `orrery.toml`, as all of orrery's does
 (user, 2026-11-22). The `[update_manager]` sections in `moonraker.conf` are only a fallback
@@ -345,7 +345,8 @@ on. It's a small change, left for when someone wants it.
 
 ## Where it runs
 
-`orrery-update` is a built-in agent, like Spoolman's:
+`orrery-updater` is a built-in agent, like Spoolman's. It was first called `orrery-update`,
+which read like orrery's own self-update (renamed 2026-11-22).
 
 - orrery turns it on when `orrery.toml` has `[update_manager]`, or, as the fallback,
   `moonraker.conf` has it. orrery starts it from its own folder with `command`.
@@ -388,7 +389,7 @@ Each one becomes an entry in `docs/regressions.md` when it's built.
 1. This note, reviewed.
 2. orrery: roles per mapped method, the built-in `update_manager` agent, the shared D-Bus crate, and
    PackageKit in `orrery setup`'s rules.
-3. `orrery-update`: config, state, `status` and `refresh`, the command lock, the print check,
+3. `orrery-updater`: config, state, `status` and `refresh`, the command lock, the print check,
    and progress notifications.
 4. `git_repo`: update, recover, rollback, and restarts.
 5. `requirements` and `system_dependencies`.

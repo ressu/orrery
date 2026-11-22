@@ -2,7 +2,7 @@ name: an [update_manager] section turns on the built-in update manager agent
 description: >
   orrery only. With [update_manager] in moonraker.conf, the fallback, the agent gets Moonraker's
   machine.update.* names and notifications. command = false keeps orrery from starting
-  orrery-update, so the runner's test agent stands in for it.
+  orrery-updater, so the runner's test agent stands in for it.
 targets: [orrery]
 transports: [ws, http]
 klippy: none

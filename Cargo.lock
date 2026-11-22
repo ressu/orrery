@@ -1551,7 +1551,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "orrery-update"
+name = "orrery-updater"
 version = "0.1.0"
 dependencies = [
  "orrery-agent",

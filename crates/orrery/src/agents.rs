@@ -15,7 +15,7 @@
 //! - Some agents are built in: a `server` option in `[spoolman]` turns on the Spoolman agent,
 //!   with Moonraker's names, and starts `orrery-spoolman` from orrery's own folder. An
 //!   `[update_manager]` section, or one of its entries, turns on the update manager agent,
-//!   which orrery starts as `orrery-update`. An `[agent.<name>]` table overrides a built-in
+//!   which orrery starts as `orrery-updater`. An `[agent.<name>]` table overrides a built-in
 //!   agent's options one at a time.
 
 use std::path::Path;
@@ -381,7 +381,7 @@ fn builtin_spoolman(
 /// `[update_manager]` or an `[update_manager <name>]` entry is in `orrery.toml`, or, as the
 /// fallback, in `moonraker.conf`. It gets Moonraker's `machine.update.*` names, the admin role,
 /// since it restarts services, and admin to call it, except `status`, which viewers may call.
-/// orrery starts `orrery-update` from `agent_dir`. `[agent.update_manager]` overrides each of
+/// orrery starts `orrery-updater` from `agent_dir`. `[agent.update_manager]` overrides each of
 /// these.
 fn builtin_update_manager(
     config: &Config,
@@ -412,7 +412,7 @@ fn builtin_update_manager(
     if !table.contains_key("call_roles") {
         c.call_roles = vec![("status".into(), Role::Viewer)];
     }
-    builtin_command(c, agent_dir, "orrery-update", "The update manager is set up in [update_manager]", warnings);
+    builtin_command(c, agent_dir, "orrery-updater", "The update manager is set up in [update_manager]", warnings);
 }
 
 /// A built-in agent's table: the one `[agent.<name>]` made, or a new one with the defaults.
@@ -803,13 +803,13 @@ mod tests {
         assert_eq!(a.call_role("update_manager", "status"), Role::Viewer);
         assert_eq!(a.call_role("update_manager", "refresh"), Role::Admin);
         assert!(w[0].starts_with("The update manager is set up in [update_manager]"), "{w:?}");
-        assert!(w[0].contains("Put orrery-update there"), "{w:?}");
+        assert!(w[0].contains("Put orrery-updater there"), "{w:?}");
         let (a, _) =
             with_spoolman("[server]\n", "[update_manager]\nrefresh_interval = 24\n", Some(dir.path())).unwrap();
         assert!(a.get("update_manager").is_some());
 
         // The program in orrery's folder starts it.
-        let program = dir.path().join("orrery-update");
+        let program = dir.path().join("orrery-updater");
         std::fs::write(&program, "").unwrap();
         let (a, w) = with_spoolman("[update_manager]\n", "", Some(dir.path())).unwrap();
         assert!(w.is_empty(), "{w:?}");
