@@ -12,7 +12,7 @@ use orrery::server::{App, Paths};
 use orrery::{agent_process, expand_home, history, job_queue, logfile, unix_socket, web};
 
 #[derive(Parser)]
-#[command(version, about = "Experimental Moonraker-compatible API server for Klipper")]
+#[command(version = orrery_build::LONG_VERSION, about = "Experimental Moonraker-compatible API server for Klipper")]
 struct Cli {
     /// The printer's data folder.
     #[arg(short = 'd', long = "datapath", env = "MOONRAKER_DATA_PATH", value_name = "data path", global = true)]
@@ -135,7 +135,7 @@ fn init_logging(cli: &Cli, paths: &Paths) -> (Option<tracing_appender::non_block
     let file_layer = paths.log_file.as_ref().and_then(|path| {
         let header = format!(
             "orrery {}\ndata path: {}\nconfig file: {}\nlog file: {}",
-            env!("CARGO_PKG_VERSION"),
+            orrery_build::LONG_VERSION,
             paths.data.display(),
             paths.config_file.display(),
             path.display()
@@ -284,7 +284,7 @@ async fn run(
     let host = section.get_str("host", "0.0.0.0");
     let port = section.get_int("port", 7125)?;
     drop(section);
-    tracing::info!("orrery {} starting, data folder {}", env!("CARGO_PKG_VERSION"), paths.data.display());
+    tracing::info!("orrery {} starting, data folder {}", orrery_build::LONG_VERSION, paths.data.display());
     let app = App::new(config, paths)?;
     if let Some(warning) = log_warning {
         tracing::warn!("{warning}");

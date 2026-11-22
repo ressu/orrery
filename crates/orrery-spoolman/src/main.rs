@@ -85,7 +85,7 @@ async fn main() {
         agent: Mutex::new(None),
         state: Mutex::new(State { extruder: "extruder".into(), ..State::default() }),
     });
-    let mut builder = AgentBuilder::new(NAME).version(env!("CARGO_PKG_VERSION"));
+    let mut builder = AgentBuilder::new(NAME).version(orrery_build::VERSION);
     if let Some(socket) = std::env::args().nth(1) {
         builder = builder.socket(socket);
     }

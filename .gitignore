@@ -4,3 +4,4 @@
 .worktrees/
 /conformance/.work
 /spikes/*/target
+/dist

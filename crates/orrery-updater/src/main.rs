@@ -34,7 +34,7 @@ use manager::Manager;
 async fn main() {
     orrery_agent::init_logging();
     let manager = Manager::new();
-    let mut builder = AgentBuilder::new(config::SECTION).version(env!("CARGO_PKG_VERSION"));
+    let mut builder = AgentBuilder::new(config::SECTION).version(orrery_build::VERSION);
     if let Some(socket) = std::env::args().nth(1) {
         builder = builder.socket(socket);
     }

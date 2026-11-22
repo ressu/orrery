@@ -1,0 +1,8 @@
+[package]
+name = "orrery-build"
+description = "What a build of orrery is: its version, whether it's a release, its target, and its repository"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+build = "build.rs"

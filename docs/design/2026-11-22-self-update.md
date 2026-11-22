@@ -5,7 +5,8 @@ agent gets an `orrery` entry that installs a release over the running binaries, 
 the download and running the new version's preflight. A command-line `self-update` and
 `rollback` work when orrery itself doesn't.
 
-**Status (2026-11-22):** approved. Nothing is built yet.
+**Status (2026-11-22):** approved. Step 2 is built: the `LICENSE` file, the build's version
+and release flag, and `just dist`.
 
 ## What exists today
 
@@ -32,20 +33,18 @@ the download and running the new version's preflight. A command-line `self-updat
 - **The binaries are replaced in place,** in `~/orrery`. `ExecStart` and `orrery setup` don't
   change. Version folders with a `current` link were considered and dropped: they'd need
   more logic to decide which path goes into the unit, for little gain on a printer.
-- **Versions have two parts,** `vX.Y`, as Moonraker's do.
+- **Versions are Cargo's three parts,** `vX.Y.Z`. Two parts, as Moonraker's, were the first
+  choice, but Cargo refuses a version without its third part.
 - **Preflight isn't special to orrery.** Any update entry can declare one.
 - **Executable entries keep the old program** in `.previous/`, as orrery's entry does.
 
 ## Releases
 
-- **Versions:** tags are `v0.1`, `v0.2`, and so on. A tag with a suffix, such as `v0.2-rc.1`,
-  is a GitHub prerelease.
-  - Cargo needs three parts, so the workspace version in `Cargo.toml` is `0.2.0`, and its
-    last part is always 0.
-  - CI refuses a tag that doesn't match `Cargo.toml`, and a version whose last part isn't 0.
-  - `orrery --version` and the update entry show `v0.2`.
+- **Versions:** tags are `v0.1.0`, `v0.2.0`, and so on: the workspace version in
+  `Cargo.toml`, with a `v`. A tag with a suffix, such as `v0.2.0-rc.1`, is a GitHub
+  prerelease. CI refuses a tag that doesn't match `Cargo.toml`.
 - **Archives:** each release has one archive per target, and one `SHA256SUMS` file for all of
-  them. `orrery-v0.2-aarch64.tar.gz` holds `orrery`, `orrery-import`, `orrery-spoolman`,
+  them. `orrery-v0.2.0-aarch64.tar.gz` holds `orrery`, `orrery-import`, `orrery-spoolman`,
   `orrery-updater`, `LICENSE`, and `README.md`.
 - **Targets:** three, all static musl builds with rust-lld and no C toolchain. The flake's
   `armv6` target, for the Pi Zero and Pi 1, is left out: those boards are too slow for a
@@ -109,7 +108,7 @@ the download and running the new version's preflight. A command-line `self-updat
    database, sends its last progress message, and calls `server.restart`. systemd starts the
    new orrery, which starts the new agents.
 8. **Check.** The new agent compares the stored version with its own. If they match, it sends
-   "orrery updated to v0.2" and clears the record. If they don't, the entry gets a warning.
+   "orrery updated to v0.2.0" and clears the record. If they don't, the entry gets a warning.
 
 ## Rollback
 
@@ -138,7 +137,7 @@ the download and running the new version's preflight. A command-line `self-updat
   sudo systemctl restart orrery
   ```
 
-- **`--version v0.2`** installs that release instead of the newest one. That's also a way
+- **`--version v0.2.0`** installs that release instead of the newest one. That's also a way
   back when `.previous/` is missing.
 
 The code lives in `orrery-updater`, which gets the subcommands `self-update` and `rollback`.
@@ -238,5 +237,5 @@ An install script, for `curl | sh`, comes later.
 4. Preflight and `.previous/` for existing entries.
 5. The `orrery` entry, with download, check, unpack, preflight, rename, and restart.
 6. orrery itself: `orrery preflight`, `self-update`, and `rollback`, and the agents' versions.
-7. Docs, then the first release, `v0.1`, installed on bluev2 with `orrery setup` run again.
-   Then `v0.2`, for a real self-update and a rollback.
+7. Docs, then the first release, `v0.1.0`, installed on bluev2 with `orrery setup` run again.
+   Then `v0.2.0`, for a real self-update and a rollback.

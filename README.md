@@ -201,6 +201,8 @@ in, which `loginctl enable-linger <user>` turns on. With a unit:
 | `crates/orrery-updater` | Moonraker's update manager, as an agent |
 | `crates/orrery-dbus` | A small D-Bus client, for systemd and PackageKit |
 | `crates/orrery-proto` | Shared wire formats: Klippy socket framing and JSON-RPC envelopes |
+| `crates/orrery-build` | What a build is: its version, whether it's a release, and its target |
+| `scripts/dist.sh` | Builds a release archive; run it with `just dist <arch>` |
 | `crates/fake-klippy` | A scriptable stand-in for Klipper's API socket |
 | `crates/conformance` | The conformance test runner |
 | `conformance/` | Test cases, fixtures, and recorded snapshots; see [conformance/README.md](conformance/README.md) |
@@ -269,3 +271,12 @@ Later `ssh`, `scp`, and `copy-to-printer` runs can share it. It closes after 12 
 ```
 just disconnect-printer <ssh host>
 ```
+
+## License
+
+orrery is a Moonraker-compatible API server, heavily inspired by
+[Moonraker](https://github.com/Arksine/moonraker). Moonraker is copyright Eric Callahan (Arksine)
+and its contributors.
+
+orrery is licensed under the GNU General Public License, version 3 only, as Moonraker is. See
+[LICENSE](LICENSE).

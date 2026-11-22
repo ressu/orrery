@@ -505,7 +505,7 @@ async fn initialize(app: Arc<App>) {
         let params = if identified {
             json!({})
         } else {
-            json!({"client_info": {"program": "orrery", "version": env!("CARGO_PKG_VERSION")}})
+            json!({"client_info": {"program": "orrery", "version": orrery_build::VERSION}})
         };
         let Ok(info) = app.klippy.request("info", params, None).await else { continue };
         if let Some(msg) = info.get("state_message").and_then(Value::as_str) {

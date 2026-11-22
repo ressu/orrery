@@ -12,7 +12,8 @@ use orrery::server::Paths;
 
 #[derive(Parser)]
 #[command(
-    version,
+    name = "orrery-import",
+    version = orrery_build::LONG_VERSION,
     about = "Import a copy of Moonraker's database into orrery's store",
     long_about = "Import a copy of Moonraker's database into orrery's store.\n\n\
         Copy moonraker-sql.db while Moonraker is stopped, and stop orrery before you import.\n\

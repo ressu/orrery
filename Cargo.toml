@@ -11,6 +11,7 @@ publish = false
 [workspace.dependencies]
 orrery-proto = { path = "crates/orrery-proto" }
 orrery-agent = { path = "crates/orrery-agent" }
+orrery-build = { path = "crates/orrery-build" }
 orrery-dbus = { path = "crates/orrery-dbus" }
 fake-klippy = { path = "crates/fake-klippy" }
 anyhow = "1"

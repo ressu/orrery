@@ -1480,6 +1480,7 @@ dependencies = [
  "futures-util",
  "hmac",
  "image",
+ "orrery-build",
  "orrery-dbus",
  "orrery-proto",
  "pbkdf2",
@@ -1514,6 +1515,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "orrery-build"
+version = "0.1.0"
+
+[[package]]
 name = "orrery-dbus"
 version = "0.1.0"
 dependencies = [
@@ -1538,6 +1543,7 @@ version = "0.1.0"
 dependencies = [
  "futures-util",
  "orrery-agent",
+ "orrery-build",
  "reqwest",
  "rustls",
  "rustls-platform-verifier",
@@ -1555,6 +1561,7 @@ name = "orrery-updater"
 version = "0.1.0"
 dependencies = [
  "orrery-agent",
+ "orrery-build",
  "orrery-dbus",
  "reqwest",
  "rustix",
