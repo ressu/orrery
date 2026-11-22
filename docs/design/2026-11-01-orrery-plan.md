@@ -371,3 +371,6 @@ In order, as of 2026-11-22:
    [frontend-issues.md](../frontend-issues.md), to send upstream. The first is
    `fluidd-login-error`: Fluidd's login form hides the server's reason, so a locked-out user
    isn't told to wait.
+9. **orrery's own allowed-services list,** in `orrery.toml`, with `moonraker.asvc` read only for
+   Moonraker compatibility. See "The allowed-services list" in
+   [2026-11-19-service-control.md](2026-11-19-service-control.md).

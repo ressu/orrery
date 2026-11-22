@@ -223,6 +223,18 @@ setup refuses instead, and says that Moonraker's rule and group keep working (us
   means running setup again. A rule that reads the list while it runs would avoid that,
   but it gains little security, because the list it reads would be one orrery can write.
 
+## The allowed-services list
+
+orrery reads its allowed services from `moonraker.asvc` in the data folder, as Moonraker does,
+and writes Moonraker's default list there when the file is missing. That's a Moonraker
+compatibility feature for now (user, 2026-11-22). Moonraker's installers and plugins add their
+services to that file, so reading it keeps them working.
+
+**Later:** orrery moves the list to its own config, such as an `allowed` list in `orrery.toml`.
+`moonraker.asvc` then becomes one of the list's sources, read only while Moonraker
+compatibility is on, as `[moonraker_compat]` does for the legacy API key. The strict polkit rule
+reads the same list, so it follows.
+
 ## Open questions
 
 1. **A sudo fallback.** Moonraker's D-Bus provider falls back to `sudo` for reboot and
