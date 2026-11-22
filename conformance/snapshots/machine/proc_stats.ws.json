@@ -5,7 +5,7 @@
     "result": {
       "moonraker_stats": "any",
       "throttled_state": "null",
-      "cpu_temp": "number",
+      "cpu_temp": "any",
       "network": "any",
       "system_cpu_usage": "any",
       "system_uptime": "number",

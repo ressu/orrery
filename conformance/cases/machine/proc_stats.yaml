@@ -1,6 +1,7 @@
 name: machine.proc_stats and the once-a-second update
 transports: [ws]
-ignore: [result.network, result.system_cpu_usage, result.moonraker_stats, params.0.network, params.0.system_cpu_usage]
+# cpu_temp is null on a machine without a temperature sensor, such as a CI runner.
+ignore: [result.network, result.system_cpu_usage, result.moonraker_stats, result.cpu_temp, params.0.network, params.0.system_cpu_usage]
 steps:
   - expect_notification: notify_proc_stat_update
     within_ms: 3000
