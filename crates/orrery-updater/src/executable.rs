@@ -37,6 +37,11 @@ pub struct Saved {
     pub last_error: String,
     pub rollback_version: String,
     pub rollback_repo: String,
+    /// For orrery's own entry: the release's `SHA256SUMS`.
+    pub checksums: Option<Asset>,
+    /// For orrery's own entry: the version an update or a rollback put in place, until orrery
+    /// restarts with it.
+    pub expected_version: Option<String>,
 }
 
 impl Default for Saved {
@@ -49,6 +54,8 @@ impl Default for Saved {
             last_error: String::new(),
             rollback_version: "?".into(),
             rollback_repo: "?".into(),
+            checksums: None,
+            expected_version: None,
         }
     }
 }
@@ -56,11 +63,14 @@ impl Default for Saved {
 impl Saved {
     pub fn from_json(v: &Value) -> Self {
         let text = |k: &str, default: &str| v[k].as_str().unwrap_or(default).to_owned();
-        let asset = v["asset"]["url"].as_str().map(|url| Asset {
-            url: url.to_owned(),
-            content_type: v["asset"]["content_type"].as_str().unwrap_or("?").to_owned(),
-            size: v["asset"]["size"].as_u64().unwrap_or(0),
-        });
+        let asset_at = |a: &Value| {
+            a["url"].as_str().map(|url| Asset {
+                url: url.to_owned(),
+                content_type: a["content_type"].as_str().unwrap_or("?").to_owned(),
+                size: a["size"].as_u64().unwrap_or(0),
+            })
+        };
+        let asset = asset_at(&v["asset"]);
         let etag = match (v["etag"][0].as_str(), v["etag"][1].as_str()) {
             (Some(url), Some(tag)) => Some((url.to_owned(), tag.to_owned())),
             _ => None,
@@ -73,6 +83,8 @@ impl Saved {
             last_error: text("last_error", ""),
             rollback_version: text("rollback_version", "?"),
             rollback_repo: text("rollback_repo", "?"),
+            checksums: asset_at(&v["checksums"]),
+            expected_version: v["expected_version"].as_str().map(str::to_owned),
         }
     }
 
@@ -85,6 +97,8 @@ impl Saved {
             "last_error": self.last_error,
             "rollback_version": self.rollback_version,
             "rollback_repo": self.rollback_repo,
+            "checksums": self.checksums.as_ref().map(|a| json!({"url": a.url, "content_type": a.content_type, "size": a.size})),
+            "expected_version": self.expected_version,
         })
     }
 }
@@ -149,7 +163,11 @@ pub async fn installed(opts: &ExecOptions) -> Installed {
                 i.version = version.to_owned();
                 i.asset_name = info.as_ref().and_then(|v| v["asset_name"].as_str()).map(str::to_owned);
                 let detected = format!("{owner}/{project}");
-                if !detected.eq_ignore_ascii_case(&opts.repo) {
+                if opts.repo_pinned {
+                    // orrery.toml's repo wins, so a fork's releases can take over.
+                } else if opts.repo.is_empty() {
+                    i.repo = detected;
+                } else if !detected.eq_ignore_ascii_case(&opts.repo) {
                     i.anomalies.push(format!(
                         "Value at option 'repo: {}' does not match detected repo '{detected}', falling back to detected version.",
                         opts.repo
@@ -161,9 +179,15 @@ pub async fn installed(opts: &ExecOptions) -> Installed {
                         i.warnings.push("Executable types require the 'asset_name' field in release_info.json".into());
                         i.valid = false;
                     }
-                    Some(name) if !path.join(name).exists() => {
+                    Some(name) if opts.programs.is_empty() && !path.join(name).exists() => {
                         i.warnings.push(format!("File {name} not found in configured path for executable type"));
                         i.valid = false;
+                    }
+                    Some(_) if !opts.programs.is_empty() => {
+                        for program in opts.programs.iter().filter(|p| !path.join(p).is_file()) {
+                            i.warnings.push(format!("File {program} not found in configured path for executable type"));
+                            i.valid = false;
+                        }
                     }
                     Some(_) => {}
                 }
@@ -178,7 +202,16 @@ pub async fn installed(opts: &ExecOptions) -> Installed {
 
 /// The entry's object in `version_info`.
 pub fn status(entry: &Entry, i: &Installed, saved: &Saved) -> Value {
-    let rollback = if saved.rollback_version == "?" { i.version.as_str() } else { saved.rollback_version.as_str() };
+    // What .previous/ holds wins: an update from a shell changes it without the database.
+    let previous = match &entry.kind {
+        crate::config::Kind::Executable(opts) => previous_version(&opts.path, &files(opts, i)),
+        _ => None,
+    };
+    let rollback = match &previous {
+        Some(v) => v.as_str(),
+        None if saved.rollback_version == "?" => i.version.as_str(),
+        None => saved.rollback_version.as_str(),
+    };
     json!({
         "name": entry.name,
         "configured_type": "executable",
@@ -316,7 +349,7 @@ impl Github {
     }
 
     /// Downloads `asset` to `dest`, and reports the progress as Moonraker words it.
-    async fn download(&self, asset: &Asset, dest: &Path, application: &str, out: &Messages) -> Result<(), String> {
+    pub async fn download(&self, asset: &Asset, dest: &Path, application: &str, out: &Messages) -> Result<(), String> {
         use tokio::io::AsyncWriteExt;
         let fail = |e: reqwest::Error| format!("Can't download {}: {}", asset.url, error_chain(&e));
         let mut resp = self
@@ -336,8 +369,9 @@ impl Github {
         while let Some(chunk) = resp.chunk().await.map_err(fail)? {
             file.write_all(&chunk).await.map_err(|e| format!("Can't write {}: {e}", dest.display()))?;
             done += chunk.len() as u64;
-            if total > 0 {
-                // Every tenth of the way, not every chunk.
+            // Every tenth of the way, not every chunk, and nothing for a small file, such as a
+            // checksum file.
+            if total >= 64 * 1024 {
                 let percent = (done * 100 / total).min(100);
                 if shown.is_none_or(|s| percent >= s + 10 || (percent == 100 && s != 100)) {
                     shown = Some(percent);
@@ -355,6 +389,17 @@ impl Github {
         }
         Ok(())
     }
+}
+
+/// The release's file named `name`.
+pub fn asset_named(release: &Value, name: &str) -> Option<Asset> {
+    let assets = release["assets"].as_array()?;
+    let a = assets.iter().find(|a| a["name"] == name)?;
+    Some(Asset {
+        url: a["browser_download_url"].as_str()?.to_owned(),
+        content_type: a["content_type"].as_str().unwrap_or("?").to_owned(),
+        size: a["size"].as_u64().unwrap_or(0),
+    })
 }
 
 /// The tag, the asset named `asset_name` (or the first one), and whether it's a pre-release,
@@ -389,6 +434,7 @@ pub async fn refresh(gh: &Github, entry: &Entry, i: &Installed, saved: &mut Save
         Ok(Fetched::NotModified) => saved.last_error.clear(),
         Ok(Fetched::Release(release, etag)) => {
             (saved.remote_version, saved.asset, saved.prerelease) = read_release(&release, i.asset_name.as_deref());
+            saved.checksums = checksums_of(entry, &release);
             let url = format!("{}{}", gh.api, release_resource(&i.repo, entry.channel));
             saved.etag = etag.map(|t| (url, t));
             saved.last_error.clear();
@@ -400,6 +446,12 @@ pub async fn refresh(gh: &Github, entry: &Entry, i: &Installed, saved: &mut Save
     }
 }
 
+/// The release's checksum file, when the entry names one.
+pub fn checksums_of(entry: &Entry, release: &Value) -> Option<Asset> {
+    let crate::config::Kind::Executable(opts) = &entry.kind else { return None };
+    asset_named(release, opts.checksums.as_deref()?)
+}
+
 fn release_resource(repo: &str, channel: Channel) -> String {
     match channel {
         Channel::Stable => format!("repos/{repo}/releases/latest"),
@@ -407,13 +459,26 @@ fn release_resource(repo: &str, channel: Channel) -> String {
     }
 }
 
-/// Installs `asset` as the entry's program, and records `version` in `release_info.json`.
-/// The download goes to a hidden file beside the program, which then replaces it.
+/// The files an update replaces, in order: the programs of an archive, or the program the
+/// asset is.
+pub fn files(opts: &ExecOptions, i: &Installed) -> Vec<String> {
+    if opts.programs.is_empty() { i.asset_name.iter().cloned().collect() } else { opts.programs.clone() }
+}
+
+/// Installs `asset` over the entry's files, and records `version` in `release_info.json`.
+///
+/// The download goes to a hidden folder beside the files, `.<entry>.update`. There it's
+/// checked against `checksums` when the entry names a checksum file, unpacked when it's an
+/// archive of `programs`, and run as the preflight. Then the current files are hard-linked
+/// into `.previous/`, and each new one is renamed over the old one, in order. Before the
+/// renames, a failure leaves every file as it was.
+#[allow(clippy::too_many_arguments)]
 pub async fn install(
     gh: &Github,
     entry: &Entry,
     i: &Installed,
     asset: &Asset,
+    checksums: Option<&Asset>,
     version: &str,
     application: &str,
     out: &Messages,
@@ -421,59 +486,141 @@ pub async fn install(
     let crate::config::Kind::Executable(opts) = &entry.kind else { return Err("Not an executable entry".into()) };
     let prefix = entry.prefix();
     let name = i.asset_name.as_deref().ok_or("The installation has no asset_name")?;
-    let target = opts.path.join(name);
-    let partial = opts.path.join(format!(".{name}.download"));
-    if let Err(e) = gh.download(asset, &partial, application, out).await {
-        let _ = tokio::fs::remove_file(&partial).await;
-        return Err(e);
+    let staging = opts.path.join(format!(".{}.update", entry.name));
+    let _ = tokio::fs::remove_dir_all(&staging).await;
+    tokio::fs::create_dir(&staging).await.map_err(|e| format!("Can't make {}: {e}", staging.display()))?;
+    let result = async {
+        let download = staging.join(name);
+        gh.download(asset, &download, application, out).await?;
+        if let Some(sums_name) = &opts.checksums {
+            let sums = checksums.ok_or_else(|| {
+                format!("Release {version} has no {sums_name}, so orrery can't check the download.")
+            })?;
+            let sums_file = staging.join(format!(".{sums_name}"));
+            gh.download(sums, &sums_file, application, out).await?;
+            let text = tokio::fs::read_to_string(&sums_file).await.unwrap_or_default();
+            let expected = expected_sum(&text, name)
+                .ok_or_else(|| format!("The {sums_name} of {version} has no line for {name}, so orrery can't check it."))?;
+            let actual = sha256(&download).await?;
+            if actual != expected {
+                return Err(format!(
+                    "The download of {name} doesn't match its checksum, so nothing was changed.\nExpected {expected}, got {actual}."
+                ));
+            }
+            let _ = out.send(format!("{prefix}The download matches its checksum."));
+        }
+        let _ = out.send(format!("{prefix}Download Complete, extracting release to '{}'", opts.path.display()));
+        if !opts.programs.is_empty() {
+            unpack(&download, &staging).await?;
+        }
+        let files = files(opts, i);
+        for file in &files {
+            let new = staging.join(file);
+            if !new.is_file() {
+                return Err(format!("{name} has no {file}, so nothing was changed."));
+            }
+            set_mode(&opts.path.join(file), &new).await.map_err(|e| format!("Can't put the new {file} in place: {e}"))?;
+        }
+        check(entry, &files, &staging, out).await?;
+        keep_previous(&opts.path, &files).await?;
+        for file in &files {
+            tokio::fs::rename(staging.join(file), opts.path.join(file))
+                .await
+                .map_err(|e| format!("Can't put the new {file} in place: {e}"))?;
+        }
+        // An archive's release_info.json names its repository, which may be a fork's.
+        let info = staging.join("release_info.json");
+        if !opts.programs.is_empty() && info.is_file() {
+            tokio::fs::rename(&info, opts.path.join("release_info.json"))
+                .await
+                .map_err(|e| format!("Can't write {}: {e}", opts.path.join("release_info.json").display()))?;
+        }
+        set_version(&opts.path.join("release_info.json"), version).await
     }
-    let _ = out.send(format!("{prefix}Download Complete, extracting release to '{}'", opts.path.display()));
-    // Executable for its owner and group, as Moonraker's `_set_exec_perms` makes it.
-    let executable = async {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = tokio::fs::metadata(&partial).await?.permissions().mode();
-        tokio::fs::set_permissions(&partial, std::fs::Permissions::from_mode(mode | 0o110)).await
-    };
-    let ready = match executable.await {
-        Err(e) => Err(format!("Can't put the new {name} in place: {e}")),
-        Ok(()) => check(entry, name, &partial, out).await,
-    };
-    let ready = match ready {
-        Ok(()) => keep_previous(&opts.path, name).await,
-        Err(e) => Err(e),
-    };
-    if let Err(e) = ready {
-        let _ = tokio::fs::remove_file(&partial).await;
-        return Err(e);
-    }
-    if let Err(e) = tokio::fs::rename(&partial, &target).await {
-        let _ = tokio::fs::remove_file(&partial).await;
-        return Err(format!("Can't put the new {name} in place: {e}"));
-    }
-    set_version(&opts.path.join("release_info.json"), version).await
+    .await;
+    let _ = tokio::fs::remove_dir_all(&staging).await;
+    result
 }
 
-/// The entry's preflight, run from `program` before it takes `name`'s place.
-async fn check(entry: &Entry, name: &str, program: &Path, out: &Messages) -> Result<(), String> {
-    if entry.preflight.is_empty() {
-        return Ok(());
-    }
+/// Gives `new` the permissions of the file it replaces, executable for its owner and group,
+/// as Moonraker's `_set_exec_perms` makes a program.
+async fn set_mode(old: &Path, new: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = match tokio::fs::metadata(old).await {
+        Ok(m) => m.permissions().mode(),
+        Err(_) => tokio::fs::metadata(new).await?.permissions().mode(),
+    };
+    tokio::fs::set_permissions(new, std::fs::Permissions::from_mode(mode | 0o110)).await
+}
+
+/// The entry's preflight, run from the new or the old `files` in `dir`, before they take
+/// effect. For one program, the words are its arguments. For an archive's programs, the
+/// first word names the one to run, and it runs in `dir`, beside the others.
+async fn check(entry: &Entry, files: &[String], dir: &Path, out: &Messages) -> Result<(), String> {
     let crate::config::Kind::Executable(opts) = &entry.kind else { return Ok(()) };
+    let Some(first) = entry.preflight.first() else { return Ok(()) };
     let _ = out.send(format!("{}Running the preflight check...", entry.prefix()));
-    crate::preflight::run(name, program, &entry.preflight, &opts.path, crate::preflight::LIMIT).await
+    let (program, args, cwd) = if opts.programs.is_empty() {
+        (files.first().map(String::as_str).unwrap_or_default(), &entry.preflight[..], opts.path.as_path())
+    } else {
+        (first.as_str(), &entry.preflight[1..], dir)
+    };
+    crate::preflight::run(program, &dir.join(program), args, cwd, crate::preflight::LIMIT).await
 }
 
-/// The folder that keeps the program and `release_info.json` an update replaced, for a
+/// The checksum a `SHA256SUMS` file gives for `name`, in lowercase hex.
+fn expected_sum(sums: &str, name: &str) -> Option<String> {
+    sums.lines().find_map(|line| {
+        let (sum, file) = line.split_once(char::is_whitespace)?;
+        (file.trim_start().trim_start_matches('*') == name).then(|| sum.to_ascii_lowercase())
+    })
+}
+
+async fn sha256(path: &Path) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    use tokio::io::AsyncReadExt;
+    let mut file = tokio::fs::File::open(path).await.map_err(|e| format!("Can't read {}: {e}", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0; 64 * 1024];
+    loop {
+        let n = file.read(&mut buf).await.map_err(|e| format!("Can't read {}: {e}", path.display()))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// Unpacks a `.tar.gz` with the system's `tar`, as the agent runs `git`.
+async fn unpack(archive: &Path, into: &Path) -> Result<(), String> {
+    let out = tokio::process::Command::new("tar")
+        .arg("-xzf")
+        .arg(archive)
+        .arg("--no-same-owner")
+        .arg("-C")
+        .arg(into)
+        .output()
+        .await
+        .map_err(|e| format!("Can't run tar: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(format!("Can't unpack {}: {}", archive.display(), String::from_utf8_lossy(&out.stderr).trim()))
+    }
+}
+
+/// The folder that keeps the files and `release_info.json` an update replaced, for a
 /// rollback without network access.
 pub const PREVIOUS: &str = ".previous";
 
-/// Hard-links the program `name` and `release_info.json` in `path` into `.previous/`,
-/// replacing what an earlier update kept there. They're the same files until the update
-/// renames new ones over them.
-async fn keep_previous(path: &Path, name: &str) -> Result<(), String> {
+/// Hard-links `files` and `release_info.json` in `path` into `.previous/`, replacing what an
+/// earlier update kept there. They're the same files until the update renames new ones over
+/// them.
+async fn keep_previous(path: &Path, files: &[String]) -> Result<(), String> {
     let previous = path.join(PREVIOUS);
     tokio::fs::create_dir_all(&previous).await.map_err(|e| format!("Can't make {}: {e}", previous.display()))?;
-    for file in [name, "release_info.json"] {
+    for file in files.iter().map(String::as_str).chain(["release_info.json"]) {
         let (from, to) = (path.join(file), previous.join(file));
         let _ = tokio::fs::remove_file(&to).await;
         if from.exists() {
@@ -485,25 +632,25 @@ async fn keep_previous(path: &Path, name: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// The version `.previous/` holds for the program `name`, when it holds the program and its
-/// `release_info.json`.
-pub async fn previous_version(path: &Path, name: &str) -> Option<String> {
+/// The version `.previous/` holds, when it holds each of `files` and their
+/// `release_info.json`. A few small reads, so the status can show it.
+pub fn previous_version(path: &Path, files: &[String]) -> Option<String> {
     let previous = path.join(PREVIOUS);
-    if !previous.join(name).is_file() {
+    if files.is_empty() || !files.iter().all(|f| previous.join(f).is_file()) {
         return None;
     }
-    let text = tokio::fs::read_to_string(previous.join("release_info.json")).await.ok()?;
+    let text = std::fs::read_to_string(previous.join("release_info.json")).ok()?;
     let data: Value = serde_json::from_str(&text).ok()?;
     data["version"].as_str().map(str::to_owned)
 }
 
-/// Puts the program and `release_info.json` from `.previous/` back, after the entry's
-/// preflight passes for the old program. `.previous/` is empty afterwards.
-pub async fn restore_previous(entry: &Entry, name: &str, out: &Messages) -> Result<(), String> {
+/// Puts `files` and `release_info.json` from `.previous/` back, after the entry's preflight
+/// passes for the old ones. `.previous/` is empty afterwards.
+pub async fn restore_previous(entry: &Entry, files: &[String], out: &Messages) -> Result<(), String> {
     let crate::config::Kind::Executable(opts) = &entry.kind else { return Err("Not an executable entry".into()) };
     let previous = opts.path.join(PREVIOUS);
-    check(entry, name, &previous.join(name), out).await?;
-    for file in ["release_info.json", name] {
+    check(entry, files, &previous, out).await?;
+    for file in files.iter().map(String::as_str).chain(["release_info.json"]) {
         let from = previous.join(file);
         if from.exists() {
             tokio::fs::rename(&from, opts.path.join(file))
@@ -583,7 +730,7 @@ fn error_chain(e: &reqwest::Error) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::collections::HashMap;
 
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -593,7 +740,7 @@ mod tests {
 
     /// A fake GitHub: each path answers with its body, and with 304 when the request sends
     /// the `ETag` it gave. `routes` gets the server's address, for download URLs.
-    async fn server(routes: impl FnOnce(&str) -> HashMap<String, Vec<u8>>) -> String {
+    pub(crate) async fn server(routes: impl FnOnce(&str) -> HashMap<String, Vec<u8>>) -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}/", listener.local_addr().unwrap());
         let routes = routes(&base);
@@ -720,18 +867,22 @@ mod tests {
         assert_eq!(saved.remote_version, "v1.2.0");
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        install(&gh, &e, &i, saved.asset.as_ref().unwrap(), "v1.2.0", "printerkeep", &tx).await.unwrap();
+        install(&gh, &e, &i, saved.asset.as_ref().unwrap(), None, "v1.2.0", "printerkeep", &tx).await.unwrap();
         drop(tx);
         let mut messages = Vec::new();
         while let Some(m) = rx.recv().await {
             messages.push(m);
         }
-        assert_eq!(messages[0], "Downloading printerkeep: 0 KiB / 0 KiB [100%]");
+        // A small download shows no progress.
+        assert!(
+            messages[0].starts_with("Executable printerkeep: Download Complete, extracting release to"),
+            "{messages:?}"
+        );
         let program = dir.path().join("printerkeep-linux-aarch64");
         assert_eq!(std::fs::read(&program).unwrap(), b"new120");
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(std::fs::metadata(&program).unwrap().permissions().mode() & 0o110, 0o110);
-        assert!(!dir.path().join(".printerkeep-linux-aarch64.download").exists());
+        assert!(!dir.path().join(".printerkeep.update").exists());
         let i = installed(opts(&e)).await;
         assert_eq!(i.version, "v1.2.0");
         let info = std::fs::read_to_string(dir.path().join("release_info.json")).unwrap();
@@ -754,10 +905,10 @@ mod tests {
         // A download that's cut short leaves the program as it was.
         let short = Asset { size: 99, ..saved.asset.clone().unwrap() };
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        let err = install(&gh, &e, &i, &short, "v9", "printerkeep", &tx).await.unwrap_err();
+        let err = install(&gh, &e, &i, &short, None, "v9", "printerkeep", &tx).await.unwrap_err();
         assert!(err.contains("has 6 bytes, not 99"), "{err}");
         assert_eq!(std::fs::read(&program).unwrap(), b"new120");
-        assert!(!dir.path().join(".printerkeep-linux-aarch64.download").exists());
+        assert!(!dir.path().join(".printerkeep.update").exists());
         // A missing release is an error, kept in last_error.
         let gone = entry(dir.path(), json!({"channel": "beta"}));
         refresh(&gh, &gone, &i, &mut saved).await;
@@ -784,36 +935,184 @@ mod tests {
         let i = installed(opts(&e)).await;
         let program = dir.path().join("printerkeep-linux-aarch64");
         let previous = dir.path().join(PREVIOUS);
+        let files = vec!["printerkeep-linux-aarch64".to_owned()];
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
 
         // A failed preflight leaves everything as it was.
-        let err = install(&gh, &e, &i, &asset("bad", BAD), "v1.2.0", "printerkeep", &tx).await.unwrap_err();
+        let err = install(&gh, &e, &i, &asset("bad", BAD), None, "v1.2.0", "printerkeep", &tx).await.unwrap_err();
         assert_eq!(
             err,
             "The preflight check `printerkeep-linux-aarch64 --check` failed with exit status 2:\nbroken config"
         );
         assert_eq!(std::fs::read(&program).unwrap(), b"old");
-        assert!(!dir.path().join(".printerkeep-linux-aarch64.download").exists());
+        assert!(!dir.path().join(".printerkeep.update").exists());
         assert!(!previous.exists());
         assert_eq!(installed(opts(&e)).await.version, "v1.1.0");
 
         // A passing one: the old program and release_info.json go to .previous/.
-        install(&gh, &e, &i, &asset("good", GOOD), "v1.2.0", "printerkeep", &tx).await.unwrap();
+        install(&gh, &e, &i, &asset("good", GOOD), None, "v1.2.0", "printerkeep", &tx).await.unwrap();
         assert_eq!(std::fs::read(&program).unwrap(), GOOD);
         assert_eq!(std::fs::read(previous.join("printerkeep-linux-aarch64")).unwrap(), b"old");
-        assert_eq!(previous_version(dir.path(), "printerkeep-linux-aarch64").await.as_deref(), Some("v1.1.0"));
+        assert_eq!(previous_version(dir.path(), &files).as_deref(), Some("v1.1.0"));
         assert_eq!(installed(opts(&e)).await.version, "v1.2.0");
 
         // A rollback puts them back, without the network, after the old program's preflight.
         // The old program here is "old", which can't run, so the check fails first.
-        let err = restore_previous(&e, "printerkeep-linux-aarch64", &tx).await.unwrap_err();
+        let err = restore_previous(&e, &files, &tx).await.unwrap_err();
         assert!(err.starts_with("The preflight check `printerkeep-linux-aarch64 --check` can't start"), "{err}");
         assert_eq!(std::fs::read(&program).unwrap(), GOOD);
         e.preflight.clear();
-        restore_previous(&e, "printerkeep-linux-aarch64", &tx).await.unwrap();
+        restore_previous(&e, &files, &tx).await.unwrap();
         assert_eq!(std::fs::read(&program).unwrap(), b"old");
         assert_eq!(installed(opts(&e)).await.version, "v1.1.0");
-        assert_eq!(previous_version(dir.path(), "printerkeep-linux-aarch64").await, None);
+        assert_eq!(previous_version(dir.path(), &files), None);
+    }
+
+    /// A set of programs in `dir`, each a script that prints its name and `tag`. `tool` is
+    /// the one with a preflight: `tool <args> check` passes when `tag` isn't "broken", the
+    /// first argument is `-c`, and `tool-helper` is beside it.
+    fn programs(dir: &Path, tag: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(dir).unwrap();
+        for program in ["tool-helper", "tool"] {
+            let body = if program == "tool" {
+                format!(
+                    "#!/bin/sh\nfor a; do last=$a; done\nif [ \"$last\" = check ]; then\n  [ {tag} != broken ] || {{ echo the config is broken >&2; exit 1; }}\n  [ \"$1\" = -c ] && [ -x ./tool-helper ] || exit 9\nfi\necho {program} {tag}\n"
+                )
+            } else {
+                format!("#!/bin/sh\necho {program} {tag}\n")
+            };
+            let path = dir.join(program);
+            std::fs::write(&path, body).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o750)).unwrap();
+        }
+    }
+
+    /// A release archive of the programs, flat, with a release_info.json from `owner`.
+    fn archive(tag: &str, owner: &str) -> Vec<u8> {
+        let dir = tempfile::tempdir().unwrap();
+        let set = dir.path().join("set");
+        programs(&set, tag);
+        let info = json!({"project_name": "tool", "project_owner": owner, "version": tag, "asset_name": "tool-aarch64.tar.gz"});
+        std::fs::write(set.join("release_info.json"), info.to_string()).unwrap();
+        let file = dir.path().join("a.tar.gz");
+        let status = std::process::Command::new("tar")
+            .arg("-czf")
+            .arg(&file)
+            .arg("-C")
+            .arg(&set)
+            .args(["tool-helper", "tool", "release_info.json"])
+            .status()
+            .unwrap();
+        assert!(status.success());
+        std::fs::read(file).unwrap()
+    }
+
+    #[tokio::test]
+    async fn archives_with_checksums() {
+        use sha2::{Digest, Sha256};
+        use std::os::unix::fs::PermissionsExt;
+        let (good, broken, fork) =
+            (archive("v0.2.0", "example"), archive("broken", "example"), archive("v0.3.0", "someone"));
+        let sum = |bytes: &[u8]| Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect::<String>();
+        let base = server(|base| {
+            let latest = json!({"tag_name": "v0.2.0", "assets": [
+                {"name": "tool-aarch64.tar.gz", "browser_download_url": format!("{base}dl/good"), "size": good.len()},
+                {"name": "tool-armv7.tar.gz", "browser_download_url": format!("{base}dl/other")},
+                {"name": "SHA256SUMS", "browser_download_url": format!("{base}dl/sums")},
+            ]});
+            HashMap::from([
+                ("/dl/good".to_owned(), good.clone()),
+                ("/dl/broken".to_owned(), broken.clone()),
+                ("/dl/fork".to_owned(), fork.clone()),
+                ("/dl/sums".to_owned(), format!("{}  tool-aarch64.tar.gz\n", sum(&good)).into_bytes()),
+                ("/dl/sums-broken".to_owned(), format!("{}  tool-aarch64.tar.gz\n", sum(&broken)).into_bytes()),
+                ("/dl/sums-fork".to_owned(), format!("{} *tool-aarch64.tar.gz\n", sum(&fork)).into_bytes()),
+                ("/dl/sums-other".to_owned(), format!("{}  tool-armv7.tar.gz\n", sum(&good)).into_bytes()),
+                ("/repos/example/tool/releases/latest".to_owned(), latest.to_string().into_bytes()),
+            ])
+        })
+        .await;
+        let gh = Github::with_api(&base).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        programs(dir.path(), "v0.1.0");
+        let info = r#"{"project_name":"tool","project_owner":"example","version":"v0.1.0","asset_name":"tool-aarch64.tar.gz"}"#;
+        std::fs::write(dir.path().join("release_info.json"), info).unwrap();
+        let g = config::global(&Map::new(), &mut Vec::new());
+        let map = json!({"type": "executable", "path": dir.path(), "repo": "example/tool",
+            "checksums": "SHA256SUMS", "programs": ["tool-helper", "tool"], "preflight": ["tool", "-c", "x", "check"]});
+        let map = map.as_object().unwrap();
+        let mut e = config::entry("tool", map, &g).unwrap();
+        let from_toml = ["checksums", "programs", "preflight"].map(str::to_owned);
+        config::own_options("update_manager tool", map, &from_toml, &mut e, &mut Vec::new()).unwrap();
+        let i = installed(opts(&e)).await;
+        assert!(i.valid, "{:?}", i.warnings);
+        let files = files(opts(&e), &i);
+        assert_eq!(files, ["tool-helper", "tool"]);
+        let read =
+            |d: &Path| files.iter().map(|f| std::fs::read_to_string(d.join(f)).unwrap_or_default()).collect::<Vec<_>>();
+        let before = read(dir.path());
+        let unchanged = |what: &str| {
+            assert_eq!(read(dir.path()), before, "{what}");
+            assert!(!dir.path().join(".tool.update").exists(), "{what}");
+            assert!(!dir.path().join(PREVIOUS).exists(), "{what}");
+        };
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let at = |path: &str| Asset { url: format!("{base}dl/{path}"), content_type: "?".into(), size: 0 };
+
+        // The check finds the archive for this CPU, and the checksums.
+        let mut saved = Saved::default();
+        refresh(&gh, &e, &i, &mut saved).await;
+        assert_eq!(saved.remote_version, "v0.2.0");
+        assert!(saved.asset.as_ref().unwrap().url.ends_with("/dl/good"));
+        assert!(saved.checksums.as_ref().unwrap().url.ends_with("/dl/sums"));
+
+        // A download that doesn't match its checksum changes nothing, nor one that
+        // SHA256SUMS doesn't list, nor a release without SHA256SUMS.
+        let err = install(&gh, &e, &i, &at("broken"), Some(&at("sums")), "v0.2.0", "tool", &tx).await.unwrap_err();
+        assert!(err.starts_with("The download of tool-aarch64.tar.gz doesn't match its checksum"), "{err}");
+        unchanged("checksum");
+        let err = install(&gh, &e, &i, &at("good"), Some(&at("sums-other")), "v0.2.0", "tool", &tx).await.unwrap_err();
+        assert_eq!(err, "The SHA256SUMS of v0.2.0 has no line for tool-aarch64.tar.gz, so orrery can't check it.");
+        unchanged("no line");
+        let err = install(&gh, &e, &i, &at("good"), None, "v0.2.0", "tool", &tx).await.unwrap_err();
+        assert_eq!(err, "Release v0.2.0 has no SHA256SUMS, so orrery can't check the download.");
+        unchanged("no checksums");
+        // Nor a failed preflight, which runs the new tool beside the new helper.
+        let err =
+            install(&gh, &e, &i, &at("broken"), Some(&at("sums-broken")), "v0.4.0", "tool", &tx).await.unwrap_err();
+        assert_eq!(err, "The preflight check `tool -c x check` failed with exit status 1:\nthe config is broken");
+        unchanged("preflight");
+
+        // An update: the new set in place with the old modes, the old one in .previous/.
+        install(&gh, &e, &i, saved.asset.as_ref().unwrap(), saved.checksums.as_ref(), "v0.2.0", "tool", &tx)
+            .await
+            .unwrap();
+        assert!(read(dir.path()).iter().all(|c| c.ends_with(" v0.2.0\n")));
+        assert_eq!(read(&dir.path().join(PREVIOUS)), before);
+        let mode = std::fs::metadata(dir.path().join("tool")).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o750);
+        assert_eq!(previous_version(dir.path(), &files).as_deref(), Some("v0.1.0"));
+        assert_eq!(installed(opts(&e)).await.version, "v0.2.0");
+        assert!(!dir.path().join(".tool.update").exists());
+        // The status offers .previous/ for a rollback.
+        assert_eq!(status(&e, &installed(opts(&e)).await, &saved)["rollback_version"], "v0.1.0");
+
+        // A rollback puts the old set back, after its preflight.
+        restore_previous(&e, &files, &tx).await.unwrap();
+        assert_eq!(read(dir.path()), before);
+        assert_eq!(installed(opts(&e)).await.version, "v0.1.0");
+        assert_eq!(previous_version(dir.path(), &files), None);
+
+        // A fork's archive brings its release_info.json, so its releases take over.
+        let i = installed(opts(&e)).await;
+        install(&gh, &e, &i, &at("fork"), Some(&at("sums-fork")), "v0.3.0", "tool", &tx).await.unwrap();
+        assert_eq!(installed(opts(&e)).await.repo, "someone/tool");
+        // Unless orrery.toml names the repository, which then wins without an anomaly.
+        let from_toml = ["checksums", "programs", "preflight", "repo"].map(str::to_owned);
+        config::own_options("update_manager tool", map, &from_toml, &mut e, &mut Vec::new()).unwrap();
+        let i = installed(opts(&e)).await;
+        assert_eq!((i.repo.as_str(), i.anomalies.len()), ("example/tool", 0));
     }
 
     #[test]

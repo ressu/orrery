@@ -50,6 +50,15 @@ steps:
           is_valid: false
           repo_detected: false
           warnings: [No git repo detected at configured path]
+        # orrery's own entry, an executable entry for orrery's folder. A development build
+        # doesn't update itself, and the build folder has no release_info.json.
+        orrery:
+          name: orrery
+          configured_type: executable
+          channel: stable
+          is_valid: false
+          remote_version: "?"
+          warnings: {$contains: ["Failed to validate installation", "This is a development build, so orrery doesn't update itself."]}
         tool:
           name: tool
           configured_type: executable
@@ -112,6 +121,17 @@ steps:
     expect_error: {code: 400, message: "Executable tool: Invalid install detected, aborting update"}
   - call: machine.update.recover
     expect_error: {code: 400, message: "No data for argument: name"}
+  # orrery's own entry, by name: a development build doesn't update itself, or roll back. A
+  # full update skips it.
+  - call: machine.update.client
+    params: {name: orrery}
+    expect_error: {code: 400, message: "This is a development build, so orrery doesn't update itself."}
+  - call: machine.update.rollback
+    params: {name: orrery}
+    expect_error: {code: 400, message: "This is a development build, so orrery doesn't update itself."}
+  - call: machine.update.recover
+    params: {name: orrery}
+    expect_error: {code: 400, message: "Updater orrery is not a Git Repo Type"}
   # The check is saved in the agent's namespace.
   - call: server.database.get_item
     params: {namespace: update_manager, key: missing}

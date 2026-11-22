@@ -122,6 +122,14 @@ Mainsail reach it under Moonraker's names, so their update pages work as before.
   `system_dependencies`, and the system's Debian packages.
 - It adds an entry for Klipper or Kalico, named after the one Klippy runs. It has no
   `moonraker` entry, and doesn't update `web` or `zip` entries yet.
+- orrery's own entry, `orrery`, installs orrery's releases from GitHub, then restarts orrery.
+  The old programs stay in `.previous/`, and a rollback puts them back. A build of your own
+  doesn't update itself. To take releases from a fork, name it in `orrery.toml`:
+
+  ```toml
+  [update_manager.orrery]
+  repo = "someone/orrery"
+  ```
 - Klipper's entry expects the project's own repo and branch. To run a fork on purpose, name
   it in `orrery.toml`, and the entry reports no anomaly:
 
@@ -147,6 +155,19 @@ Mainsail reach it under Moonraker's names, so their update pages work as before.
   If the check fails, the old version stays, and the update dialog shows the check's output.
 - An executable keeps the program an update replaced, in `.previous/` beside it, so a
   rollback needs no download.
+- In `orrery.toml`, an executable entry can also ask for a checksum check, take an archive of
+  several programs, and name the repository it follows, which then wins over
+  `release_info.json`:
+
+  ```toml
+  [update_manager.tool]
+  checksums = "SHA256SUMS"
+  programs = ["tool-helper", "tool"]
+  preflight = ["tool", "--check"]
+  ```
+
+  With `programs`, the release's asset is a `.tar.gz` that holds them, and the preflight's first
+  word names the one to run.
 - It checks for updates once a week by default, and never installs one by itself. Set
   `refresh_interval`, in hours, for another interval.
 - It refuses an update while a print runs, and restarts each service once, after the print.

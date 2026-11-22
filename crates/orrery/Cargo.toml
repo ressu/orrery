@@ -27,7 +27,7 @@ regex.workspace = true
 rustix = { workspace = true, features = ["fs", "param", "rand", "system", "termios", "time"] }
 serde.workspace = true
 serde_json.workspace = true
-sha2 = "0.11.1"
+sha2.workspace = true
 tokio-util = { version = "0.7.20", features = ["io"] }
 tokio.workspace = true
 tracing-appender = "0.2.5"

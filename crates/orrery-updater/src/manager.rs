@@ -17,6 +17,7 @@ use crate::git::{self, RepoState, Rollback, Tracking};
 use crate::packagekit::PackageKit;
 use crate::plugins;
 use crate::preflight;
+use crate::release;
 
 /// Moonraker skips a refresh of everything within this long of the last one.
 const REFRESH_SPAM: Duration = Duration::from_secs(60);
@@ -146,6 +147,9 @@ pub struct Manager {
     pending: Mutex<Vec<String>>,
     /// Whether a task waits for a print to end, to restart the pending services.
     restart_after_print: AtomicBool,
+    /// Whether orrery restarts once the command's last message is sent, which its restart
+    /// cuts off, since it stops this agent.
+    restart_orrery: AtomicBool,
     next_proc_id: AtomicU64,
     /// GitHub, for executables; the error when HTTPS can't be set up.
     github: Result<Github, String>,
@@ -240,6 +244,7 @@ impl Manager {
             waiting: AtomicUsize::new(0),
             pending: Mutex::new(Vec::new()),
             restart_after_print: AtomicBool::new(false),
+            restart_orrery: AtomicBool::new(false),
             next_proc_id: AtomicU64::new(now() as u64),
             github: Github::new(),
         })
@@ -356,7 +361,32 @@ impl Manager {
             entries.push(config::system_entry(&global));
         }
         let mut klipper_sections = Vec::new();
-        for name in agent.config_names(None).await? {
+        let names = agent.config_names(None).await?;
+        // orrery's own entry comes next, where Moonraker lists its own.
+        let section = format!("{SECTION} orrery");
+        let (map, from_orrery_toml) = if names.iter().any(|n| n == "orrery") {
+            (
+                agent.config(Some(&section)).await?.unwrap_or_default(),
+                agent.config_from_orrery_toml(Some(&section)).await?,
+            )
+        } else {
+            (Map::new(), Vec::new())
+        };
+        let args = release::orrery_args();
+        match config::orrery_entry(release::own_dir(), &map, &from_orrery_toml, &args, &global, &mut warnings) {
+            Ok(Some(e)) => {
+                if let Some(problem) = release::problem() {
+                    tracing::info!("orrery {}: {problem}", orrery_build::VERSION);
+                }
+                entries.push(e);
+            }
+            Ok(None) => {}
+            Err(w) => warnings.push(w),
+        }
+        for name in names {
+            if name == "orrery" {
+                continue;
+            }
             let map = agent.config(Some(&format!("{SECTION} {name}"))).await?.unwrap_or_default();
             if config::is_klipper_section(&name) {
                 let from_orrery_toml = agent.config_from_orrery_toml(Some(&format!("{SECTION} {name}"))).await?;
@@ -366,7 +396,7 @@ impl Manager {
             let section = format!("{SECTION} {name}");
             let from_orrery_toml = agent.config_from_orrery_toml(Some(&section)).await?;
             let entry = config::entry(&name, &map, &global).and_then(|mut e| {
-                e.preflight = config::preflight(&section, &map, &from_orrery_toml, &mut warnings)?;
+                config::own_options(&section, &map, &from_orrery_toml, &mut e, &mut warnings)?;
                 Ok(e)
             });
             match entry {
@@ -389,13 +419,21 @@ impl Manager {
         for key in stale_keys(&stored, &entries).into_iter().filter(|k| !config::is_klipper_section(k)) {
             let _ = agent.call("server.database.delete_item", json!({"namespace": SECTION, "key": key})).await;
         }
-        let states: Vec<EntryState> = entries
+        let mut states: Vec<EntryState> = entries
             .into_iter()
             .map(|entry| {
                 let stored = stored.get(&entry.name).map(Stored::from_json).unwrap_or_default();
                 EntryState { entry, stored, repo: None, installed: None }
             })
             .collect();
+        // orrery's programs may have changed since the stored status, by an update and the
+        // restart after it, or from a shell.
+        for s in states.iter_mut().filter(|s| release::is_own(&s.entry)) {
+            if let Kind::Executable(opts) = &s.entry.kind {
+                s.installed = Some(executable::installed(opts).await);
+                s.stored.status = own_status(s);
+            }
+        }
         tracing::info!(
             "{} update manager entries, checked every {} hours{}",
             states.len(),
@@ -478,8 +516,9 @@ impl Manager {
                 Ok(reply) => Stored::from_json(&reply["value"]),
                 Err(_) => Stored::default(),
             };
-        // After `system`, where Moonraker lists it.
-        let at = entries.iter().position(|s| matches!(s.entry.kind, Kind::System)).map_or(0, |i| i + 1);
+        // After `system` and orrery's own entry, where Moonraker lists it.
+        let at =
+            entries.iter().take_while(|s| matches!(s.entry.kind, Kind::System) || release::is_own(&s.entry)).count();
         let mut s = EntryState { entry, stored, repo: None, installed: None };
         {
             let mut view = self.view.lock().expect("view lock");
@@ -608,6 +647,14 @@ impl Manager {
             }
             Kind::Executable(opts) => {
                 let installed = executable::installed(opts).await;
+                // The check after the restart that follows orrery's own update.
+                if opts.orrery && s.stored.release.expected_version.as_deref() == Some(orrery_build::VERSION) {
+                    tracing::info!(
+                        "orrery runs {}, which the last update or rollback put in place",
+                        orrery_build::VERSION
+                    );
+                    s.stored.release.expected_version = None;
+                }
                 if fetch {
                     match &self.github {
                         Ok(gh) => executable::refresh(gh, &s.entry, &installed, &mut s.stored.release).await,
@@ -644,8 +691,8 @@ impl Manager {
         if let Some(repo) = &s.repo {
             s.stored.status = repo.status(&s.entry, s.stored.rollback.as_ref().map(|r| r.version.as_str()));
         }
-        if let Some(installed) = &s.installed {
-            s.stored.status = executable::status(&s.entry, installed, &s.stored.release);
+        if s.installed.is_some() {
+            s.stored.status = own_status(s);
         }
         if let Kind::System = s.entry.kind {
             s.stored.status = system_status(&s.stored.packages);
@@ -702,6 +749,11 @@ impl Manager {
             None => {
                 p.send("Preparing full software update...", false).await;
                 for s in entries.iter_mut() {
+                    // A development build, or one without a repository, isn't updated by
+                    // name either, but it's no reason to stop the others.
+                    if release::is_own(&s.entry) && release::problem().is_some() {
+                        continue;
+                    }
                     if let Err(e) = m.update_entry(s, p).await {
                         let messages = vec![format!("Error updating {}: {}", s.entry.name, e.error)];
                         return Err(Failure { messages, ..e });
@@ -779,7 +831,7 @@ impl Manager {
         drop(entries);
         *self.busy.lock().expect("busy lock") = false;
         self.notify_refreshed().await;
-        match result {
+        let answer = match result {
             Ok(done) => {
                 if let Some(message) = done {
                     p.send(&message, true).await;
@@ -792,13 +844,20 @@ impl Manager {
                 }
                 Err(MethodError::new(f.code, f.error))
             }
+        };
+        // Last, since it stops this agent. The answer to the request may not arrive; the
+        // update dialog is complete by now.
+        if self.restart_orrery.swap(false, Ordering::SeqCst) {
+            self.restart_self(&p).await;
         }
+        answer
     }
 
     /// Updates one entry to the version a fresh check finds. Returns false when it's up to
     /// date.
     async fn update_entry(&self, s: &mut EntryState, p: &Progress) -> Result<bool, Failure> {
         match s.entry.kind {
+            Kind::Executable(_) if release::is_own(&s.entry) => return self.update_own(s, p, false).await,
             Kind::Executable(_) => return self.update_executable(s, p, None).await,
             Kind::System => return self.update_system(s, p).await,
             Kind::Git(_) => {}
@@ -891,6 +950,7 @@ impl Manager {
 
     async fn rollback_entry(&self, s: &mut EntryState, p: &Progress) -> Result<bool, Failure> {
         match s.entry.kind {
+            Kind::Executable(_) if release::is_own(&s.entry) => return self.update_own(s, p, true).await,
             Kind::Executable(_) => return self.rollback_executable(s, p).await,
             Kind::System => return Err(Failure::new(400, "Rollback not available for system")),
             Kind::Git(_) => {}
@@ -962,7 +1022,7 @@ impl Manager {
         &self,
         s: &mut EntryState,
         p: &Progress,
-        to: Option<(String, executable::Asset)>,
+        to: Option<(String, executable::Asset, Option<executable::Asset>)>,
     ) -> Result<bool, Failure> {
         let prefix = s.entry.prefix();
         let rolling_back = to.is_some();
@@ -973,7 +1033,7 @@ impl Manager {
         if !installed.valid {
             return Err(Failure::new(400, format!("{prefix}Invalid install detected, aborting update")));
         }
-        let (version, asset) = match to {
+        let (version, asset, checksums) = match to {
             Some(target) => target,
             None => {
                 let saved = &s.stored.release;
@@ -985,7 +1045,7 @@ impl Manager {
                 }
                 let asset =
                     saved.asset.clone().ok_or_else(|| Failure::new(400, format!("{prefix}Invalid download url")))?;
-                (saved.remote_version.clone(), asset)
+                (saved.remote_version.clone(), asset, saved.checksums.clone())
             }
         };
         let entry = &s.entry;
@@ -994,8 +1054,10 @@ impl Manager {
         p.send(&format!("{prefix}Downloading Release..."), false).await;
         let before = Deps::read(&s.entry.kind.deps()).await;
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-        let work =
-            async move { executable::install(gh, entry, &installed, &asset, &version, &p.application, &tx).await };
+        let work = async move {
+            let sums = checksums.as_ref();
+            executable::install(gh, entry, &installed, &asset, sums, &version, &p.application, &tx).await
+        };
         let forward = async {
             while let Some(line) = rx.recv().await {
                 p.output(&line).await;
@@ -1046,25 +1108,21 @@ impl Manager {
         self.read_repo(s, false).await;
         let installed = s.installed.clone().expect("just read");
         let saved = s.stored.release.clone();
-        if saved.rollback_version == "?" || saved.rollback_repo == "?" {
-            return Err(Failure::new(400, "Incomplete Rollback Data"));
-        }
-        if saved.rollback_version == installed.version {
-            return Ok(false);
-        }
-        // The program the last update replaced, kept in .previous/, needs no download.
+        // The files the last update replaced, kept in .previous/, need no download. They win
+        // over the database's rollback version, since an update from a shell changes them
+        // without it.
         let Kind::Executable(opts) = &s.entry.kind else { unreachable!("an executable entry") };
-        if let Some(name) = installed.asset_name.clone()
-            && executable::previous_version(&opts.path, &name).await.as_deref() == Some(saved.rollback_version.as_str())
+        let files = executable::files(opts, &installed);
+        if let Some(previous) = executable::previous_version(&opts.path, &files)
+            && previous != installed.version
         {
             let prefix = s.entry.prefix();
             p.send(&format!("{prefix}Rolling Back..."), false).await;
-            p.send(&format!("{prefix}Restoring {} from {}...", saved.rollback_version, executable::PREVIOUS), false)
-                .await;
+            p.send(&format!("{prefix}Restoring {previous} from {}...", executable::PREVIOUS), false).await;
             let before = Deps::read(&s.entry.kind.deps()).await;
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
             let entry = &s.entry;
-            let work = async move { executable::restore_previous(entry, &name, &tx).await };
+            let work = async move { executable::restore_previous(entry, &files, &tx).await };
             let forward = async {
                 while let Some(line) = rx.recv().await {
                     p.output(&line).await;
@@ -1077,6 +1135,12 @@ impl Manager {
             self.add_pending(&s.entry);
             return Ok(true);
         }
+        if saved.rollback_version == "?" || saved.rollback_repo == "?" {
+            return Err(Failure::new(400, "Incomplete Rollback Data"));
+        }
+        if saved.rollback_version == installed.version {
+            return Ok(false);
+        }
         let gh = self.github.as_ref().map_err(|e| Failure::new(500, e.clone()))?;
         let release = match gh.release(&saved.rollback_repo, s.entry.channel, Some(&saved.rollback_version), None).await
         {
@@ -1086,7 +1150,37 @@ impl Manager {
         };
         let (_, asset, _) = executable::read_release(&release, installed.asset_name.as_deref());
         let asset = asset.ok_or_else(|| Failure::new(500, "Failed to retrieve release asset data"))?;
-        self.update_executable(s, p, Some((saved.rollback_version, asset))).await
+        let checksums = executable::checksums_of(&s.entry, &release);
+        self.update_executable(s, p, Some((saved.rollback_version, asset, checksums))).await
+    }
+
+    /// orrery's own entry: an executable's update or rollback, refused for a development
+    /// build. Afterwards, the entry expects the new version once orrery restarts, at the end
+    /// of the command. One put in place before, and not running yet, restarts orrery too.
+    async fn update_own(&self, s: &mut EntryState, p: &Progress, rollback: bool) -> Result<bool, Failure> {
+        if let Some(problem) = release::problem() {
+            return Err(Failure::new(400, problem));
+        }
+        let done =
+            if rollback { self.rollback_executable(s, p).await? } else { self.update_executable(s, p, None).await? };
+        if done {
+            s.stored.release.expected_version = s.installed.as_ref().map(|i| i.version.clone());
+            self.save(s).await;
+        }
+        if done || release::not_restarted(&s.stored.release).is_some() {
+            self.add_pending(&s.entry);
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    /// Asks orrery to restart, which stops this agent and starts the new one.
+    async fn restart_self(&self, p: &Progress) {
+        let Some(agent) = self.agent() else { return };
+        p.send("Restarting orrery...", false).await;
+        if let Err(e) = agent.call("server.restart", Value::Null).await {
+            p.send(&format!("Can't restart orrery: {e}. Restart it with: sudo systemctl restart orrery"), false).await;
+        }
     }
 
     /// Adds the entry's services to the restarts that wait for the end of the updates.
@@ -1134,6 +1228,9 @@ impl Manager {
                     m.restart_after_print.store(false, Ordering::SeqCst);
                     let quiet = Progress { agent: None, application: String::new(), proc_id: 0 };
                     m.restart_services(&quiet).await;
+                    if m.restart_orrery.swap(false, Ordering::SeqCst) {
+                        m.restart_self(&quiet).await;
+                    }
                 });
             }
             return;
@@ -1146,6 +1243,10 @@ impl Manager {
         let services = std::mem::take(&mut *self.pending.lock().expect("pending lock"));
         let Some(agent) = self.agent() else { return };
         for service in services {
+            if service == "orrery" {
+                self.restart_orrery.store(true, Ordering::SeqCst);
+                continue;
+            }
             p.send(&format!("Restarting service {service}..."), false).await;
             let unit = if service == "klipper" { klipper_unit(&agent).await } else { service.clone() };
             if let Err(e) = agent.call("machine.services.restart", json!({"service": unit})).await {
@@ -1247,6 +1348,16 @@ async fn local_time() -> (u32, u32, u32) {
 /// The `system` entry's object in `version_info`, as Moonraker's `PackageDeploy` gives it.
 fn system_status(packages: &[String]) -> Value {
     json!({"name": "system", "configured_type": "system", "package_count": packages.len(), "package_list": packages})
+}
+
+/// An executable's object in `version_info`, with what's particular to orrery's own.
+fn own_status(s: &EntryState) -> Value {
+    let Some(installed) = &s.installed else { return s.stored.status.clone() };
+    let mut status = executable::status(&s.entry, installed, &s.stored.release);
+    if release::is_own(&s.entry) {
+        release::adjust_status(&mut status, &s.stored.release);
+    }
+    status
 }
 
 /// An entry's object in `version_info` before its first check since the agent started: the
@@ -1407,6 +1518,8 @@ mod tests {
                 last_error: String::new(),
                 rollback_version: "v1.1.0".into(),
                 rollback_repo: "ressu/printerkeep".into(),
+                checksums: Some(executable::Asset { url: "https://x/s".into(), content_type: "?".into(), size: 0 }),
+                expected_version: Some("v0.2.0".into()),
             },
             packages: vec!["libc6".into()],
         };

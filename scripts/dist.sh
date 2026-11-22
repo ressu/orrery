@@ -7,11 +7,13 @@
 # Arguments:
 #   arch  aarch64, armv7, or x86_64
 #
-# The archive is dist/orrery-v<version>-<arch>.tar.gz. It holds orrery, orrery-import,
-# orrery-spoolman, orrery-updater, LICENSE, and README.md, with no folder around them, so it
-# unpacks straight into ~/orrery. The binaries are release builds (ORRERY_RELEASE=1). In CI,
-# GITHUB_REPOSITORY names the repository they update from; without it, a printer needs `repo`
-# in [update_manager.orrery].
+# The archive is dist/orrery-<arch>.tar.gz: a fixed name, as an update entry's asset_name is.
+# It holds orrery, orrery-import, orrery-spoolman, orrery-updater, LICENSE, and README.md,
+# with no folder around them, so it unpacks straight into ~/orrery. The binaries are release
+# builds (ORRERY_RELEASE=1). In CI, GITHUB_REPOSITORY names the repository they update from,
+# and the archive gets a release_info.json that names it, the version, and the archive, as an
+# executable update entry needs. Without it, there's no release_info.json, and the programs
+# don't update themselves.
 #
 # The archive is the same for the same commit: its files are owned by root and dated with
 # the commit's time. (The nix shell's SOURCE_DATE_EPOCH is a fixed 1980 date, so it's not used.)
@@ -61,7 +63,15 @@ done
 install -m 644 LICENSE README.md "$stage/"
 files+=(LICENSE README.md)
 
-archive="orrery-$version-$arch.tar.gz"
+archive="orrery-$arch.tar.gz"
+if [ -n "${GITHUB_REPOSITORY:-}" ]; then
+  printf '{"project_name": "%s", "project_owner": "%s", "version": "%s", "asset_name": "%s"}\n' \
+    "${GITHUB_REPOSITORY#*/}" "${GITHUB_REPOSITORY%%/*}" "$version" "$archive" > "$stage/release_info.json"
+  chmod 644 "$stage/release_info.json"
+  files+=(release_info.json)
+else
+  echo "==> GITHUB_REPOSITORY isn't set, so the archive has no release_info.json"
+fi
 epoch=$(git log -1 --format=%ct)
 tar --owner=0 --group=0 --numeric-owner --mtime="@$epoch" \
   -C "$stage" -cf - "${files[@]}" | gzip -9n > "dist/$archive"

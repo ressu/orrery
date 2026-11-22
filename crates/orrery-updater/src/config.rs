@@ -17,7 +17,7 @@ use crate::deps::DepFiles;
 pub const SECTION: &str = "update_manager";
 /// Names Moonraker gives its own entries, which a configured entry can't take. `klipper` and
 /// `kalico` sections hold options for Klipper's entry instead ([`is_klipper_section`]).
-const RESERVED: &[&str] = &["moonraker", "system"];
+const RESERVED: &[&str] = &["moonraker", "system", "orrery"];
 /// The options Klipper's entry takes from its section: Moonraker's `OPTION_OVERRIDES`, and
 /// `enabled`.
 const KLIPPER_OPTIONS: &[&str] = &["channel", "pinned_commit", "refresh_interval", "report_anomalies", "enabled"];
@@ -180,14 +180,16 @@ pub fn preflight(
         warnings.push(ignored_options(section, &["preflight"], "it takes it only from orrery.toml"));
         return Ok(Vec::new());
     }
-    let words = value
+    words(section, "preflight", value, r#"["--check"]"#)
+}
+
+/// A non-empty list of strings.
+fn words(section: &str, key: &str, value: &Value, example: &str) -> Result<Vec<String>, String> {
+    value
         .as_array()
         .and_then(|items| items.iter().map(|i| i.as_str().map(str::to_owned)).collect::<Option<Vec<_>>>())
         .filter(|w| !w.is_empty())
-        .ok_or_else(|| {
-            format!("[{section}] preflight: expected a list of words, such as [\"--check\"], got {value}")
-        })?;
-    Ok(words)
+        .ok_or_else(|| format!("[{section}] {key}: expected a list of words, such as {example}, got {value}"))
 }
 
 /// "[update_manager klipper]: orrery ignores the option path, since …"
@@ -326,9 +328,19 @@ impl Kind {
 pub struct ExecOptions {
     /// The folder with the program and its `release_info.json`.
     pub path: PathBuf,
-    /// `owner/name` on GitHub.
+    /// `owner/name` on GitHub. Empty for orrery's own entry when the build doesn't name one;
+    /// then it's the one `release_info.json` names.
     pub repo: String,
     pub system_dependencies: Option<String>,
+    /// The programs the asset holds, as a `.tar.gz`, in the order they're replaced. Empty when
+    /// the asset is the program itself, as in Moonraker.
+    pub programs: Vec<String>,
+    /// The release's file of SHA-256 sums, which the download must match.
+    pub checksums: Option<String>,
+    /// `repo` came from `orrery.toml`, and wins over `release_info.json`.
+    pub repo_pinned: bool,
+    /// orrery's own entry: a development build doesn't update, and orrery restarts last.
+    pub orrery: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -354,6 +366,16 @@ struct Options<'a> {
 }
 
 impl Options<'_> {
+    /// A GitHub repository, as `owner/name`.
+    fn repo(&self, key: &str) -> Result<Option<String>, String> {
+        let Some(repo) = self.text(key)? else { return Ok(None) };
+        let repo = repo.trim_matches('/').to_owned();
+        if repo.split('/').filter(|p| !p.is_empty()).count() != 2 {
+            return Err(format!("[{}] {key}: expected owner/name, got {repo:?}", self.section));
+        }
+        Ok(Some(repo))
+    }
+
     fn text(&self, key: &str) -> Result<Option<String>, String> {
         match self.map.get(key) {
             None | Some(Value::Null) => Ok(None),
@@ -525,6 +547,114 @@ pub fn system_entry(global: &Global) -> Entry {
     }
 }
 
+/// The options orrery's own entry takes, from `[update_manager.orrery]`.
+const ORRERY_OPTIONS: &[&str] = &["enabled", "repo"];
+
+/// orrery's own entry: an executable entry for the programs in `dir`, which its releases
+/// hold in an archive with `SHA256SUMS` (docs/design/2026-11-22-self-update.md).
+/// `[update_manager.orrery]` can set `enabled`, and `repo` from `orrery.toml` only. Its
+/// preflight is `orrery <orrery_args> preflight`, with the options orrery runs with. `None`
+/// when the section sets `enabled = false`.
+pub fn orrery_entry(
+    dir: PathBuf,
+    map: &Map<String, Value>,
+    from_orrery_toml: &[String],
+    orrery_args: &[String],
+    global: &Global,
+    warnings: &mut Vec<String>,
+) -> Result<Option<Entry>, String> {
+    let o = Options { section: format!("{SECTION} orrery"), map };
+    if !o.bool("enabled", true)? {
+        return Ok(None);
+    }
+    let ignored: Vec<&str> = map.keys().map(String::as_str).filter(|k| !ORRERY_OPTIONS.contains(k)).collect();
+    if !ignored.is_empty() {
+        let them = if ignored.len() == 1 { "it" } else { "them" };
+        warnings.push(ignored_options(&o.section, &ignored, &format!("orrery's own entry has no use for {them}")));
+    }
+    let pinned = from_orrery_toml.iter().any(|k| k == "repo");
+    let repo = if map.contains_key("repo") && !pinned {
+        warnings.push(ignored_options(&o.section, &["repo"], "it takes it only from orrery.toml"));
+        None
+    } else {
+        o.repo("repo")?
+    };
+    let opts = ExecOptions {
+        path: dir,
+        // Without one, the repository release_info.json names.
+        repo: repo.clone().unwrap_or_else(|| orrery_build::REPO.to_owned()),
+        system_dependencies: None,
+        programs: crate::release::PROGRAMS.map(str::to_owned).into(),
+        checksums: Some(crate::release::CHECKSUMS.into()),
+        repo_pinned: repo.is_some(),
+        orrery: true,
+    };
+    let mut preflight = vec!["orrery".to_owned()];
+    preflight.extend(orrery_args.iter().cloned());
+    preflight.push("preflight".into());
+    let mut hashed = map.clone();
+    hashed.insert("orrery".into(), serde_json::json!([opts.path, opts.repo]));
+    Ok(Some(Entry {
+        name: "orrery".into(),
+        channel: Channel::Stable,
+        channel_warning: None,
+        refresh_interval: global.refresh_interval,
+        // Its restart is orrery's own, after every other one.
+        managed_services: Some(vec!["orrery".into()]),
+        is_system_service: false,
+        info_tags: Vec::new(),
+        report_anomalies: true,
+        hash: hash(&hashed),
+        kind: Kind::Executable(opts),
+        klippy: None,
+        preflight,
+    }))
+}
+
+/// Applies the options orrery adds to Moonraker's entries. They run commands or change where
+/// a download comes from, so they're taken only from `orrery.toml`; in `moonraker.conf`
+/// they're ignored, with a warning.
+/// - `preflight`, for any entry: see [`preflight`].
+/// - `checksums`, for an executable: the release's file of SHA-256 sums, such as
+///   `SHA256SUMS`, which the download must match.
+/// - `programs`, for an executable: the asset is a `.tar.gz` with these programs, replaced in
+///   this order. The preflight's first word is then one of them.
+/// - `repo`, for an executable, from `orrery.toml`: wins over the one `release_info.json`
+///   names, so a fork's releases can take over.
+pub fn own_options(
+    section: &str,
+    map: &Map<String, Value>,
+    from_orrery_toml: &[String],
+    entry: &mut Entry,
+    warnings: &mut Vec<String>,
+) -> Result<(), String> {
+    entry.preflight = preflight(section, map, from_orrery_toml, warnings)?;
+    let Kind::Executable(opts) = &mut entry.kind else { return Ok(()) };
+    let from_toml = |key: &str| from_orrery_toml.iter().any(|k| k == key);
+    for key in ["checksums", "programs"] {
+        if map.contains_key(key) && !from_toml(key) {
+            warnings.push(ignored_options(section, &[key], "it takes it only from orrery.toml"));
+        }
+    }
+    let o = Options { section: section.to_owned(), map };
+    if from_toml("checksums") {
+        opts.checksums = o.text("checksums")?.filter(|c| !c.is_empty());
+    }
+    if from_toml("programs") {
+        opts.programs = words(section, "programs", &map["programs"], r#"["tool", "tool-helper"]"#)?;
+    }
+    opts.repo_pinned = from_toml("repo");
+    if let (false, Some(first)) = (opts.programs.is_empty(), entry.preflight.first())
+        && !opts.programs.contains(first)
+    {
+        return Err(format!(
+            "[{section}] preflight: the first word names the program to run, one of {}, got {first:?}",
+            opts.programs.join(", ")
+        ));
+    }
+    Ok(())
+}
+
 /// Reads one entry. `Err` is the warning that says why it's left out.
 pub fn entry(name: &str, map: &Map<String, Value>, global: &Global) -> Result<Entry, String> {
     let o = Options { section: format!("{SECTION} {name}"), map };
@@ -547,13 +677,14 @@ pub fn entry(name: &str, map: &Map<String, Value>, global: &Global) -> Result<En
         Some("executable") => Kind::Executable(ExecOptions {
             path: expand_home(&o.required("path")?),
             repo: {
-                let repo = o.required("repo")?.trim().trim_matches('/').to_owned();
-                if repo.split('/').filter(|p| !p.is_empty()).count() != 2 {
-                    return Err(format!("[{}] repo: expected owner/name, got {repo:?}", o.section));
-                }
-                repo
+                o.required("repo")?;
+                o.repo("repo")?.expect("required above")
             },
             system_dependencies: o.text("system_dependencies")?,
+            programs: Vec::new(),
+            checksums: None,
+            repo_pinned: false,
+            orrery: false,
         }),
         Some(t @ ("web" | "zip" | "python")) => {
             return Err(format!("[{}]: orrery doesn't update {t} entries yet, so this entry is left out", o.section));
@@ -897,5 +1028,88 @@ mod tests {
             r#"[update_manager tool] preflight: expected a list of words, such as ["--check"], got "--check""#
         );
         assert!(preflight(sec, &map(json!({})), &[], &mut Vec::new()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn orrery_entry_options() {
+        let g = global(&Map::new(), &mut Vec::new());
+        let toml = |keys: &[&str]| keys.iter().map(|k| (*k).to_owned()).collect::<Vec<_>>();
+        let args = ["-c".to_owned(), "/x/moonraker.conf".to_owned()];
+        let orrery = |m: Value, from: &[&str], w: &mut Vec<String>| {
+            orrery_entry("/o".into(), &map(m), &toml(from), &args, &g, w)
+        };
+        let opts = |e: &Entry| match &e.kind {
+            Kind::Executable(o) => o.clone(),
+            _ => panic!("an executable entry"),
+        };
+        let mut w = Vec::new();
+        // An executable entry with an archive of orrery's programs and SHA256SUMS, and orrery's
+        // preflight, with the options orrery runs with before the subcommand.
+        let e = orrery(json!({}), &[], &mut w).unwrap().unwrap();
+        assert_eq!((e.name.as_str(), e.services()), ("orrery", vec!["orrery".to_owned()]));
+        let o = opts(&e);
+        assert_eq!(o.programs, crate::release::PROGRAMS);
+        assert_eq!(o.checksums.as_deref(), Some("SHA256SUMS"));
+        assert!(o.orrery && !o.repo_pinned);
+        assert_eq!(o.repo, orrery_build::REPO);
+        assert_eq!(e.preflight, ["orrery", "-c", "/x/moonraker.conf", "preflight"]);
+        assert!(w.is_empty());
+        // A fork, from orrery.toml, wins over release_info.json.
+        let e = orrery(json!({"repo": "someone/orrery/"}), &["repo"], &mut w).unwrap().unwrap();
+        assert_eq!((opts(&e).repo.as_str(), opts(&e).repo_pinned), ("someone/orrery", true));
+        assert!(w.is_empty());
+        // From moonraker.conf, repo is ignored; other options are of no use.
+        let e = orrery(json!({"repo": "someone/orrery", "channel": "beta"}), &[], &mut w).unwrap().unwrap();
+        assert!(!opts(&e).repo_pinned);
+        assert_eq!(
+            w,
+            [
+                "[update_manager orrery]: orrery ignores the option channel, since orrery's own entry has no use for it",
+                "[update_manager orrery]: orrery ignores the option repo, since it takes it only from orrery.toml",
+            ]
+        );
+        let err = orrery(json!({"repo": "orrery"}), &["repo"], &mut Vec::new()).unwrap_err();
+        assert_eq!(err, r#"[update_manager orrery] repo: expected owner/name, got "orrery""#);
+        assert!(orrery(json!({"enabled": false}), &[], &mut Vec::new()).unwrap().is_none());
+        // A section named orrery isn't an ordinary entry.
+        assert!(entry("orrery", &map(json!({"type": "git_repo"})), &g).is_err());
+    }
+
+    #[test]
+    fn checksums_and_programs_only_from_orrery_toml() {
+        let g = global(&Map::new(), &mut Vec::new());
+        let sec = "update_manager tool";
+        let m = map(json!({"type": "executable", "path": "/t", "repo": "example/tool", "checksums": "SHA256SUMS",
+            "programs": ["tool", "tool-helper"], "preflight": ["tool", "--check"]}));
+        let all = ["checksums", "programs", "preflight", "repo"].map(str::to_owned);
+        let mut e = entry("tool", &m, &g).unwrap();
+        let mut w = Vec::new();
+        own_options(sec, &m, &all, &mut e, &mut w).unwrap();
+        let Kind::Executable(o) = &e.kind else { panic!("an executable entry") };
+        assert_eq!(
+            (o.checksums.as_deref(), o.programs.as_slice()),
+            (Some("SHA256SUMS"), &["tool".to_owned(), "tool-helper".to_owned()][..])
+        );
+        assert!(o.repo_pinned && w.is_empty());
+        // From moonraker.conf, they're ignored, with a warning, and repo is Moonraker's.
+        let mut e = entry("tool", &m, &g).unwrap();
+        own_options(sec, &m, &[], &mut e, &mut w).unwrap();
+        let Kind::Executable(o) = &e.kind else { panic!("an executable entry") };
+        assert!(o.checksums.is_none() && o.programs.is_empty() && !o.repo_pinned);
+        assert_eq!(w.len(), 3, "{w:?}");
+        assert!(w[1].ends_with("ignores the option checksums, since it takes it only from orrery.toml"), "{w:?}");
+        // With programs, the preflight names the one to run.
+        let m = map(json!({"type": "executable", "path": "/t", "repo": "example/tool",
+            "programs": ["tool"], "preflight": ["--check"]}));
+        let mut e = entry("tool", &m, &g).unwrap();
+        let err = own_options(sec, &m, &all, &mut e, &mut Vec::new()).unwrap_err();
+        assert_eq!(
+            err,
+            r#"[update_manager tool] preflight: the first word names the program to run, one of tool, got "--check""#
+        );
+        let m = map(json!({"type": "executable", "path": "/t", "repo": "example/tool", "programs": "tool"}));
+        let mut e = entry("tool", &m, &g).unwrap();
+        let err = own_options(sec, &m, &all, &mut e, &mut Vec::new()).unwrap_err();
+        assert!(err.starts_with("[update_manager tool] programs: expected a list of words"), "{err}");
     }
 }

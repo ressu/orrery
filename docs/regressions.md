@@ -339,7 +339,12 @@ change how safe or complete orrery is to run.
     `primary_branch`, and `moved_origin`, which Moonraker fixes; in `moonraker.conf` they're
     ignored, with a warning. Setting both `[update_manager klipper]` and `[update_manager
     kalico]` leaves the entry out. See docs/design/2026-11-22-klipper-updates.md.
-  - No `moonraker` entry, and none for orrery: orrery's own updates wait for a release source.
+  - No `moonraker` entry. orrery's own entry, `orrery`, is an executable entry for its
+    releases instead: the archive for the CPU, checked against `SHA256SUMS`, then
+    `orrery preflight`, and the old set kept in `.previous/`. A development build doesn't
+    update itself. Its section `[update_manager.orrery]` takes `enabled`, and `repo` from
+    `orrery.toml` only. `orrery-updater self-update` and `rollback` do the same from a shell.
+    See docs/design/2026-11-22-self-update.md.
     `machine.update.moonraker` answers 400 "orrery doesn't update Moonraker."
     `moonraker` in an entry's `managed_services` restarts nothing, since a plugin that names
     Moonraker never needs orrery restarted.
@@ -387,6 +392,12 @@ change how safe or complete orrery is to run.
     to its old commit and restarts nothing. In `moonraker.conf`, it's ignored, with a warning.
   - **An executable keeps the program an update replaced,** in `<path>/.previous/`, so a
     rollback needs no download. Moonraker downloads the old release again.
+  - **`checksums`, `programs`, and a `repo` that wins,** orrery's own options for an
+    executable, read only from `orrery.toml`: a SHA-256 check of the download, an asset that's
+    a `.tar.gz` of several programs, and a repository that wins over `release_info.json`.
+    From `moonraker.conf`, the first two are ignored, with a warning, and `repo` is Moonraker's.
+    See docs/design/2026-11-22-self-update.md, "Archives and checksums for every executable
+    entry".
   - **pip isn't upgraded** before an entry's Python packages are installed.
   - **An executable's update replaces the program in one step,** so a failed download leaves
     the old one working. Moonraker deletes the old program first. Without `.previous/`, a

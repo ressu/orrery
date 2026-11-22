@@ -5,11 +5,15 @@ agent gets an `orrery` entry that installs a release over the running binaries, 
 the download and running the new version's preflight. A command-line `self-update` and
 `rollback` work when orrery itself doesn't.
 
-**Status (2026-11-22):** approved. Steps 2 to 4 are built:
+**Status (2026-11-22):** approved. Steps 2 to 5 are built:
 - the `LICENSE` file, the build's version and release flag, and `just dist`;
 - the CI workflows and the release notes in `CHANGELOG.md`, which haven't run yet, since the
   repository isn't on GitHub;
-- `preflight` and `.previous/` for the existing update entries.
+- `preflight` and `.previous/` for the existing update entries;
+- archives, checksums, and a `repo` that wins, for every executable entry, and the `orrery`
+  entry as an executable entry that uses them; `orrery-updater self-update` and `rollback`.
+  No release exists yet to update to, so only the unit tests have run them.
+  `orrery preflight` comes in step 6.
 
 ## What exists today
 
@@ -52,8 +56,11 @@ the download and running the new version's preflight. A command-line `self-updat
   - **No prereleases,** as in printerkeep (user, 2026-11-22). A `beta` channel can come later
     if testers need one.
 - **Archives:** each release has one archive per target, and one `SHA256SUMS` file for all of
-  them. `orrery-v0.2.0-aarch64.tar.gz` holds `orrery`, `orrery-import`, `orrery-spoolman`,
-  `orrery-updater`, `LICENSE`, and `README.md`.
+  them. `orrery-aarch64.tar.gz` holds `orrery`, `orrery-import`, `orrery-spoolman`,
+  `orrery-updater`, `LICENSE`, `README.md`, and a `release_info.json`. The name has no
+  version, since an executable entry's `asset_name` is fixed, as in Moonraker.
+  `release_info.json` names the repository, the version, and the archive, so a printer that
+  unpacks the archive has an entry that can update.
 - **Targets:** three, all static musl builds with rust-lld and no C toolchain. The flake's
   `armv6` target, for the Pi Zero and Pi 1, is left out: those boards are too slow for a
   modern printer (user, 2026-11-22).
@@ -88,13 +95,21 @@ the download and running the new version's preflight. A command-line `self-updat
 
 ## The `orrery` entry
 
+- **It's an executable entry** for orrery's folder, with built-in settings: the archive of
+  orrery's programs, `SHA256SUMS`, and a preflight of `orrery <options> preflight`. It uses
+  the building blocks any executable entry has (see "Archives and checksums for every
+  executable entry"); nothing in the update itself is special to orrery (user, 2026-11-22).
+  What is: a development build doesn't update, the check after the restart, and orrery's
+  restart coming last.
 - **It's built in,** like `system`, and listed after it in `machine.update.status`.
 - **One channel:** the entry follows GitHub's latest release. With no prereleases, there's
   nothing for `beta` to follow, and `dev` would need a build for each commit. A `channel`
   option for this entry is ignored, with a warning.
-- **Options:** `[update_manager.orrery]` in `orrery.toml` can set `enabled` and `repo`. `repo` overrides the repository the build names, for anyone who wants to follow
+- **Options:** `[update_manager.orrery]` in `orrery.toml` can set `enabled` and `repo`.
+  `repo` overrides the repository `release_info.json` names, for anyone who wants to follow
   their own fork (user, 2026-11-22). It's read only from `orrery.toml`, as Klipper's `origin`
-  is.
+  is. A fork's own releases name the fork in their `release_info.json`, so installing one with
+  `self-update --repo` switches to it, with no option.
 - **Clients:** Fluidd's Update button calls `machine.update.client` for any entry other than
   `klipper` and `moonraker`, and `client` updates any entry, so Fluidd works as it is.
   `machine.update.moonraker` stays refused: orrery doesn't update Moonraker.
@@ -108,11 +123,10 @@ the download and running the new version's preflight. A command-line `self-updat
    checks the archive's sum. A wrong or missing sum stops the update; nothing has changed.
 3. **Unpack.** Each binary goes to a hidden file in `~/orrery`, on the same file system as the
    binary it replaces, with that binary's permissions.
-4. **Keep the old set.** The current binaries are hard-linked into `~/orrery/.previous/`,
-   replacing any older copy there.
-5. **Preflight.** The agent runs `orrery preflight` from the new, still hidden binary, with
-   the options orrery runs with. orrery is the agent's parent process, so the agent reads them
-   from `/proc/<parent>/cmdline`. Preflight starts nothing, opens no port, and checks the
+4. **Preflight.** The agent runs `orrery <options> preflight` from the new, still hidden
+   binary, with the options orrery runs with. orrery is the agent's parent process, so the
+   agent reads them from `/proc/<parent>/cmdline`. They go before `preflight`, since most of
+   orrery's options aren't global. Preflight starts nothing, opens no port, and checks the
    minimum a new orrery needs to start:
    - the binary runs on this CPU;
    - each new agent binary answers `--version` with the same version;
@@ -120,14 +134,24 @@ the download and running the new version's preflight. A command-line `self-updat
    - the database opens, read-only, in a layout this version can read.
 
    A failed preflight deletes the hidden files and stops the update, with preflight's
-   message. Nothing has changed then.
+   message. Nothing has changed then, not even `.previous/`.
+5. **Keep the old set.** The current binaries and `release_info.json` are hard-linked into
+   `~/orrery/.previous/`, replacing any older copy there. The entry's `rollback_version`
+   comes from that `release_info.json`, so it's right after a shell command too.
 6. **Rename.** Each new binary is renamed over the old one: the agents first, `orrery` last.
    Running processes keep their old files, so nothing changes until the restart.
 7. **Restart.** The agent stores the version it expects under `update_manager.orrery` in the
-   database, sends its last progress message, and calls `server.restart`. systemd starts the
-   new orrery, which starts the new agents.
-8. **Check.** The new agent compares the stored version with its own. If they match, it sends
-   "orrery updated to v0.2.0" and clears the record. If they don't, the entry gets a warning.
+   database, and sends its last progress message. Then it calls `server.restart`, after every
+   other restart, since that restart stops the agent. orrery starts its program again by name,
+   so the new binary runs, and it starts the new agents.
+8. **Check.** The new agent compares the stored version with its own. If they match, it logs
+   that, and clears the record. If they don't, the entry gets a warning that says orrery runs
+   another version, and how to restart it.
+
+A full update (`machine.update.full`) skips the entry when it can't update: a development
+build, or no repository. Updating it by name says why. As for executable entries, any release
+other than the running one is an update, so a newer version installed with `--version` goes
+back to the latest release on the next update.
 
 ## Rollback
 
@@ -149,12 +173,17 @@ the download and running the new version's preflight. A command-line `self-updat
 - **If orrery answers** on its unix socket, the command asks orrery for the update. The print
   check and the restart then work as from Fluidd.
 - **If it doesn't,** the updater runs the same steps without orrery: download, check, unpack,
-  preflight, and rename. It can't see whether a print runs, so it says so and asks before it
-  starts. Then it prints the command that restarts orrery:
+  preflight, and rename. It doesn't write the database, which is orrery's. It can't see
+  whether a print runs, and doesn't need to: the renames change nothing for running
+  processes. It prints the command that restarts orrery, and says to wait for a print to end
+  first:
 
   ```
   sudo systemctl restart orrery
   ```
+
+  The design first had it ask before it starts (2026-11-22); the restart is the step that
+  needs the print check, and the user runs it.
 
 - **`--version v0.2.0`** installs that release instead of the newest one. That's also a way
   back when `.previous/` is missing.
@@ -203,15 +232,48 @@ Any entry can declare a preflight, and orrery's entry declares `orrery preflight
 - **Every check** runs as orrery's user, with a 60-second limit. Exit status 0 passes. A
   failure's message ends with the last lines of the check's output.
 
+## Archives and checksums for every executable entry
+
+orrery's entry needs three things Moonraker's executable entries don't have. They're options
+of every executable entry, read only from `orrery.toml`, since they change what runs or where
+it comes from (user, 2026-11-22):
+
+- **`checksums`** names the release's file of SHA-256 sums, such as `SHA256SUMS`. The download
+  must match its line there, before anything changes. A release without the file, or without
+  a line for the asset, isn't installed.
+- **`programs`** makes the asset a `.tar.gz` of these programs, replaced in this order. The
+  entry checks that each one is installed, instead of the asset's name. The archive's own
+  `release_info.json`, when it has one, replaces the installed one, so a fork's archive brings
+  the fork's repository. The preflight's first word names the program to run, from the new
+  set's folder, as it's a file in the repo for a `git_repo` entry.
+- **`repo`** from `orrery.toml` wins over the repository `release_info.json` names, with no
+  anomaly. From `moonraker.conf`, it's Moonraker's option: `release_info.json` wins, and a
+  mismatch is an anomaly.
+
+```toml
+[update_manager.tool]
+type = "executable"
+path = "~/tool"
+repo = "example/tool"
+checksums = "SHA256SUMS"
+programs = ["tool-helper", "tool"]
+preflight = ["tool", "--check"]
+```
+
+Every update, with or without these options, downloads into a hidden folder beside the
+programs, `.<entry>.update`, checks and unpacks there, runs the preflight there, and then
+renames. A failure before the renames removes the folder, and nothing else changes.
+
 ## `.previous/` for executable entries
 
 Today an executable entry keeps no copy of the program it replaced: a rollback downloads that
 release again by its tag.
 
-- **An update** hard-links the program and its `release_info.json` into `<path>/.previous/`
-  before the rename.
-- **A rollback** renames them back, with no network access. Without `.previous/`, it downloads
-  by tag, as now.
+- **An update** hard-links the programs and their `release_info.json` into
+  `<path>/.previous/` before the renames.
+- **A rollback** renames them back, with no network access, whenever `.previous/` holds them.
+  Its version wins over the database's rollback version, since a shell command changes it
+  without the database. Without `.previous/`, it downloads by tag, as now.
 - **This reverses a line in the update manager's note,** which stored only the rollback
   version so an update wouldn't double the disk use. Each executable entry now keeps one old
   copy. For printerkeep that's a few MB.
@@ -236,7 +298,8 @@ An install script, for `curl | sh`, comes later.
 
 1. Moonraker updates itself as a `git_repo` entry named `moonraker`. orrery's entry is named
    `orrery`, and installs a release.
-2. A release's archive is checked against its SHA-256 sum before anything changes.
+2. A release's archive is checked against its SHA-256 sum before anything changes. Any
+   executable entry can ask for that, and for an archive of programs, in `orrery.toml`.
 3. The new version's preflight runs before it replaces the old one.
 4. `orrery rollback` and `orrery self-update` work from a shell, while orrery is stopped.
 5. Any entry can declare a `preflight`, in `orrery.toml`.
