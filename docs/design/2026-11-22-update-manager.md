@@ -162,11 +162,25 @@ already uses.
   Klipper's plugin links don't block updates. They make `pristine` false.
 - **Update:** a fetch and a fresh check, then a fast-forward to the commit the check found.
   An invalid repo is refused, with the reason. orrery stores the commit it left as the
-  rollback point. Then, if the files changed in the update:
-  - `requirements` changed: `<virtualenv>/bin/pip install -r <requirements>`.
-  - `system_dependencies` changed: PackageKit installs the listed packages for this Debian
-    release.
+  rollback point. Then the dependencies the update added are installed, as in Moonraker
+  (`app_deploy.py:436-470`):
+  - **Python packages:** when `requirements` lists a line it didn't list before,
+    `<virtualenv>/bin/python -m pip install -U -r <requirements>`, with
+    `pip_environment_variables` set. It's tried three times. `requirements` counts only for
+    an entry with a virtualenv.
+  - **System packages:** when `system_dependencies` lists a package it didn't list before,
+    PackageKit refreshes its package lists, then installs the listed packages that aren't
+    installed yet, from signed sources only. The file lists packages per Linux release, with
+    conditions such as `distro_version >= '24.10'`, read as Moonraker reads them.
+  - A failed install is reported in the update dialog, and the update goes on, as in
+    Moonraker.
   - Then the services in `managed_services` restart (see [Restarts](#restarts)).
+  - A recover with `update_deps` installs everything the files list. A rollback installs
+    what the older version added.
+  - The output of pip and PackageKit goes to the update dialog and to the debug log only, so
+    an update writes a few log lines, not hundreds. A package source that PackageKit names
+    more than once is shown once.
+  - **pip itself isn't upgraded.** Moonraker upgrades an old pip in the virtualenv first.
 - **`install_script`:** orrery reads it for its `PKGLIST="…"` lines, as Moonraker does, and
   never runs it. Moonraker treats it as a deprecated way to list packages.
 - **Recover, soft:** `git checkout <primary_branch>` and `git reset --hard <remote>/<branch>`.
@@ -348,10 +362,11 @@ Each one becomes an entry in `docs/regressions.md` when it's built.
 6. Each service restarts once per batch of updates, and not while a print runs.
 7. A rollback refuses a repo with changed files.
 8. A hard recover of a missing repo clones it from `origin`.
-9. No `klipper` or `moonraker` entry, and `moonraker` in `managed_services` restarts nothing.
-10. No `sudo apt-get` fallback.
-11. `web` and `zip` entries are in the backlog, and `python` entries come later.
-12. Periodic checks are on by default, weekly unless `refresh_interval` says otherwise, with no
+9. pip isn't upgraded before the Python packages are installed.
+10. No `klipper` or `moonraker` entry, and `moonraker` in `managed_services` restarts nothing.
+11. No `sudo apt-get` fallback.
+12. `web` and `zip` entries are in the backlog, and `python` entries come later.
+13. Periodic checks are on by default, weekly unless `refresh_interval` says otherwise, with no
     `refresh_window`.
 
 ## The order of work

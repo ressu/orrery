@@ -8,8 +8,10 @@
 //! `update_manager` namespace.
 
 mod config;
+mod deps;
 mod git;
 mod manager;
+mod packagekit;
 mod version;
 
 use orrery_agent::{AgentBuilder, MethodError};

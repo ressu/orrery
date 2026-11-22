@@ -6,7 +6,7 @@
 //! entries keep working.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde_json::{Map, Value};
@@ -94,7 +94,10 @@ pub struct GitOptions {
     pub moved_origin: Option<String>,
     pub primary_branch: String,
     pub pinned_commit: Option<String>,
+    /// The virtualenv folder, from `virtualenv`, or from `env`, which names its Python.
     pub virtualenv: Option<PathBuf>,
+    /// `pip_environment_variables`: set for pip.
+    pub pip_env: Vec<(String, String)>,
     pub requirements: Option<String>,
     pub system_dependencies: Option<String>,
     pub install_script: Option<String>,
@@ -168,6 +171,31 @@ impl Options<'_> {
         }
     }
 
+    /// `KEY=value` lines in `moonraker.conf`, or a TOML table.
+    fn pairs(&self, key: &str) -> Result<Vec<(String, String)>, String> {
+        match self.map.get(key) {
+            None | Some(Value::Null) => Ok(Vec::new()),
+            Some(Value::String(s)) => s
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .map(|l| {
+                    l.split_once('=')
+                        .map(|(k, v)| (k.trim().to_owned(), v.trim().to_owned()))
+                        .ok_or_else(|| format!("[{}] {key}: expected KEY=value, got {l:?}", self.section))
+                })
+                .collect(),
+            Some(Value::Object(m)) => m
+                .iter()
+                .map(|(k, v)| match v {
+                    Value::String(v) => Ok((k.clone(), v.clone())),
+                    other => Ok((k.clone(), other.to_string())),
+                })
+                .collect(),
+            Some(other) => Err(format!("[{}] {key}: expected KEY=value lines, got {other}", self.section)),
+        }
+    }
+
     fn channel(&self) -> Result<Option<Channel>, String> {
         match self.text("channel")? {
             None => Ok(None),
@@ -185,6 +213,22 @@ pub fn expand_home(path: &str) -> PathBuf {
         None if path == "~" => std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default(),
         None => PathBuf::from(path),
     }
+}
+
+/// The virtualenv folder: `virtualenv`, relative to the repo, or two folders above the
+/// Python that the older `env` option names, as Moonraker reads them.
+fn virtualenv(o: &Options) -> Result<Option<PathBuf>, String> {
+    if let Some(v) = o.text("virtualenv")? {
+        let v = expand_home(&v);
+        if v.is_absolute() {
+            return Ok(Some(v));
+        }
+        return Ok(o.text("path")?.map(|p| expand_home(&p).join(v)));
+    }
+    Ok(o.text("env")?.map(|e| {
+        let python = expand_home(&e);
+        python.parent().and_then(Path::parent).map_or(python.clone(), Path::to_path_buf)
+    }))
 }
 
 /// Reads `[update_manager]`. A bad option is a warning, and its default applies.
@@ -231,7 +275,8 @@ pub fn entry(name: &str, map: &Map<String, Value>, global: &Global) -> Result<En
             moved_origin: o.text("moved_origin")?,
             primary_branch: o.text("primary_branch")?.unwrap_or_else(|| "master".into()),
             pinned_commit: o.text("pinned_commit")?.map(|c| c.to_ascii_lowercase()),
-            virtualenv: o.text("virtualenv")?.or(o.text("env")?).map(|p| expand_home(&p)),
+            virtualenv: virtualenv(&o)?,
+            pip_env: o.pairs("pip_environment_variables")?,
             requirements: o.text("requirements")?,
             system_dependencies: o.text("system_dependencies")?,
             install_script: o.text("install_script")?,
@@ -373,6 +418,24 @@ mod tests {
         assert!(none.services().is_empty());
         let Kind::Git(git) = &e.kind;
         assert_eq!(git.primary_branch, "master");
+
+        // `virtualenv` is relative to the repo; the older `env` names the virtualenv's Python.
+        let v = |extra: Value| {
+            let mut m = json!({"type": "git_repo", "path": "/home/pi/repo", "origin": "o"});
+            m.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            let e = entry("v", &map(m), &g).unwrap();
+            let Kind::Git(git) = e.kind;
+            git
+        };
+        assert_eq!(v(json!({"virtualenv": "env"})).virtualenv, Some(PathBuf::from("/home/pi/repo/env")));
+        assert_eq!(v(json!({"virtualenv": "/opt/env"})).virtualenv, Some(PathBuf::from("/opt/env")));
+        assert_eq!(
+            v(json!({"env": "/home/pi/klippy-env/bin/python"})).virtualenv,
+            Some(PathBuf::from("/home/pi/klippy-env"))
+        );
+        let pip = v(json!({"pip_environment_variables": "CFLAGS=-O2\nSKIP=1"})).pip_env;
+        assert_eq!(pip, [("CFLAGS".into(), "-O2".into()), ("SKIP".into(), "1".into())]);
+        assert_eq!(v(json!({"pip_environment_variables": {"A": "b"}})).pip_env, [("A".into(), "b".into())]);
 
         // The hash follows the options, not their order.
         let a = entry("a", &map(json!({"type": "git_repo", "path": "/x", "origin": "o"})), &g).unwrap();

@@ -11,7 +11,9 @@ use serde_json::{Map, Value, json};
 use tokio::sync::{Notify, watch};
 
 use crate::config::{self, Entry, Global, Kind, SECTION};
+use crate::deps::{self, Deps};
 use crate::git::{self, RepoState, Rollback, Tracking};
+use crate::packagekit::PackageKit;
 
 /// Moonraker skips a refresh of everything within this long of the last one.
 const REFRESH_SPAM: Duration = Duration::from_secs(60);
@@ -128,6 +130,16 @@ struct Progress {
 impl Progress {
     async fn send(&self, message: &str, complete: bool) {
         tracing::info!("{message}");
+        self.notify(message, complete).await;
+    }
+
+    /// A line of a program's output: in the update dialog, and only in the debug log.
+    async fn output(&self, line: &str) {
+        tracing::debug!("{line}");
+        self.notify(line, false).await;
+    }
+
+    async fn notify(&self, message: &str, complete: bool) {
         if let Some(agent) = &self.agent {
             let data = json!({"message": message, "application": self.application, "proc_id": self.proc_id, "complete": complete});
             let _ = agent.send_event("update_response", Some(data)).await;
@@ -487,10 +499,11 @@ impl Manager {
             return Err(Self::not_available(name));
         }
         let hard = flag(params, "hard");
+        let all_deps = flag(params, "update_deps");
         let name = name.to_owned();
         self.run(&format!("recover_{name}"), async |m, entries, p| {
             let s = entries.iter_mut().find(|s| s.entry.name == name).expect("checked above");
-            m.recover_entry(s, hard, p)
+            m.recover_entry(s, hard, all_deps, p)
                 .await
                 .map(|()| Some(format!("Git Repo {name}: Reinstall Complete")))
                 .map_err(|e| Failure { messages: vec![format!("Error Recovering {name}"), e.error.clone()], ..e })
@@ -508,10 +521,10 @@ impl Manager {
             return Err(Self::not_available(name));
         }
         let name = name.to_owned();
-        self.run(&format!("rollback_{name}"), async |m, entries, _| {
+        self.run(&format!("rollback_{name}"), async |m, entries, p| {
             let s = entries.iter_mut().find(|s| s.entry.name == name).expect("checked above");
             let done = m
-                .rollback_entry(s)
+                .rollback_entry(s, p)
                 .await
                 .map_err(|e| Failure { messages: vec![format!("Error Rolling Back {name}"), e.error.clone()], ..e })?;
             Ok(Some(format!("Git Repo {name}: Rollback {}", if done { "Complete" } else { "not performed" })))
@@ -571,18 +584,21 @@ impl Manager {
         p.send(&format!("Git Repo {name}: Updating Repo..."), false).await;
         let Kind::Git(opts) = &s.entry.kind;
         let rollback = Rollback::of(repo);
+        let before = Deps::read(opts).await;
         git::fast_forward(opts, repo).await.map_err(|e| Failure::new(500, e))?;
         s.stored.rollback = Some(rollback);
+        self.update_deps(s, &before, false, p).await;
         self.read_repo(s, false).await;
         self.add_pending(&s.entry);
         Ok(true)
     }
 
-    async fn recover_entry(&self, s: &mut EntryState, hard: bool, p: &Progress) -> Result<(), Failure> {
+    async fn recover_entry(&self, s: &mut EntryState, hard: bool, all_deps: bool, p: &Progress) -> Result<(), Failure> {
         let name = s.entry.name.clone();
         p.send(&format!("Git Repo {name}: Attempting Repo Recovery..."), false).await;
         self.read_repo(s, true).await;
         let Kind::Git(opts) = &s.entry.kind;
+        let before = Deps::read(opts).await;
         let repo = s.repo.as_ref().expect("just read");
         if hard {
             p.send(&format!("Git Repo {name}: Starting Clone Recovery..."), false).await;
@@ -605,11 +621,12 @@ impl Manager {
         if repo.current.dirty || !repo.is_valid() {
             return Err(Failure::new(500, "Recovery attempt failed, repo state not pristine"));
         }
+        self.update_deps(s, &before, all_deps, p).await;
         self.add_pending(&s.entry);
         Ok(())
     }
 
-    async fn rollback_entry(&self, s: &mut EntryState) -> Result<bool, Failure> {
+    async fn rollback_entry(&self, s: &mut EntryState, p: &Progress) -> Result<bool, Failure> {
         self.read_repo(s, false).await;
         let repo = s.repo.as_ref().expect("just read");
         // Moonraker resets a changed repo here, and the changes are lost.
@@ -620,12 +637,54 @@ impl Manager {
             return Err(Failure::new(400, "Incomplete rollback data stored, cannot rollback"));
         };
         let Kind::Git(opts) = &s.entry.kind;
+        let before = Deps::read(opts).await;
         let done = git::rollback(opts, repo, &rollback).await.map_err(|e| Failure::new(500, e))?;
         if done {
+            self.update_deps(s, &before, false, p).await;
             self.read_repo(s, false).await;
             self.add_pending(&s.entry);
         }
         Ok(done)
+    }
+
+    /// Installs what the entry's dependency files list now and didn't list `before`, or all
+    /// of it with `all`. A failure is reported, and the update goes on, as in Moonraker.
+    async fn update_deps(&self, s: &EntryState, before: &Deps, all: bool, p: &Progress) {
+        let Kind::Git(opts) = &s.entry.kind;
+        let name = &s.entry.name;
+        let added = before.added(&Deps::read(opts).await, all);
+        if added.packages.is_empty() && added.modules.is_empty() {
+            return;
+        }
+        // The installs report their output through a channel, which this passes on as they
+        // run.
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let work = async move {
+            if !added.packages.is_empty() {
+                p.send(&format!("Git Repo {name}: Installing system dependencies..."), false).await;
+                let installed = match PackageKit::connect().await {
+                    Ok(pk) => pk.install(&added.packages, &tx).await,
+                    Err(e) => Err(e),
+                };
+                if let Err(e) = installed {
+                    p.send(&format!("Git Repo {name}: Error updating packages: {e}"), false).await;
+                }
+            }
+            if !added.modules.is_empty()
+                && let Some(requirements) = deps::requirements_file(opts)
+            {
+                p.send(&format!("Git Repo {name}: Updating python packages..."), false).await;
+                if let Err(e) = deps::pip_install(opts, &requirements, &tx).await {
+                    p.send(&format!("Git Repo {name}: Error updating python requirements: {e}"), false).await;
+                }
+            }
+        };
+        let forward = async {
+            while let Some(line) = rx.recv().await {
+                p.output(&line).await;
+            }
+        };
+        tokio::join!(work, forward);
     }
 
     /// Adds the entry's services to the restarts that wait for the end of the updates.

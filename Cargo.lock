@@ -1555,6 +1555,7 @@ name = "orrery-update"
 version = "0.1.0"
 dependencies = [
  "orrery-agent",
+ "orrery-dbus",
  "serde_json",
  "tempfile",
  "tokio",
