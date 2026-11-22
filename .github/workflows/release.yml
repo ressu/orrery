@@ -87,6 +87,17 @@ jobs:
             ${{ matrix.run }} smoke/$program --version
           done
 
+      # The one-line installer, against the archive just built: the download, the checksum,
+      # the unpacking, and the preflight. No service, no import.
+      - name: Installer
+        if: matrix.run == ''
+        run: |
+          home=$(mktemp -d)
+          mkdir -p "$home/printer_data/config"
+          printf '[server]\n' > "$home/printer_data/config/moonraker.conf"
+          HOME=$home ORRERY_DOWNLOAD_URL="file://$PWD/dist" sh scripts/install.sh --no-setup --no-import < /dev/null
+          "$home/orrery/orrery" --version
+
       - uses: actions/upload-artifact@v7
         with:
           name: dist-${{ matrix.arch }}
@@ -112,6 +123,16 @@ jobs:
           mv artifacts/*/*.tar.gz dist/
           cat artifacts/*/SHA256SUMS | sort -k2 > dist/SHA256SUMS
           (cd dist && sha256sum --check SHA256SUMS)
+
+      # The release's copy of the one-line installer installs this release, from this
+      # repository, so a fork's copy installs the fork.
+      - name: The installer for this release
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          sed -e "s|^default_repo=.*|default_repo=\"$GITHUB_REPOSITORY\"|" \
+            -e "s|^default_version=.*|default_version=\"$TAG\"|" scripts/install.sh > dist/install.sh
+          grep -q "^default_version=\"$TAG\"$" dist/install.sh
 
       # The release's title is the tag, which the update entry compares with orrery's version.
       - name: Publish

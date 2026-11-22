@@ -6,6 +6,14 @@ Fluidd and Mainsail link to the release page on GitHub, which shows the same not
 
 ## Unreleased
 
+### New
+
+- A one-line installer: `curl -fsSL https://github.com/ressu/orrery/releases/latest/download/install.sh | sh -s -- --import --migrate`
+  installs orrery in `~/orrery`, imports Moonraker's data, and switches the printer to orrery.
+  Without `--import` and `--migrate`, it asks. It checks the download's checksum, stops if
+  the printer is printing, and stops if orrery is already installed. See the README's
+  Installing section.
+
 ### Changed
 
 - With Moonraker compatibility on, `sudo orrery setup` makes `moonraker.service` another name

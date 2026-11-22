@@ -29,8 +29,43 @@ For the plan and the decisions made so far, see
 
 ## Installing
 
-orrery's releases are on [GitHub](https://github.com/ressu/orrery/releases). Each release has
-one archive for each kind of CPU:
+Run this on the printer, as the printer's user, the one Moonraker runs as:
+
+```
+curl -fsSL https://github.com/ressu/orrery/releases/latest/download/install.sh | sh -s -- --import --migrate
+```
+
+The installer puts orrery in `~/orrery`, imports Moonraker's print history, job queue, and
+settings, and switches the printer from Moonraker to orrery. Fluidd, Mainsail, and
+KlipperScreen then connect to orrery as they did to Moonraker. The installer asks for your
+password for `sudo` when it stops Moonraker and sets up orrery's service. It checks the
+download against the release's checksum, and stops if the printer is printing.
+
+Without `--import` and `--migrate`, the installer asks about each on the terminal. Its other
+options:
+
+| Option | What it does |
+|---|---|
+| `--no-import`, `--no-migrate` | Skip the import, or the switch to orrery, without asking |
+| `--no-alias-moonraker` | Keep Moonraker's service file, as when you try orrery beside Moonraker (below) |
+| `--version <vX.Y.Z>` | Install that release, not the latest |
+| `-d <folder>` | The printer's data folder, if it isn't `~/printer_data` |
+| `--no-setup` | Install the programs only, without orrery's service |
+
+If orrery is already installed, the installer stops: update it with `~/orrery/orrery
+self-update`, as in [Updating orrery](#updating-orrery). The import reads Moonraker's
+`moonraker-sql.db`, from Moonraker v0.8 or newer. With an older Moonraker, update Moonraker
+first, or install without the import.
+
+Setup also makes `moonraker.service` another name for orrery's service, so services that
+start Moonraker start orrery instead. aldis is one of these. For that, it moves Moonraker's
+own service file aside, to `/etc/systemd/system/moonraker.service.orrery-saved`. To keep
+Moonraker's service file, add `--no-alias-moonraker`; later runs of setup keep that choice.
+
+### Installing by hand
+
+These are the installer's steps, for a printer where it can't run. Each release has one archive
+for each kind of CPU:
 
 | Archive | For |
 |---|---|
@@ -60,16 +95,9 @@ To see which one the printer needs, run `uname -m`. It prints `aarch64`, `armv7l
    sudo ~/orrery/orrery setup --migrate
    ```
 
-   Setup stops and disables Moonraker, then starts orrery on Moonraker's port. Fluidd,
-   Mainsail, and KlipperScreen connect to orrery as they did to Moonraker.
-
-   Setup also makes `moonraker.service` another name for orrery's service, so services that
-   start Moonraker start orrery instead. aldis is one of these. For that, it moves Moonraker's
-   own service file aside, to `/etc/systemd/system/moonraker.service.orrery-saved`.
-
-To try orrery beside Moonraker, keep Moonraker's service file: add `--no-alias-moonraker`.
-Later runs of setup keep that choice. Without `--migrate`, setup moves Moonraker's file only
-with `--force`, and otherwise says how to choose.
+   Setup stops and disables Moonraker, then starts orrery on Moonraker's port. Without
+   `--migrate`, setup moves Moonraker's service file only with `--force`, and otherwise says
+   how to choose.
 
 To go back to Moonraker, run `sudo ~/orrery/orrery setup --remove`. It removes orrery's service,
 puts Moonraker's service file back if setup moved it, and prints the command that starts
@@ -114,7 +142,9 @@ a fork's releases, see [Update manager](#update-manager).
 ## Moving from Moonraker
 
 `orrery-import` copies Moonraker's settings, webcams, and print history into orrery's store. It
-only reads Moonraker's database, so Moonraker keeps working as before.
+only reads Moonraker's database, so Moonraker keeps working as before. The installer's
+`--import` does these steps for you; they're here for a printer where orrery is installed
+already.
 
 1. Stop Moonraker and orrery.
 2. Copy the database, so the import never reads the file Moonraker uses:
