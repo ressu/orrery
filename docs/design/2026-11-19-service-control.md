@@ -179,8 +179,9 @@ call the same command, so the files have one source. It writes:
   options, so an upgrade doesn't lose them.
 - **`/etc/polkit-1/rules.d/orrery.rules`,** in the local admin's folder. Like Moonraker's rule,
   it checks the user and the group's id in `/proc/<pid>/status`. It covers managing units and
-  logind's power-off, reboot, and halt actions. Moonraker's PackageKit actions are left out,
-  since orrery doesn't update packages.
+  logind's power-off, reboot, and halt actions. Moonraker's PackageKit actions were left out,
+  since orrery didn't update packages; the update manager adds them (see
+  `2026-11-22-update-manager.md`).
 
 By default setup only writes the files and reloads systemd, which is also how an upgrade is
 applied (user, 2026-11-22). Switching over takes explicit flags:

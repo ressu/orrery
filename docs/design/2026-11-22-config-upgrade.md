@@ -111,7 +111,7 @@ for unknown options, which orrery doesn't do now.
 - **Sections orrery handles differently,** such as `[spoolman]`, which becomes the built-in
   agent table. Each one is listed in this note before it's built.
 
-**What isn't copied:** sections and options orrery doesn't use, such as `[update_manager]`, or
+**What isn't copied:** sections and options orrery doesn't use, such as `[power]`, or
 Moonraker's options in `MOONRAKER_OPTIONS`. The report lists them, so the user knows they have
 no effect. They stay in `moonraker.conf`.
 
@@ -148,6 +148,27 @@ pulls in its parser. Its size on the aarch64 musl build gets measured before it'
 for the login crates. If it's too big, the tool could live in `orrery-import` or a tool of its
 own, and orrery's startup would run the steps on the `toml` crate's values instead, losing only
 the comments, which it never writes anyway.
+
+## Later: a config tool for installers
+
+Installers and plugins edit the config themselves today. For example, crowsnest's installer
+appends its `[update_manager crowsnest]` section to `moonraker.conf`. A script that edits TOML
+with `echo` or `sed` can easily break the file, and then orrery doesn't start. So orrery gets
+a command that installers call instead (user, 2026-11-22). It edits `orrery.toml` through
+`toml_edit`, as `orrery config upgrade` does, so comments and layout survive.
+
+What it needs, roughly:
+
+- **Set and remove** one section or option, such as an update manager entry.
+- **Check before writing:** the result must parse and pass orrery's own checks, or nothing is
+  written and the command says why.
+- **Run it again safely:** adding an entry that's already there with the same values changes
+  nothing, so an installer that runs twice does no harm.
+- **Write in one step,** to a temporary file renamed over the old one, so a crash leaves the
+  old file.
+
+The command's name and options get designed when it's built. Until then, installers keep
+writing to `moonraker.conf`, and orrery reads it as a fallback.
 
 ## Testing
 
