@@ -483,6 +483,7 @@ pub fn register_endpoints(app: &Arc<App>) {
     );
     r.register("/orrery/agent/history_field", &[RequestType::Post], Transports::WebsocketOnly, handler(history_field));
     r.register("/orrery/agent/config", &[RequestType::Get], Transports::WebsocketOnly, handler(agent_config));
+    r.register("/orrery/agent/set_warnings", &[RequestType::Post], Transports::WebsocketOnly, handler(set_warnings));
 }
 
 /// Installs the configured maps, after every built-in endpoint is registered, and warns about
@@ -603,6 +604,7 @@ fn parent_of(pid: u32) -> Option<u32> {
 
 /// Removes an agent's endpoints when it disconnects.
 pub fn remove_agent(app: &App, name: &str) {
+    app.set_agent_warnings(name, Vec::new());
     app.registry.write().expect("registry lock").unregister_prefix(&format!("/agent/{name}/"));
 }
 
@@ -693,6 +695,30 @@ async fn history_field(app: Arc<App>, req: Request) -> ApiResult {
     let description = req.args.opt_str("description")?;
     let units = req.args.opt_str("units")?;
     crate::history::set_field(&app, &agent, &name, value, description, units).await?;
+    Ok(json!("ok"))
+}
+
+/// The most warnings an agent may list, and the longest one, so an agent can't fill
+/// `server.info`.
+const MAX_WARNINGS: usize = 50;
+const MAX_WARNING_LEN: usize = 1000;
+
+/// Replaces the agent's own warnings in `server.info`, such as a config entry it can't use.
+/// They go away when the agent disconnects.
+async fn set_warnings(app: Arc<App>, req: Request) -> ApiResult {
+    let agent = require_agent(&app, &req)?;
+    let list = req.args.require("warnings")?;
+    let warnings: Option<Vec<String>> =
+        list.as_array().and_then(|items| items.iter().map(|w| w.as_str().map(str::to_owned)).collect());
+    let Some(warnings) = warnings else {
+        return Err(ApiError::bad_request("warnings must be a list of strings"));
+    };
+    if warnings.len() > MAX_WARNINGS || warnings.iter().any(|w| w.chars().count() > MAX_WARNING_LEN) {
+        return Err(ApiError::bad_request(format!(
+            "An agent may list at most {MAX_WARNINGS} warnings, of at most {MAX_WARNING_LEN} characters each"
+        )));
+    }
+    app.set_agent_warnings(&agent, warnings);
     Ok(json!("ok"))
 }
 

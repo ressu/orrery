@@ -120,6 +120,12 @@ set a field on the current job. History saves it as `auxiliary_data` when the jo
 shape Fluidd's history table reads, and never waits on another process to do it.
 `history_fields` lists which names an agent may set.
 
+**Warnings** (2026-11-22). An agent calls `orrery.agent.set_warnings {warnings: [...]}` to
+list problems in `server.info`, such as a config entry it can't use. Each call replaces the
+agent's list, so an agent that connects again doesn't repeat itself, and the list goes away
+when the agent disconnects. orrery logs each new warning once. An agent may list at most 50,
+of at most 1,000 characters each.
+
 **Dangerous maps.** A map can also point a core name at an agent, such as `server.files.list`.
 That's the owner's choice, and sometimes a useful one. orrery logs it and adds a warning to
 `server.info`, which Fluidd shows. With no maps, the core answers every core name itself, and
@@ -239,7 +245,9 @@ every later orrery-only setting go there. Moonraker's INI format isn't used for 
 **Agents and config.** Agents can read their settings from orrery's config or from their own
 file; orrery supports both and requires neither. orrery's own agents keep their settings in
 `orrery.toml`, and read them with an orrery method that returns the agent's table as typed
-JSON. `server.config` stays as Moonraker has it, with `moonraker.conf`'s sections as strings,
+JSON. The reply also has `named`, the names of the section's named sections, such as
+`crowsnest` for `[update_manager crowsnest]`, so an agent can find its entries.
+`server.config` stays as Moonraker has it, with `moonraker.conf`'s sections as strings,
 so agents written for Moonraker still find `[spoolman]` there. For someone moving from
 Moonraker, the Spoolman agent falls back to `[spoolman]` in `moonraker.conf` when `orrery.toml`
 doesn't configure it.

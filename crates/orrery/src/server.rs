@@ -107,6 +107,8 @@ pub struct App {
     pub extensions: crate::extensions::Extensions,
     pub agents: crate::agents::Agents,
     warnings: Mutex<Vec<String>>,
+    /// Each connected agent's own warnings, from `orrery.agent.set_warnings`.
+    agent_warnings: Mutex<std::collections::BTreeMap<String, Vec<String>>>,
     /// Set when a client asks orrery to restart; `main` waits for it beside the stop signals.
     pub restart: tokio::sync::Notify,
 }
@@ -185,6 +187,7 @@ impl App {
             extensions: crate::extensions::Extensions::default(),
             agents,
             warnings: Mutex::new(warnings),
+            agent_warnings: Mutex::default(),
             restart: tokio::sync::Notify::new(),
         });
         app.register_endpoints();
@@ -223,6 +226,19 @@ impl App {
         let message = message.into();
         tracing::warn!("{message}");
         self.warnings.lock().expect("warnings lock").push(message);
+    }
+
+    /// Replaces an agent's own warnings, and logs the ones it didn't have before. An empty list
+    /// clears them, as the agent's disconnecting does.
+    pub fn set_agent_warnings(&self, agent: &str, warnings: Vec<String>) {
+        let mut all = self.agent_warnings.lock().expect("agent warnings lock");
+        let old = all.remove(agent).unwrap_or_default();
+        for w in warnings.iter().filter(|w| !old.contains(w)) {
+            tracing::warn!("Agent {agent}: {w}");
+        }
+        if !warnings.is_empty() {
+            all.insert(agent.to_owned(), warnings);
+        }
     }
 
     pub fn send_event(&self, event: Event) {
@@ -499,13 +515,9 @@ async fn forward_notifications(app: Arc<App>) {
 
 async fn server_info(app: Arc<App>, req: Request) -> ApiResult {
     let raw = req.args.opt_bool("raw")?.unwrap_or(false);
-    let warnings: Vec<String> = app
-        .warnings
-        .lock()
-        .expect("warnings lock")
-        .iter()
-        .map(|w| if raw { w.clone() } else { w.replace('\n', "<br/>") })
-        .collect();
+    let mut warnings: Vec<String> = app.warnings.lock().expect("warnings lock").clone();
+    warnings.extend(app.agent_warnings.lock().expect("agent warnings lock").values().flatten().cloned());
+    let warnings: Vec<String> = warnings.into_iter().map(|w| if raw { w } else { w.replace('\n', "<br/>") }).collect();
     let state = app.klippy.state();
     Ok(json!({
         "klippy_connected": app.klippy.is_connected(),

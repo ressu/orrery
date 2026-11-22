@@ -333,6 +333,20 @@ impl Agent {
         })
     }
 
+    /// The names of the agent's named sections: `crowsnest` for `[update_manager crowsnest]`,
+    /// when the section is `update_manager`. `None` asks about the section named after the agent.
+    pub async fn config_names(&self, section: Option<&str>) -> Result<Vec<String>, Error> {
+        let params = section.map_or(Value::Null, |s| json!({"section": s}));
+        let reply = self.call("orrery.agent.config", params).await?;
+        Ok(reply["named"].as_array().into_iter().flatten().filter_map(|n| n.as_str().map(str::to_owned)).collect())
+    }
+
+    /// Replaces the agent's own warnings in `server.info`, such as a config entry it can't use.
+    /// An empty list clears them, and so does disconnecting.
+    pub async fn set_warnings(&self, warnings: &[String]) -> Result<(), Error> {
+        self.call("orrery.agent.set_warnings", json!({"warnings": warnings})).await.map(drop)
+    }
+
     /// Notifications and Klippy remote method calls orrery pushes, from now on.
     pub fn notifications(&self) -> broadcast::Receiver<Notification> {
         self.inner.notifications.subscribe()

@@ -1,0 +1,30 @@
+name: an agent lists its own warnings in server.info
+description: >
+  orrery only. orrery.agent.set_warnings replaces the agent's warnings, and they go away when
+  it disconnects.
+targets: [orrery]
+transports: [ws]
+klippy: none
+steps:
+  - call: server.info
+    expect: {warnings: []}
+  - agent: {connect: {name: test-agent, via: unix}}
+  - call: orrery.agent.set_warnings
+    as_agent: true
+    params: {warnings: ["[test-agent front]: type web isn't supported yet", "second"]}
+    expect: ok
+  - call: server.info
+    expect: {warnings: ["[test-agent front]: type web isn't supported yet", "second"]}
+  - call: orrery.agent.set_warnings
+    as_agent: true
+    params: {warnings: ["second"]}
+    expect: ok
+  - call: server.info
+    expect: {warnings: ["second"]}
+  - call: orrery.agent.set_warnings
+    as_agent: true
+    params: {warnings: "second"}
+    expect_error: {code: 400, message: warnings must be a list of strings}
+  - agent: disconnect
+  - call: server.info
+    expect: {warnings: []}
