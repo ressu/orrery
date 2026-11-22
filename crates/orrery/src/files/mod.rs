@@ -41,7 +41,7 @@ pub struct FileManager {
     /// Paths clients can't write, and can't read either when the flag is false.
     reserved: Vec<(String, PathBuf, bool)>,
     /// Gcode metadata by path in the gcodes root. A copy of what the store holds.
-    metadata: Mutex<BTreeMap<String, Map<String, Value>>>,
+    metadata: Mutex<BTreeMap<String, StoredMetadata>>,
     /// Held during each file operation, as Moonraker's `sync_lock` is.
     op_lock: tokio::sync::Mutex<()>,
     /// Metadata is parsed one file at a time.
@@ -292,7 +292,7 @@ impl FileManager {
     // *** Metadata ***
 
     pub fn get_metadata(&self, rel: &str) -> Option<Map<String, Value>> {
-        self.metadata.lock().expect("metadata lock").get(rel).cloned()
+        self.metadata.lock().expect("metadata lock").get(rel).map(StoredMetadata::parse)
     }
 
     /// Records the latest job for a file, as Moonraker's history does with `print_start_time`
@@ -305,10 +305,11 @@ impl FileManager {
     }
 
     fn store_metadata(&self, db: &Database, rel: &str, md: Map<String, Value>) {
-        if let Err(e) = db.local_put(METADATA_NAMESPACE, rel, &Value::Object(md.clone())) {
+        let stored = StoredMetadata::new(&md);
+        if let Err(e) = db.local_put_text(METADATA_NAMESPACE, rel, &stored.0) {
             tracing::warn!("Can't store metadata for {rel}: {e:#}");
         }
-        self.metadata.lock().expect("metadata lock").insert(rel.to_owned(), md);
+        self.metadata.lock().expect("metadata lock").insert(rel.to_owned(), stored);
     }
 
     fn forget_metadata(&self, db: &Database, rels: &[String]) {
@@ -319,11 +320,10 @@ impl FileManager {
 
     /// Whether the stored metadata still matches the file's size and modified time.
     fn has_valid_metadata(&self, rel: &str, info: &Map<String, Value>) -> bool {
-        self.metadata
-            .lock()
-            .expect("metadata lock")
-            .get(rel)
-            .is_some_and(|md| md.get("size") == info.get("size") && md.get("modified") == info.get("modified"))
+        self.metadata.lock().expect("metadata lock").get(rel).is_some_and(|md| {
+            let stamp = md.stamp();
+            stamp.size.as_ref() == info.get("size") && stamp.modified.as_ref() == info.get("modified")
+        })
     }
 
     fn remove_thumbs(&self, records: &[(String, Map<String, Value>)]) {
@@ -342,13 +342,13 @@ impl FileManager {
         let removed = self.metadata.lock().expect("metadata lock").remove(rel);
         if let Some(md) = removed {
             self.forget_metadata(db, &[rel.to_owned()]);
-            self.remove_thumbs(&[(rel.to_owned(), md)]);
+            self.remove_thumbs(&[(rel.to_owned(), md.parse())]);
         }
     }
 
     fn remove_directory_metadata(&self, db: &Database, dir: &str) {
         let prefix = if dir.ends_with('/') { dir.to_owned() } else { format!("{dir}/") };
-        let removed: Vec<(String, Map<String, Value>)> = {
+        let removed: Vec<(String, StoredMetadata)> = {
             let mut md = self.metadata.lock().expect("metadata lock");
             let keys: Vec<String> = md.keys().filter(|k| k.starts_with(&prefix)).cloned().collect();
             keys.into_iter().filter_map(|k| md.remove(&k).map(|v| (k, v))).collect()
@@ -356,13 +356,14 @@ impl FileManager {
         if !removed.is_empty() {
             let keys: Vec<String> = removed.iter().map(|(k, _)| k.clone()).collect();
             self.forget_metadata(db, &keys);
+            let removed: Vec<(String, Map<String, Value>)> = removed.into_iter().map(|(k, v)| (k, v.parse())).collect();
             self.remove_thumbs(&removed);
         }
     }
 
     fn move_directory_metadata(&self, db: &Database, prev: &str, new: &str) {
         let prefix = if prev.ends_with('/') { prev.to_owned() } else { format!("{prev}/") };
-        let moved: Vec<(String, String, Map<String, Value>)> = {
+        let moved: Vec<(String, String, StoredMetadata)> = {
             let mut md = self.metadata.lock().expect("metadata lock");
             let keys: Vec<String> = md.keys().filter(|k| k.starts_with(&prefix)).cloned().collect();
             keys.into_iter()
@@ -377,7 +378,7 @@ impl FileManager {
         if !moved.is_empty() {
             self.forget_metadata(db, &moved.iter().map(|m| m.0.clone()).collect::<Vec<_>>());
             for (_, n, v) in moved {
-                let _ = db.local_put(METADATA_NAMESPACE, &n, &Value::Object(v));
+                let _ = db.local_put_text(METADATA_NAMESPACE, &n, &v.0);
             }
         }
     }
@@ -386,7 +387,7 @@ impl FileManager {
     /// needs a scan.
     fn move_file_metadata(&self, db: &Database, prev: &str, new: &str) -> bool {
         let md = self.metadata.lock().expect("metadata lock").remove(prev);
-        let Some(md) = md else {
+        let Some(md) = md.map(|md| md.parse()) else {
             // A move over an existing file needs a rescan, so its old metadata goes.
             if self.metadata.lock().expect("metadata lock").remove(new).is_some() {
                 self.forget_metadata(db, &[new.to_owned()]);
@@ -413,6 +414,40 @@ impl FileManager {
         }
         self.store_metadata(db, new, md);
         true
+    }
+}
+
+/// One file's metadata as its JSON text, the same text the store holds. As `serde_json`
+/// values, bluev2's 749 files took 7.9 MB; as text they take under 1 MB (2026-11-22). Each
+/// read parses a copy, as reads returned a copy before.
+#[derive(Clone)]
+struct StoredMetadata(Box<str>);
+
+/// The fields that tell whether stored metadata is still current.
+#[derive(serde::Deserialize)]
+struct Stamp {
+    size: Option<Value>,
+    modified: Option<Value>,
+}
+
+impl StoredMetadata {
+    fn new(md: &Map<String, Value>) -> Self {
+        Self(serde_json::to_string(md).expect("a JSON map serializes").into())
+    }
+
+    /// Stored text, if it's a JSON object.
+    fn from_text(text: Box<str>) -> Option<Self> {
+        serde_json::from_str::<BTreeMap<String, serde::de::IgnoredAny>>(&text).ok()?;
+        Some(Self(text))
+    }
+
+    fn parse(&self) -> Map<String, Value> {
+        serde_json::from_str(&self.0).unwrap_or_default()
+    }
+
+    /// The size and modified time, without parsing the rest.
+    fn stamp(&self) -> Stamp {
+        serde_json::from_str(&self.0).unwrap_or(Stamp { size: None, modified: None })
     }
 }
 
@@ -458,12 +493,13 @@ fn copy_tree(from: &Path, to: &Path) -> io::Result<()> {
 /// was stopped.
 pub fn start(app: &Arc<App>) {
     let fm = &app.files;
-    match app.database.local_items(METADATA_NAMESPACE) {
+    // As text, so the files' metadata is never all parsed at once.
+    match app.database.local_items_text(METADATA_NAMESPACE) {
         Ok(items) => {
             let mut md = fm.metadata.lock().expect("metadata lock");
-            for (k, v) in items {
-                if let Value::Object(m) = v {
-                    md.insert(k, m);
+            for (k, text) in items {
+                if let Some(stored) = StoredMetadata::from_text(text) {
+                    md.insert(k, stored);
                 }
             }
         }

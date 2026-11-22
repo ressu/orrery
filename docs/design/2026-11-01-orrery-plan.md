@@ -356,6 +356,9 @@ Tiers, in order:
 In order, as of 2026-11-22:
 
 1. **A real print on bluev2,** to check job state, history, and Spoolman's usage end to end.
+   Afterwards, measure orrery's and `orrery-spoolman`'s memory again. Right after the memory
+   pass's restart (2026-11-22) they used 15.4 MB and 4.9 MB, but the plugin note records the
+   agent at 8.9 MB after a longer run, so check whether either grows.
 2. **`sudo orrery setup`** is built and checked on bluev2 (2026-11-22). Left: plugins that
    declare what setup should write. See the service-control note's Deployment section.
 3. **Processors,** starting with `.gcode.3mf`. See the plugin note's "Processors".

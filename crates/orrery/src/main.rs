@@ -122,6 +122,9 @@ fn resolve_paths(cli: &Cli) -> Result<Paths> {
 
 /// Logs to the terminal and, unless `-n` is given, to the log file. The returned guard flushes
 /// the file when it's dropped. A log file that can't be opened becomes a warning.
+/// How many lines may wait for the log file's writer.
+const LOG_BUFFER_LINES: usize = 4096;
+
 fn init_logging(cli: &Cli, paths: &Paths) -> (Option<tracing_appender::non_blocking::WorkerGuard>, Option<String>) {
     use tracing_subscriber::prelude::*;
 
@@ -141,7 +144,11 @@ fn init_logging(cli: &Cli, paths: &Paths) -> (Option<tracing_appender::non_block
             path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| logfile::LogFile::open(path, header));
         match opened {
             Ok(file) => {
-                let (writer, g) = tracing_appender::non_blocking(file.share());
+                // tracing-appender's default buffer, 128,000 lines, takes 4 MB as soon as it's made.
+                // Lines past the limit are dropped, not waited for.
+                let (writer, g) = tracing_appender::non_blocking::NonBlockingBuilder::default()
+                    .buffered_lines_limit(LOG_BUFFER_LINES)
+                    .finish(file.share());
                 guard = Some(g);
                 Some(tracing_subscriber::fmt::layer().with_ansi(false).with_writer(writer))
             }

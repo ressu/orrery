@@ -20,8 +20,9 @@ footprint, transport, and the order of work.
 
 - **No dynamic loading.** Rust has no stable plugin ABI, and a static musl binary can't load
   shared libraries anyway.
-- **Footprint goes only where it's used.** On the printer, orrery uses about 20 MB of memory
-  against about 56 MB for an idle Moonraker, and both use about 1% CPU. A feature that runs as an
+- **Footprint goes only where it's used.** On the printer, an idle orrery uses about 15 MB of
+  memory against about 56 MB for an idle Moonraker, and both use about 1% CPU. (orrery had grown
+  to about 32 MB; the memory pass of 2026-11-22 below brought it back down.) A feature that runs as an
   agent costs nothing when it isn't installed. A feature compiled into orrery costs every user a
   little, installed or not.
 - **Failures stay contained.** An agent that crashes, leaks, or blocks doesn't stop prints or
@@ -298,6 +299,20 @@ orrery runs a new file through the processors that match it, in this order:
    0.9 seconds. Real files from bluev2 have only PNG thumbnails up to 400x300 (108 KB), and
    all but a few have a 32x32 thumbnail already, so in real use orrery decodes an image even
    less often.
+
+   **The memory pass (bluev2, 2026-11-22).** After the check above, orrery idled at 32.4 MB
+   (24.7 MB of it heap and thread stacks, after 9.5 hours). A heap profile, made with heaptrack
+   on a copy of bluev2's data, found four things holding the memory, and each got a fix:
+
+   | What held it | Before | Fix |
+   |---|---|---|
+   | Metadata of 749 G-code files, as parsed JSON values | 7.9 MB | Kept as JSON text, parsed when asked |
+   | The log writer's buffer, sized for 128,000 lines | 4.0 MB | Sized for 4,096 lines |
+   | redb's page cache, whose default limit is 1 GiB | 3.7 MB | Limited to 1 MiB |
+   | The regex that reads `/proc/net/dev` | 0.4 MB | Parsed by hand |
+
+   Afterwards orrery-test idled at 15.4 MB, with a peak of 16.5 MB while starting. 7.6 MB of
+   that is the binary's own code, read from disk, and 7.9 MB is heap and thread stacks.
 
 Preprocess and extract come first, because they share one pipeline. Fetch waits for a real use.
 

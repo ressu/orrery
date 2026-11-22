@@ -6,10 +6,9 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use regex::Regex;
 use serde_json::{Map, Value, json};
 use tokio::sync::broadcast;
 
@@ -272,17 +271,27 @@ fn net_stats() -> Map<String, Value> {
 }
 
 fn parse_net_dev(text: &str) -> Map<String, Value> {
-    static LINE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(\w+):(.+)").expect("valid regex"));
-    let line = &*LINE;
     let mut out = Map::new();
-    for c in line.captures_iter(text) {
-        let fields: Vec<u64> = c[2].split_whitespace().filter_map(|f| f.parse().ok()).collect();
+    // Moonraker's pattern is `(\w+):(.+)`. A regex with Unicode `\w` takes about 400 KB, so it's
+    // matched by hand: the word characters right before a line's first colon, and the rest.
+    for line in text.lines() {
+        let Some((before, rest)) = line.split_once(':') else { continue };
+        let start = before
+            .char_indices()
+            .rev()
+            .find(|(_, c)| !(c.is_alphanumeric() || *c == '_'))
+            .map_or(0, |(i, c)| i + c.len_utf8());
+        let name = &before[start..];
+        if name.is_empty() || rest.is_empty() {
+            continue;
+        }
+        let fields: Vec<u64> = rest.split_whitespace().filter_map(|f| f.parse().ok()).collect();
         if fields.len() < 12 {
             // Moonraker gives up on the whole file when a line is short.
             return Map::new();
         }
         out.insert(
-            c[1].to_owned(),
+            name.to_owned(),
             json!({
                 "rx_bytes": fields[0],
                 "tx_bytes": fields[8],
@@ -436,5 +445,9 @@ mod tests {
         let net = parse_net_dev(text);
         assert_eq!(net["eth0"]["tx_bytes"], json!(2000));
         assert_eq!(net["eth0"]["tx_drop"], json!(4));
+        // As Moonraker's `(\w+):`, a name with a dash keeps only its last word.
+        let text = "  br-1a2b: 1 2 3 4 0 0 0 0 5 6 7 8 0 0 0 0\n  wlän0: 1 2 3 4 0 0 0 0 5 6 7 8 0 0 0 0\n";
+        let net = parse_net_dev(text);
+        assert_eq!(net.keys().collect::<Vec<_>>(), ["1a2b", "wlän0"]);
     }
 }

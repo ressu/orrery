@@ -43,6 +43,9 @@ pub struct Database {
     write_lock: tokio::sync::Mutex<()>,
 }
 
+/// redb's page cache, in bytes. Half of it may also hold a write transaction's pages.
+const CACHE_SIZE: usize = 1024 * 1024;
+
 impl Database {
     pub fn open(config: &Config, paths: &Paths) -> Result<Self> {
         let section = config.section("database");
@@ -53,7 +56,12 @@ impl Database {
         section.get_bool("enable_database_debug", false)?;
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
         let path = dir.join("orrery.redb");
-        let db = redb::Database::create(&path).with_context(|| format!("opening {}", path.display()))?;
+        // redb's default cache is 1 GiB, so it grows to hold every page orrery reads: 3.7 MB on
+        // bluev2 (2026-11-22), and more as the history grows. The kernel caches the file anyway.
+        let db = redb::Builder::new()
+            .set_cache_size(CACHE_SIZE)
+            .create(&path)
+            .with_context(|| format!("opening {}", path.display()))?;
         // It holds the API keys, so only orrery's own user may read it. Backups copy the mode.
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
@@ -232,9 +240,31 @@ impl Database {
         Ok(out)
     }
 
+    /// A namespace's items as their stored JSON text, without parsing them.
+    pub fn local_items_text(&self, namespace: &str) -> Result<Vec<(String, Box<str>)>> {
+        let tx = self.db.begin_read()?;
+        let table = tx.open_table(LOCAL)?;
+        let mut out = Vec::new();
+        for entry in table.range((namespace, "")..)? {
+            let (k, v) = entry?;
+            let (ns, key) = k.value();
+            if ns != namespace {
+                break;
+            }
+            let text = std::str::from_utf8(v.value()).with_context(|| format!("{namespace} {key} isn't UTF-8"))?;
+            out.push((key.to_owned(), text.into()));
+        }
+        Ok(out)
+    }
+
     pub fn local_put(&self, namespace: &str, key: &str, value: &Value) -> Result<()> {
+        self.local_put_text(namespace, key, &serde_json::to_string(value)?)
+    }
+
+    /// Stores an item that's already JSON text.
+    pub fn local_put_text(&self, namespace: &str, key: &str, json: &str) -> Result<()> {
         let tx = self.db.begin_write()?;
-        tx.open_table(LOCAL)?.insert((namespace, key), serde_json::to_vec(value)?.as_slice())?;
+        tx.open_table(LOCAL)?.insert((namespace, key), json.as_bytes())?;
         tx.commit()?;
         Ok(())
     }
