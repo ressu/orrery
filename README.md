@@ -2,7 +2,8 @@
 
 orrery is an experimental API server for Klipper that aims to work as a drop-in replacement for
 [Moonraker](https://github.com/Arksine/moonraker), so that Fluidd, Mainsail, and KlipperScreen work with
-it unchanged. It's written in Rust and builds as one static binary for the Raspberry Pi.
+it unchanged. It's written in Rust, and its programs are static builds for the Raspberry Pi and
+PCs.
 
 "orrery" is a placeholder name. The long-term goal is to try out ideas Moonraker doesn't have,
 starting with per-user state.
@@ -26,6 +27,81 @@ Moonraker. User logins aren't written yet. See
 For the plan and the decisions made so far, see
 [docs/design/2026-11-01-orrery-plan.md](docs/design/2026-11-01-orrery-plan.md).
 
+## Installing
+
+orrery's releases are on [GitHub](https://github.com/ressu/orrery/releases). Each release has
+one archive for each kind of CPU:
+
+| Archive | For |
+|---|---|
+| `orrery-aarch64.tar.gz` | 64-bit Raspberry Pi OS, and most current boards |
+| `orrery-armv7.tar.gz` | 32-bit Raspberry Pi OS on a Pi 2 or newer |
+| `orrery-x86_64.tar.gz` | PCs |
+
+To see which one the printer needs, run `uname -m`. It prints `aarch64`, `armv7l`, or `x86_64`.
+
+1. Download the archive and the release's checksums into `~/orrery`, check the archive, and
+   unpack it:
+
+   ```
+   mkdir -p ~/orrery && cd ~/orrery
+   curl -LO https://github.com/ressu/orrery/releases/latest/download/orrery-<cpu>.tar.gz
+   curl -LO https://github.com/ressu/orrery/releases/latest/download/SHA256SUMS
+   sha256sum --check --ignore-missing SHA256SUMS
+   tar -xzf orrery-<cpu>.tar.gz && rm orrery-<cpu>.tar.gz SHA256SUMS
+   ```
+
+   `<cpu>` is `aarch64`, `armv7`, or `x86_64`. `sha256sum` prints `OK` for the archive.
+2. To bring Moonraker's history and settings along, follow
+   [Moving from Moonraker](#moving-from-moonraker) now.
+3. Set up orrery's service, and switch from Moonraker to orrery:
+
+   ```
+   sudo ~/orrery/orrery setup --migrate
+   ```
+
+   Setup stops and disables Moonraker, then starts orrery on Moonraker's port. Fluidd,
+   Mainsail, and KlipperScreen connect to orrery as they did to Moonraker.
+
+To go back to Moonraker, run `sudo ~/orrery/orrery setup --remove`. It removes orrery's service,
+and prints the command that starts Moonraker again.
+
+## Updating orrery
+
+With `[update_manager]` in the config, the update manager lists orrery as `orrery`, beside
+Klipper and the other entries. Update it as any other entry, from Fluidd or Mainsail. orrery
+restarts at the end, so the page reconnects. The update waits while a print runs.
+
+From a shell, run:
+
+```
+~/orrery/orrery self-update
+```
+
+It asks the running orrery to update, and shows its progress. When orrery doesn't answer, or
+has no update manager, it replaces the programs itself, and prints the command that restarts
+orrery. To install a given release, add `--version`, such as `--version v0.2.0`.
+
+Before a new version takes effect, it runs `orrery preflight`. That checks that the new orrery
+runs on this CPU, reads the config files, and can read the database. If the check fails, the
+programs stay as they were, and the update says why.
+
+The update keeps the programs it replaced in `~/orrery/.previous/`. To go back to them, use
+Rollback in Fluidd or Mainsail, or run:
+
+```
+~/orrery/orrery rollback
+```
+
+If the new orrery doesn't run at all, run the old one's rollback instead:
+
+```
+~/orrery/.previous/orrery rollback
+```
+
+A build of your own, such as one from `just copy-to-printer`, doesn't update itself. To follow
+a fork's releases, see [Update manager](#update-manager).
+
 ## Moving from Moonraker
 
 `orrery-import` copies Moonraker's settings, webcams, and print history into orrery's store. It
@@ -41,13 +117,13 @@ only reads Moonraker's database, so Moonraker keeps working as before.
 3. See what the import would change:
 
    ```
-   orrery-import --dry-run ~/moonraker-sql.copy.db
+   ~/orrery/orrery-import --dry-run ~/moonraker-sql.copy.db
    ```
 
 4. Import, then start orrery:
 
    ```
-   orrery-import ~/moonraker-sql.copy.db
+   ~/orrery/orrery-import ~/moonraker-sql.copy.db
    ```
 
 Running the import again changes nothing, and print jobs orrery recorded itself are kept. To

@@ -343,7 +343,8 @@ change how safe or complete orrery is to run.
     releases instead: the archive for the CPU, checked against `SHA256SUMS`, then
     `orrery preflight`, and the old set kept in `.previous/`. A development build doesn't
     update itself. Its section `[update_manager.orrery]` takes `enabled`, and `repo` from
-    `orrery.toml` only. `orrery-updater self-update` and `rollback` do the same from a shell.
+    `orrery.toml` only. `orrery self-update` and `orrery rollback` do the same from a shell,
+    with orrery or without it.
     See docs/design/2026-11-22-self-update.md.
     `machine.update.moonraker` answers 400 "orrery doesn't update Moonraker."
     `moonraker` in an entry's `managed_services` restarts nothing, since a plugin that names
