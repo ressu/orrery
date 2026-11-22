@@ -273,9 +273,31 @@ orrery runs a new file through the processors that match it, in this order:
    with the object labels that cancel-object needs. It writes to an output path, and orrery
    swaps the result in, in one rename.
 3. **Extract** reads the file's metadata, and writes thumbnails into a folder that orrery names.
-   It prints the metadata as JSON. orrery's own Rust extractor stays the default. If image
-   decoding keeps orrery's memory high, that extractor can become a processor program too,
-   with nothing else changing.
+   It prints the metadata as JSON. orrery's own Rust extractor stays the default, inside
+   orrery: the memory check below found that its memory settles back after reading large
+   thumbnails. It could still become a processor program later, with nothing else changing.
+
+   **The thumbnail memory check (bluev2, 2026-11-22).** orrery-test, the static aarch64 musl
+   build with musl's own allocator, read eight files: five real OrcaSlicer files with 400x300
+   PNG thumbnails, and three synthetic ones with the most expensive thumbnails that fit in the
+   first MiB, which is all orrery reads for them. The synthetic files had a 420x420 PNG with no
+   32x32, so orrery decodes it to make one; a 400x400 QOI, which orrery decodes and saves as
+   PNG; and a 300x300 PNG with a 300x300 QOI. Their pixels were noise, so nothing compressed.
+   The files were uploaded through the API, then rescanned five times with `metascan`.
+
+   | When | orrery's memory (RSS) |
+   |---|---|
+   | Idle, before | 31.5 MB |
+   | Peak while uploading and reading | 40.1 MB |
+   | Peak in each rescan round | 38.4 MB |
+   | 30 seconds after the uploads | 31.9 MB |
+   | After each rescan round, and 2 minutes later | 31.9 MB |
+
+   Reading a file costs about 9 MB for under a second, and the memory goes back to within
+   0.4 MB of idle. Five rounds didn't make it grow. Each upload, reading included, took 0.4 to
+   0.9 seconds. Real files from bluev2 have only PNG thumbnails up to 400x300 (108 KB), and
+   all but a few have a 32x32 thumbnail already, so in real use orrery decodes an image even
+   less often.
 
 Preprocess and extract come first, because they share one pipeline. Fetch waits for a real use.
 

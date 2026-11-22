@@ -356,22 +356,21 @@ Tiers, in order:
 In order, as of 2026-11-22:
 
 1. **A real print on bluev2,** to check job state, history, and Spoolman's usage end to end.
-2. **The thumbnail memory check.**
-3. **`sudo orrery setup`** is built and checked on bluev2 (2026-11-22). Left: plugins that
+2. **`sudo orrery setup`** is built and checked on bluev2 (2026-11-22). Left: plugins that
    declare what setup should write. See the service-control note's Deployment section.
-4. **Processors,** starting with `.gcode.3mf`. See the plugin note's "Processors".
-5. **`orrery config upgrade`,** which also converts `moonraker.conf`: see
+3. **Processors,** starting with `.gcode.3mf`. See the plugin note's "Processors".
+4. **`orrery config upgrade`,** which also converts `moonraker.conf`: see
    [2026-11-22-config-upgrade.md](2026-11-22-config-upgrade.md), a draft. Then the musl
    allocator, and a check of Mainsail.
-6. **orrery edits `orrery.toml`** to give users roles, from Fluidd's add-user button or the CLI.
+5. **orrery edits `orrery.toml`** to give users roles, from Fluidd's add-user button or the CLI.
    See "Editing orrery.toml (later)" in [2026-11-21-logins.md](2026-11-21-logins.md).
-7. **How Fluidd's login flows are triggered,** to learn which kinds of login orrery can offer
+6. **How Fluidd's login flows are triggered,** to learn which kinds of login orrery can offer
    without changing Fluidd, OIDC above all. See "OIDC (later)" in
    [2026-11-21-logins.md](2026-11-21-logins.md).
-8. **Patches for the frontends,** from the entries in
+7. **Patches for the frontends,** from the entries in
    [frontend-issues.md](../frontend-issues.md), to send upstream. The first is
    `fluidd-login-error`: Fluidd's login form hides the server's reason, so a locked-out user
    isn't told to wait.
-9. **orrery's own allowed-services list,** in `orrery.toml`, with `moonraker.asvc` read only for
+8. **orrery's own allowed-services list,** in `orrery.toml`, with `moonraker.asvc` read only for
    Moonraker compatibility. See "The allowed-services list" in
    [2026-11-19-service-control.md](2026-11-19-service-control.md).
