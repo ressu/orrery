@@ -332,9 +332,9 @@ change how safe or complete orrery is to run.
   - It updates `git_repo` and `executable` entries, their Python packages and
     `system_dependencies`, and the `system` entry. A `web`, `zip`, or `python` entry is left
     out, with a warning in `server.info`.
-  - No `klipper` entry: updating Klipper from where Klippy runs is a security risk, and a
-    safe design comes later. `machine.update.klipper` answers 400 "Klipper updates aren't
-    available in orrery yet."
+  - No `klipper` entry yet: Moonraker updates Klipper from whatever remote its repo has, and
+    orrery's safer design (docs/design/2026-11-22-klipper-updates.md) isn't built.
+    `machine.update.klipper` answers 400 "Klipper updates aren't available in orrery yet."
   - No `moonraker` entry, and none for orrery: orrery's own updates wait for a release source.
     `machine.update.moonraker` answers 400 "orrery doesn't update Moonraker."
     `moonraker` in an entry's `managed_services` restarts nothing, since a plugin that names

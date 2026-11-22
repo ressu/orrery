@@ -247,10 +247,10 @@ already has for systemd (`crates/orrery-dbus`).
 
 Moonraker adds a `klipper` entry from Klippy's own paths: the repo Klippy runs from, its
 virtualenv, `scripts/klippy-requirements.txt`, and `scripts/system-dependencies.json`. orrery
-doesn't copy that (user, 2026-11-22). Kalico's author calls updating Klipper from third-party
-locations a security risk, and Kalico warns about it. A safe design for Klipper's own updates
-comes later, in its own note. Until then, `machine.update.klipper` is refused, and Klipper is
-updated by hand or with KIAUH.
+doesn't copy that (user, 2026-11-22): Moonraker updates Klipper from whatever remote the repo
+has. The safer design is in [2026-11-22-klipper-updates.md](2026-11-22-klipper-updates.md).
+Until it's built, `machine.update.klipper` is refused, and Klipper is updated by hand or with
+KIAUH.
 
 ## Restarts
 
