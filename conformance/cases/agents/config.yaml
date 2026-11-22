@@ -26,12 +26,14 @@ steps:
       section: test-agent
       exists: true
       options: {$exact: true, server: "http://spoolman.invalid:7912", timeout: "5", sync_rate: 5}
+      # The options orrery.toml sets, for options an agent takes only from there.
+      from_orrery_toml: [server, sync_rate]
       # Its named sections, from both files.
       named: [front, back]
   - call: orrery.agent.config
     as_agent: true
     params: {section: test-agent front}
-    expect: {exists: true, options: {$exact: true, path: "~/front"}, named: []}
+    expect: {exists: true, options: {$exact: true, path: "~/front"}, from_orrery_toml: [], named: []}
   - call: orrery.agent.config
     as_agent: true
     params: {section: test-agent extra}

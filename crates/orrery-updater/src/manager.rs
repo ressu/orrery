@@ -127,7 +127,7 @@ pub struct Manager {
     warnings: Mutex<Vec<String>>,
     config_warnings: Mutex<Vec<String>>,
     /// The `klipper` and `kalico` sections, for Klipper's entry once Klippy says where it runs.
-    klipper_sections: Mutex<Vec<(String, Map<String, Value>)>>,
+    klipper_sections: Mutex<Vec<config::KlipperSection>>,
     /// Commands waiting for the one that runs. While one waits, restarts wait for it too.
     waiting: AtomicUsize,
     /// Services to restart once the updates are done, in the order they were added.
@@ -344,7 +344,8 @@ impl Manager {
         for name in agent.config_names(None).await? {
             let map = agent.config(Some(&format!("{SECTION} {name}"))).await?.unwrap_or_default();
             if config::is_klipper_section(&name) {
-                klipper_sections.push((name, map));
+                let from_orrery_toml = agent.config_from_orrery_toml(Some(&format!("{SECTION} {name}"))).await?;
+                klipper_sections.push(config::KlipperSection { name, options: map, from_orrery_toml });
                 continue;
             }
             match config::entry(&name, &map, &global) {

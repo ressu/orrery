@@ -404,6 +404,10 @@ fn warnings(s: &mut RepoState, opts: &GitOptions) {
     } else if !same_url(&s.url, &opts.origin) {
         s.anomalies.push(format!("Unofficial remote url: {}", s.url));
     }
+    // An update over a connection anyone on the way can change (orrery's, not Moonraker's).
+    if unencrypted(&s.url) {
+        s.anomalies.push(format!("Unencrypted remote url: {}", s.url));
+    }
     if !s.untracked.is_empty() {
         s.anomalies.push(format!("Repo has untracked source files: {}", s.untracked.join(", ")));
     }
@@ -481,6 +485,13 @@ pub async fn remote_url(path: &Path) -> Option<String> {
         .ok()
         .map(|u| u.trim().to_owned())
         .filter(|u| !u.is_empty())
+}
+
+/// `http://` and `git://` remotes. HTTPS and SSH are encrypted, and a local path needs no
+/// network.
+fn unencrypted(url: &str) -> bool {
+    let url = url.trim().to_ascii_lowercase();
+    url.starts_with("http://") || url.starts_with("git://")
 }
 
 pub fn same_url(a: &str, b: &str) -> bool {
@@ -919,5 +930,15 @@ mod tests {
         let s = refresh(&e, &opts, &Tracking::default(), false).await;
         assert_eq!(s.url, opts.origin);
         assert!(s.anomalies.is_empty(), "{:?}", s.anomalies);
+    }
+
+    #[test]
+    fn unencrypted_remotes() {
+        for url in ["http://github.com/a/b.git", "git://example.com/b", "HTTP://x/y"] {
+            assert!(unencrypted(url), "{url}");
+        }
+        for url in ["https://github.com/a/b.git", "git@github.com:a/b.git", "ssh://git@x/y", "/home/printer/repo"] {
+            assert!(!unencrypted(url), "{url}");
+        }
     }
 }

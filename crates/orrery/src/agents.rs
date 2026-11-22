@@ -733,8 +733,9 @@ async fn set_warnings(app: Arc<App>, req: Request) -> ApiResult {
 }
 
 /// An agent's own config: by default the section named after it, such as `[spoolman]`, from
-/// `orrery.toml` with its types, or from `moonraker.conf` as text. An agent may read only its
-/// own sections: `<name>`, `<name> <anything>`, and its `[agent.<name>]` table.
+/// `orrery.toml` with its types, or from `moonraker.conf` as text. `from_orrery_toml` names the
+/// options `orrery.toml` sets, for options an agent takes only from there. An agent may read
+/// only its own sections: `<name>`, `<name> <anything>`, and its `[agent.<name>]` table.
 async fn agent_config(app: Arc<App>, req: Request) -> ApiResult {
     let agent = require_agent(&app, &req)?;
     let section = req.args.opt_str("section")?.unwrap_or_else(|| agent.clone());
@@ -746,7 +747,13 @@ async fn agent_config(app: Arc<App>, req: Request) -> ApiResult {
     // The names of its named sections, such as `crowsnest` for `[update_manager crowsnest]`.
     let prefix = format!("{section} ");
     let named: Vec<String> = app.config.section_names(&prefix).iter().map(|n| n[prefix.len()..].to_owned()).collect();
-    Ok(json!({"section": section, "exists": options.is_some(), "options": options.unwrap_or_default(), "named": named}))
+    Ok(json!({
+        "section": section,
+        "exists": options.is_some(),
+        "options": options.unwrap_or_default(),
+        "from_orrery_toml": app.config.toml_keys(&section),
+        "named": named,
+    }))
 }
 
 #[cfg(test)]

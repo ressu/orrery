@@ -21,6 +21,9 @@ const RESERVED: &[&str] = &["moonraker", "system"];
 /// The options Klipper's entry takes from its section: Moonraker's `OPTION_OVERRIDES`, and
 /// `enabled`.
 const KLIPPER_OPTIONS: &[&str] = &["channel", "pinned_commit", "refresh_interval", "report_anomalies", "enabled"];
+/// The options that name where Klipper's code comes from. Moonraker fixes them; orrery takes
+/// them only from `orrery.toml`, so a config written for Moonraker can't change them.
+const KLIPPER_SOURCE: &[&str] = &["origin", "primary_branch", "moved_origin"];
 /// Moonraker's default `refresh_interval`, in hours: a weekly check.
 const DEFAULT_INTERVAL_HOURS: u64 = 168;
 
@@ -144,6 +147,20 @@ pub struct Klippy {
     pub python: PathBuf,
 }
 
+/// A `klipper` or `kalico` section, with the options that came from `orrery.toml`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KlipperSection {
+    pub name: String,
+    pub options: Map<String, Value>,
+    pub from_orrery_toml: Vec<String>,
+}
+
+/// "[update_manager klipper]: orrery ignores the option path, since …"
+fn ignored_options(section: &str, keys: &[&str], since: &str) -> String {
+    let what = if keys.len() == 1 { "option" } else { "options" };
+    format!("[{section}]: orrery ignores the {what} {}, since {since}", keys.join(", "))
+}
+
 /// Whether a section holds options for Klipper's entry.
 pub fn is_klipper_section(name: &str) -> bool {
     matches!(name.to_ascii_lowercase().as_str(), "klipper" | "kalico")
@@ -152,17 +169,18 @@ pub fn is_klipper_section(name: &str) -> bool {
 /// Klipper's entry, from Klippy's paths and Moonraker's defaults, with the options of its
 /// section: `klipper` or `kalico`, whichever is there. Kalico's docs tell users to write
 /// `klipper`. Both at once is an error, since neither one is clearly meant. `None` when the
-/// section sets `enabled = false`. Options Moonraker doesn't allow for this entry are ignored,
-/// with a warning.
+/// section sets `enabled = false`. `origin`, `primary_branch`, and `moved_origin` name another
+/// source, from `orrery.toml` only. Other options Moonraker doesn't allow for this entry are
+/// ignored, with a warning.
 pub fn klipper_entry(
     k: &Klippy,
-    sections: &[(String, Map<String, Value>)],
+    sections: &[KlipperSection],
     global: &Global,
     warnings: &mut Vec<String>,
 ) -> Result<Option<Entry>, String> {
     let name = k.project.name();
     if sections.len() > 1 {
-        let names: Vec<String> = sections.iter().map(|(s, _)| format!("[{SECTION} {s}]")).collect();
+        let names: Vec<String> = sections.iter().map(|s| format!("[{SECTION} {}]", s.name)).collect();
         return Err(format!(
             "{} are both there, so orrery leaves out the entry for {name}. Keep only one of them.",
             names.join(" and ")
@@ -170,20 +188,32 @@ pub fn klipper_entry(
     }
     let chosen = sections.first();
     let empty = Map::new();
-    let (section, map) = chosen.map_or((name, &empty), |(s, m)| (s.as_str(), m));
+    let no_toml = Vec::new();
+    let (section, map, from_toml) =
+        chosen.map_or((name, &empty, &no_toml), |s| (s.name.as_str(), &s.options, &s.from_orrery_toml));
     let o = Options { section: format!("{SECTION} {section}"), map };
     if !o.bool("enabled", true)? {
         return Ok(None);
     }
-    let ignored: Vec<&str> = map.keys().map(String::as_str).filter(|k| !KLIPPER_OPTIONS.contains(k)).collect();
+    let ignored: Vec<&str> = map
+        .keys()
+        .map(String::as_str)
+        .filter(|k| !KLIPPER_OPTIONS.contains(k) && !KLIPPER_SOURCE.contains(k))
+        .collect();
     if !ignored.is_empty() {
-        let (what, these) = if ignored.len() == 1 { ("option", "it") } else { ("options", "them") };
-        warnings.push(format!(
-            "[{}]: orrery ignores the {what} {}, since it sets {these} for {name} itself",
-            o.section,
-            ignored.join(", ")
-        ));
+        let them = if ignored.len() == 1 { "it" } else { "them" };
+        warnings.push(ignored_options(&o.section, &ignored, &format!("it sets {them} for {name} itself")));
     }
+    let not_toml: Vec<&str> =
+        KLIPPER_SOURCE.iter().copied().filter(|k| map.contains_key(*k) && !from_toml.iter().any(|t| t == k)).collect();
+    if !not_toml.is_empty() {
+        let them = if not_toml.len() == 1 { "it" } else { "them" };
+        warnings.push(ignored_options(&o.section, &not_toml, &format!("it takes {them} only from orrery.toml")));
+    }
+    // Another source, which orrery.toml names on purpose.
+    let source = |key: &str| -> Result<Option<String>, String> {
+        if from_toml.iter().any(|t| t == key) { o.text(key) } else { Ok(None) }
+    };
     // Two folders above Klippy's Python is its virtualenv, as for Moonraker's `env` option.
     let virtualenv =
         k.python.parent().and_then(Path::parent).filter(|v| v.join("bin/activate").is_file()).map(Path::to_path_buf);
@@ -201,9 +231,9 @@ pub fn klipper_entry(
         hash: hash(&hashed),
         kind: Kind::Git(GitOptions {
             path: k.path.clone(),
-            origin: k.project.origin().into(),
-            moved_origin: Some(k.project.moved_origin().into()),
-            primary_branch: k.project.primary_branch().into(),
+            origin: source("origin")?.unwrap_or_else(|| k.project.origin().into()),
+            moved_origin: Some(source("moved_origin")?.unwrap_or_else(|| k.project.moved_origin().into())),
+            primary_branch: source("primary_branch")?.unwrap_or_else(|| k.project.primary_branch().into()),
             pinned_commit: o.text("pinned_commit")?.map(|c| c.to_ascii_lowercase()),
             virtualenv,
             pip_env: Vec::new(),
@@ -699,6 +729,14 @@ mod tests {
         );
     }
 
+    fn section(name: &str, options: Value, from_toml: &[&str]) -> KlipperSection {
+        KlipperSection {
+            name: name.into(),
+            options: map(options),
+            from_orrery_toml: from_toml.iter().map(|k| (*k).to_owned()).collect(),
+        }
+    }
+
     fn klippy(project: Project, dir: &Path) -> Klippy {
         Klippy { project, path: dir.join("klipper"), python: dir.join("klippy-env/bin/python") }
     }
@@ -735,25 +773,41 @@ mod tests {
         assert_eq!(o.requirements.as_deref(), Some("scripts/klippy-requirements.txt"));
         assert!(w.is_empty(), "{w:?}");
 
-        // Kalico's docs say [update_manager klipper]; Moonraker's fixed options are ignored there.
-        let sections =
-            vec![("klipper".to_owned(), map(json!({"channel": "stable", "origin": "https://example.com/k"})))];
+        // Kalico's docs say [update_manager klipper]. From moonraker.conf, the source stays
+        // Kalico's, and other options Moonraker doesn't allow are ignored too.
+        let conf = |opts: Value| vec![section("klipper", opts, &[])];
+        let sections = conf(json!({"channel": "stable", "origin": "https://example.com/k", "path": "~/x"}));
         let e = klipper_entry(&klippy(Project::Kalico, dir.path()), &sections, &g, &mut w).unwrap().unwrap();
         assert_eq!(e.channel, Channel::Stable);
         let Kind::Git(o) = &e.kind else { panic!("a git entry") };
         assert_eq!(o.origin, "https://github.com/KalicoCrew/kalico.git");
         assert_eq!(
             w,
-            ["[update_manager klipper]: orrery ignores the option origin, since it sets it for kalico itself"]
+            [
+                "[update_manager klipper]: orrery ignores the option path, since it sets it for kalico itself",
+                "[update_manager klipper]: orrery ignores the option origin, since it takes it only from orrery.toml",
+            ]
         );
 
+        // From orrery.toml, a fork on purpose.
+        w.clear();
+        let fork = json!({"origin": "https://github.com/someone/klipper", "primary_branch": "work"});
+        let sections = vec![section("klipper", fork, &["origin", "primary_branch"])];
+        let e = klipper_entry(&klippy(Project::Klipper, dir.path()), &sections, &g, &mut w).unwrap().unwrap();
+        let Kind::Git(o) = &e.kind else { panic!("a git entry") };
+        assert_eq!(
+            (o.origin.as_str(), o.primary_branch.as_str(), o.moved_origin.as_deref()),
+            ("https://github.com/someone/klipper", "work", Some("https://github.com/kevinoconnor/klipper.git"))
+        );
+        assert!(w.is_empty(), "{w:?}");
+
         // Either name works, for either project; both at once is an error.
-        let sections = vec![("kalico".to_owned(), map(json!({"channel": "beta"})))];
+        let sections = vec![section("kalico", json!({"channel": "beta"}), &["channel"])];
         let e = klipper_entry(&klippy(Project::Kalico, dir.path()), &sections, &g, &mut Vec::new()).unwrap().unwrap();
         assert_eq!(e.channel, Channel::Beta);
         let sections = vec![
-            ("klipper".to_owned(), map(json!({"channel": "stable"}))),
-            ("kalico".to_owned(), map(json!({"channel": "beta"}))),
+            section("klipper", json!({"channel": "stable"}), &[]),
+            section("kalico", json!({"channel": "beta"}), &[]),
         ];
         let err = klipper_entry(&klippy(Project::Kalico, dir.path()), &sections, &g, &mut Vec::new()).unwrap_err();
         assert_eq!(
@@ -762,7 +816,7 @@ mod tests {
         );
 
         // Turned off, and a Klipper without a virtualenv.
-        let off = vec![("klipper".to_owned(), map(json!({"enabled": false})))];
+        let off = vec![section("klipper", json!({"enabled": false}), &[])];
         assert!(klipper_entry(&klippy(Project::Klipper, dir.path()), &off, &g, &mut Vec::new()).unwrap().is_none());
         let other = tempfile::tempdir().unwrap();
         let e = klipper_entry(&klippy(Project::Klipper, other.path()), &[], &g, &mut Vec::new()).unwrap().unwrap();

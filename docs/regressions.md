@@ -334,9 +334,11 @@ change how safe or complete orrery is to run.
     out, with a warning in `server.info`.
   - Klipper's entry is named after the project Klippy runs: `klipper` or `kalico`. Moonraker
     always calls it `klipper`. `machine.update.klipper` updates it under either name. Its
-    section in `moonraker.conf` or `orrery.toml` takes only Moonraker's `channel`,
-    `pinned_commit`, `refresh_interval`, and `report_anomalies`, and orrery's `enabled`; see
-    docs/design/2026-11-22-klipper-updates.md.
+    section takes Moonraker's `channel`, `pinned_commit`, `refresh_interval`, and
+    `report_anomalies`, and orrery's `enabled`. `orrery.toml` can also set `origin`,
+    `primary_branch`, and `moved_origin`, which Moonraker fixes; in `moonraker.conf` they're
+    ignored, with a warning. Setting both `[update_manager klipper]` and `[update_manager
+    kalico]` leaves the entry out. See docs/design/2026-11-22-klipper-updates.md.
   - No `moonraker` entry, and none for orrery: orrery's own updates wait for a release source.
     `machine.update.moonraker` answers 400 "orrery doesn't update Moonraker."
     `moonraker` in an entry's `managed_services` restarts nothing, since a plugin that names
@@ -368,6 +370,8 @@ change how safe or complete orrery is to run.
   - **A hard recover of a missing repo** clones it again from `origin`.
   - **Stable and beta channels follow the highest version tag,** not the newest by date.
   - **`moved_origin`** is matched by its URL, without a request to GitHub.
+  - **An unencrypted remote,** `http://` or `git://`, is an anomaly: "Unencrypted remote
+    url: …". Kalico's own repo and branch aren't anomalies.
   - **pip isn't upgraded** before an entry's Python packages are installed.
   - **An executable's update replaces the program in one step,** so a failed download leaves
     the old one working. Moonraker deletes the old program first. A rollback downloads the

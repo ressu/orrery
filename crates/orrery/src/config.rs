@@ -208,6 +208,11 @@ impl Config {
         Some(out)
     }
 
+    /// The options `orrery.toml` sets in a section, in its order.
+    pub fn toml_keys(&self, section: &str) -> Vec<String> {
+        self.typed.iter().filter(|(n, _)| n == section).flat_map(|(_, o)| o.iter().map(|(k, _)| k.clone())).collect()
+    }
+
     /// Whether `orrery.toml` sets an option, leaving `moonraker.conf` out.
     pub fn toml_has(&self, section: &str, key: &str) -> bool {
         self.typed.iter().any(|(n, o)| n == section && o.iter().any(|(k, _)| k == key))

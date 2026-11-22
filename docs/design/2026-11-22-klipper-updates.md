@@ -6,8 +6,8 @@ detects whether the printer runs Klipper or Kalico, names the entry after it, `k
 the user learns that their setup changed, and the update still runs. The entry also reports
 which plugins changed Klipper's own folder.
 
-**Status (2026-11-22):** approved. Step 2 is built: the entry, and Klipper or Kalico with its
-name. Steps 3 to 5 aren't.
+**Status (2026-11-22):** approved. Steps 2 and 3 are built: the entry, Klipper or Kalico with
+its name, and the remotes. Steps 4 and 5 aren't.
 
 "Klipper" here means Klipper or Kalico, Klipper's fork. Both printers run Kalico, and both
 work the same way for updates.
@@ -153,7 +153,10 @@ the same rule, with the detected project as its `origin`.
 
   Only `orrery.toml` can change them. In `moonraker.conf` they're ignored, with a warning, as
   Moonraker ignores them.
-- **A remote without HTTPS** (`http://`, `git://`) is an anomaly too.
+- **An unencrypted remote** (`http://`, `git://`) is an anomaly too, for every `git_repo`
+  entry: "Unencrypted remote url: http://…". HTTPS and SSH remotes are encrypted.
+- **How the agent knows the file:** `orrery.agent.config` names the options that came from
+  `orrery.toml`, in `from_orrery_toml`.
 
 ### Plugins in Klipper's folder
 
@@ -188,7 +191,7 @@ the highest version tag. Klipper's tags are `v0.13.0`, and Kalico's are monthly,
 2. The entry is named `kalico` for Kalico. Moonraker always calls it `klipper`.
 3. `orrery.toml` can set the `origin`, `primary_branch`, and `moved_origin` of Klipper's entry.
    Moonraker fixes them.
-4. A remote without HTTPS is an anomaly.
+4. An unencrypted remote, `http://` or `git://`, is an anomaly.
 5. Plugin links that belong to an update entry aren't anomalies. Other untracked files are
    warnings, one by one.
 6. A plugin entry that links into Klipper's folder always restarts Klipper.

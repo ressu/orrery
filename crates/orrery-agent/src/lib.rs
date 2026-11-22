@@ -334,6 +334,20 @@ impl Agent {
         })
     }
 
+    /// The options of a section that `orrery.toml` sets, as opposed to `moonraker.conf`. An
+    /// agent can take an option only from `orrery.toml` when a config written for Moonraker
+    /// mustn't decide it.
+    pub async fn config_from_orrery_toml(&self, section: Option<&str>) -> Result<Vec<String>, Error> {
+        let params = section.map_or(Value::Null, |s| json!({"section": s}));
+        let reply = self.call("orrery.agent.config", params).await?;
+        Ok(reply["from_orrery_toml"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|n| n.as_str().map(str::to_owned))
+            .collect())
+    }
+
     /// The names of the agent's named sections: `crowsnest` for `[update_manager crowsnest]`,
     /// when the section is `update_manager`. `None` asks about the section named after the agent.
     pub async fn config_names(&self, section: Option<&str>) -> Result<Vec<String>, Error> {
