@@ -81,6 +81,8 @@ with a release archive and a local stand-in for GitHub. No printer has run them 
     `release:`) stay out of the notes, however big the change.
   - **Notes are written as you go.** Each `feat:` or `fix:` commit adds its note under
     `## Unreleased` in `CHANGELOG.md`, in the same commit.
+    The first release, `v0.1.0`, has no list: its notes say only "First release." (user,
+    2026-11-22).
   - **A release** is one commit, `release: <version>`. It sets the version in `Cargo.toml` and
     renames `## Unreleased` to `## <version> (<date>)`. `git cliff --unreleased`, set up in
     `cliff.toml`, checks that every `feat:` and `fix:` commit has a note.

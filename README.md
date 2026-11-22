@@ -328,7 +328,9 @@ To make a release:
    git cliff --unreleased
    ```
 
-   To see the release's text, run `scripts/release-notes.sh <version>`.
+   To see the release's text, run `scripts/release-notes.sh <version>`. The first release,
+   `0.1.0`, is the one exception: its notes say only "First release.", since everything in it
+   is new.
 3. Commit as `release: <version>`, push, then tag `v<version>` and push the tag:
 
    ```
