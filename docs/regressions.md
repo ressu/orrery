@@ -289,8 +289,10 @@ change how safe or complete orrery is to run.
   - Users' groups, which Moonraker stores but doesn't use. Users themselves are imported, with
     their password hashes, and Moonraker's API key is copied, as orrery's `moonraker` key. A user that orrery already has is left as it is, and so is orrery's own
     user with the same name. An LDAP user is imported, but can't log in until orrery has LDAP.
-  - The `moonraker` and `database` namespaces: Moonraker's own state, such as its instance id
-    and the update manager's data. orrery keeps its own.
+  - The `moonraker` and `database` namespaces: Moonraker's own state, such as its instance id.
+    orrery keeps its own.
+  - `update_manager`: Moonraker's update manager state. orrery's update agent keeps its own
+    there, in its own format, and checks each entry again on its first start.
   - `gcode_metadata`: orrery reads the files again instead. It still copies each file's link to
     its last print (`job_id` and `print_start_time`) when the file hasn't changed.
   - The legacy LMDB database (`moonraker.db/`), from Moonraker before v0.9.

@@ -37,7 +37,7 @@ const IMPORTS: TableDefinition<u64, &[u8]> = TableDefinition::new("imports");
 const IMPORTED: TableDefinition<&str, ()> = TableDefinition::new("imported_rows");
 
 /// Moonraker's namespaces that the import skips.
-pub const SKIPPED_NAMESPACES: &[&str] = &["database", "gcode_metadata", "moonraker"];
+pub const SKIPPED_NAMESPACES: &[&str] = &["database", "gcode_metadata", "moonraker", "update_manager"];
 const METADATA_NAMESPACE: &str = "gcode_metadata";
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize)]
