@@ -162,14 +162,30 @@ The runner sends API keys as headers. Logins wait for orrery's user logins (`no-
 | `notify_service_state_changed` | To do |
 | `notify_sensor_update` | Stub |
 
+## Update manager
+
+The `orrery-updater` agent answers these (`update-agent` and `update-safety` in
+`docs/regressions.md`). The cases are orrery only: they check the agent's answers and
+refusals, without network access. Real updates are checked on a printer, and in the agent's
+unit tests against local git repos and a stand-in for GitHub.
+
+| Method | Status | Cases |
+|---|---|---|
+| `machine.update.status`, `.refresh` | Covered | `update/agent`, `agents/builtin_update_manager` |
+| `machine.update.client`, `.full`, `.system` | Covered: refusals and errors (`update/agent`); updates checked by hand |
+| `machine.update.recover`, `.rollback` | Covered: refusals and errors (`update/agent`); actions checked by hand |
+| `machine.update.klipper`, `.moonraker` | Covered | `update/agent`: both are refused |
+
+| Notification | Status | Cases |
+|---|---|---|
+| `notify_update_response` | Covered | `update/agent` |
+| `notify_update_refreshed` | Covered | `update/agent` |
+
 ## Out of scope
 
 Fluidd calls these, but they belong to components orrery leaves out for now. Each one needs at
 most a stub answer:
 
-- `machine.update.*` (update manager): `machine.update.status` should answer with no updates, so
-  Fluidd's software panel doesn't show an error. Notifications: `notify_update_response`,
-  `notify_update_refreshed`.
 - `machine.device_power.*` (power devices), `notify_power_changed`.
 - `machine.timelapse.*` (timelapse plugin), `notify_timelapse_event`.
 - `server.spoolman.*`, `notify_active_spool_set`, `notify_spoolman_status_changed`.

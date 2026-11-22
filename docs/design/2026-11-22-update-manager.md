@@ -6,10 +6,11 @@ update page works without changes. Its config lives in `orrery.toml`, as all of 
 (user, 2026-11-22). The `[update_manager]` sections in `moonraker.conf` are only a fallback
 that eases the move, so a migrated printer works before its config is converted.
 
-**Status (2026-11-22):** this note is for review. Nothing is built.
+**Status (2026-11-22):** built, as `crates/orrery-updater`. The differences from Moonraker are
+`update-agent` and `update-safety` in `docs/regressions.md`.
 
-The update manager is one of the last gaps that keep orrery from daily use on bluev2. Today
-orrery has no `machine.update.*` methods, so Fluidd shows no update list.
+The update manager was one of the last gaps that kept orrery from daily use on bluev2. Before
+it, orrery had no `machine.update.*` methods, so Fluidd showed no update list.
 
 ## What bluev2 has
 
@@ -371,7 +372,7 @@ which read like orrery's own self-update (renamed 2026-11-22).
 
 ## Differences from Moonraker
 
-Each one becomes an entry in `docs/regressions.md` when it's built.
+Each one is in `docs/regressions.md`, under `update-agent` or `update-safety`.
 
 1. Methods have roles: `status` for viewers, the rest for admins.
 2. A branch that diverges during an update isn't reset. A diverged repo is invalid in Moonraker
@@ -393,7 +394,7 @@ Each one becomes an entry in `docs/regressions.md` when it's built.
 13. No `sudo apt-get` fallback.
 14. `web` and `zip` entries are in the backlog, and `python` entries come later.
 15. Periodic checks are on by default, weekly unless `refresh_interval` says otherwise, with no
-    `refresh_window`.
+    `refresh_window` unless one is set.
 
 ## The order of work
 

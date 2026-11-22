@@ -111,6 +111,34 @@ An `[agent.spoolman]` table in `orrery.toml` changes the built-in setup one opti
 For example, `command = "~/bin/orrery-spoolman"` runs the agent from another place, and
 `command = false` means you start it yourself.
 
+### Update manager
+
+Moonraker's update manager is a separate program in orrery, `orrery-updater`. Fluidd and
+Mainsail reach it under Moonraker's names, so their update pages work as before.
+
+- orrery starts it when `orrery.toml` has `[update_manager]`. A migrated printer can keep the
+  `[update_manager]` sections in `moonraker.conf` until you move them over.
+- It updates `git_repo` and `executable` entries, with their Python packages and
+  `system_dependencies`, and the system's Debian packages.
+- It has no `klipper` or `moonraker` entry, and doesn't update `web` or `zip` entries yet.
+- It checks for updates once a week by default, and never installs one by itself. Set
+  `refresh_interval`, in hours, for another interval.
+- It refuses an update while a print runs, and restarts each service once, after the print.
+
+The Debian packages come through PackageKit. To let orrery install them, run orrery's setup,
+or run it again if it ran before PackageKit support was added:
+
+```
+sudo <path to orrery> setup
+```
+
+`<path to orrery>` is the installed program, such as `~/orrery/orrery`. Setup writes the service
+to run the program it was started from.
+
+See [docs/design/2026-11-22-update-manager.md](docs/design/2026-11-22-update-manager.md) for the
+details, and `update-agent` and `update-safety` in [docs/regressions.md](docs/regressions.md) for
+how it differs from Moonraker.
+
 ### Starting agents
 
 `command` in an agent's table is the program orrery starts, or a list of the program and its
@@ -156,6 +184,8 @@ in, which `loginctl enable-linger <user>` turns on. With a unit:
 | `crates/orrery` | The server, `orrery`, and the database import, `orrery-import` |
 | `crates/orrery-agent` | A client for writing agents in Rust; see its `examples/hello.rs` |
 | `crates/orrery-spoolman` | Moonraker's Spoolman integration, as an agent |
+| `crates/orrery-updater` | Moonraker's update manager, as an agent |
+| `crates/orrery-dbus` | A small D-Bus client, for systemd and PackageKit |
 | `crates/orrery-proto` | Shared wire formats: Klippy socket framing and JSON-RPC envelopes |
 | `crates/fake-klippy` | A scriptable stand-in for Klipper's API socket |
 | `crates/conformance` | The conformance test runner |
@@ -189,7 +219,7 @@ just build-arm
 
 The binaries link with `rust-lld` and Rust's bundled musl, so they need no C cross toolchain.
 
-To build orrery, `orrery-import`, and `orrery-spoolman` for a printer's CPU and copy them to the
+To build orrery, `orrery-import`, `orrery-spoolman`, and `orrery-updater` for a printer's CPU and copy them to the
 printer over SSH, run:
 
 ```

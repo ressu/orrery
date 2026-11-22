@@ -65,6 +65,8 @@ steps:
     expect_error: {code: 400, message: "No updater registered for 'site'"}
   - call: machine.update.klipper
     expect_error: {code: 400, message: "Klipper updates aren't available in orrery yet."}
+  - call: machine.update.moonraker
+    expect_error: {code: 400, message: "orrery doesn't update Moonraker."}
   # Updates, recovers, and rollbacks, with Moonraker's messages.
   - call: machine.update.client
     params: {name: site}

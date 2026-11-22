@@ -320,6 +320,65 @@ change how safe or complete orrery is to run.
 - **Why:** orrery stays free of C dependencies, and the check is only a hint for clients.
 - **Cases:** none.
 
+### update-agent: the update manager is a separate program, and has fewer entry types
+
+- **Area:** update manager
+- **Moonraker:** the built-in `update_manager` component updates `git_repo`, `web`, `zip`,
+  `python`, and `executable` entries, plus implicit `klipper`, `moonraker`, and `system`
+  entries, from `[update_manager]` sections in `moonraker.conf`.
+- **orrery:** the `orrery-updater` agent answers Moonraker's `machine.update.*` methods and
+  notifications. orrery starts it from its own folder when `orrery.toml` or, as a fallback,
+  `moonraker.conf` has `[update_manager]`. What's missing or different:
+  - It updates `git_repo` and `executable` entries, their Python packages and
+    `system_dependencies`, and the `system` entry. A `web`, `zip`, or `python` entry is left
+    out, with a warning in `server.info`.
+  - No `klipper` entry: updating Klipper from where Klippy runs is a security risk, and a
+    safe design comes later. `machine.update.klipper` answers 400 "Klipper updates aren't
+    available in orrery yet."
+  - No `moonraker` entry, and none for orrery: orrery's own updates wait for a release source.
+    `machine.update.moonraker` answers 400 "orrery doesn't update Moonraker."
+    `moonraker` in an entry's `managed_services` restarts nothing, since a plugin that names
+    Moonraker never needs orrery restarted.
+  - No `sudo apt-get` fallback. Debian packages need PackageKit, and `orrery setup` adds the
+    polkit rules for it.
+  - The agent keeps its state in the `update_manager` namespace of orrery's database.
+    `orrery-import` doesn't bring Moonraker's over; the first check makes it again.
+- **Why:** plugins are separate programs (docs/design/2026-11-15-plugin-interface.md), and the
+  update manager design note (docs/design/2026-11-22-update-manager.md) decides the scope.
+- **Cases:** `update/agent` and `agents/builtin_update_manager` (orrery only). The agent's unit
+  tests check git, pip, GitHub releases, and PackageKit's message format against local stand-ins.
+
+### update-safety: updates check more first, and restart less
+
+- **Area:** update manager
+- **Moonraker:** see `components/update_manager/` in Moonraker.
+- **orrery:** the differences, each chosen to avoid losing work or breaking a print:
+  - **Roles:** `status` needs `viewer`. `refresh` and every update, recover, and rollback need
+    `admin`. Moonraker allows any authorized client.
+  - **A diverged branch isn't reset** during an update. Moonraker fetches again and runs
+    `git reset --hard` when the branch diverged since the last check, such as after a
+    force-push, which loses local commits. orrery stops the update, and Recover fixes the repo.
+  - **`full` refuses while printing,** as each single update does. Moonraker's `full` doesn't
+    check.
+  - **Each service restarts once,** after the last update that needs it, and not while a print
+    runs: the restart waits for the print to end. Moonraker restarts after each entry.
+  - **A rollback refuses a repo with changed files.** Moonraker's resets them away.
+  - **A hard recover of a missing repo** clones it again from `origin`.
+  - **Stable and beta channels follow the highest version tag,** not the newest by date.
+  - **`moved_origin`** is matched by its URL, without a request to GitHub.
+  - **pip isn't upgraded** before an entry's Python packages are installed.
+  - **An executable's update replaces the program in one step,** so a failed download leaves
+    the old one working. Moonraker deletes the old program first. A rollback downloads the
+    asset `release_info.json` names; Moonraker takes the release's first asset.
+  - **The system check lists updates from the old package lists** when a refresh fails, and
+    logs why. An update needs a working refresh, and a failed one says why. Moonraker says
+    only "Error updating system packages".
+  - **Periodic checks are on by default,** weekly unless `refresh_interval` says otherwise, with
+    no `refresh_window` unless one is set. Moonraker checks only at startup unless
+    `enable_auto_refresh` is on, and then only between midnight and 5 am.
+- **Why:** docs/design/2026-11-22-update-manager.md, "Differences from Moonraker".
+- **Cases:** `update/agent` (orrery only); the refusals while printing are covered there.
+
 ## Planned entries
 
 These differences are already decided in the plan. Each gets an entry when the code that
@@ -329,5 +388,4 @@ introduces it lands:
 - `moonraker.conf` support is best effort: `[secrets]`, Jinja templating, and full option
   validation come later.
 - Legacy LMDB databases from before Moonraker v0.9 can't be imported.
-- Out-of-scope components (update manager, power, sensors, MQTT, and others) are missing or
-  stubbed.
+- Out-of-scope components (power, sensors, MQTT, and others) are missing or stubbed.
