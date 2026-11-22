@@ -99,6 +99,12 @@ fn stale_keys<'a>(stored: &'a Map<String, Value>, entries: &[Entry]) -> Vec<&'a 
     stored.keys().filter(|k| !entries.iter().any(|e| &e.name == *k)).collect()
 }
 
+/// The anomalies a refresh found that the last one didn't, to log each one once. They're
+/// logged even when `report_anomalies` hides them from frontends.
+fn new_anomalies<'a>(before: &[String], now: &'a [String]) -> Vec<&'a String> {
+    now.iter().filter(|a| !before.contains(a)).collect()
+}
+
 /// How long until `hour` is inside the window `(start, end)`, in seconds, from `now` given as
 /// the local `(hour, minute, second)`. Zero inside the window.
 pub fn until_window((start, end): (u32, u32), (hour, minute, second): (u32, u32, u32)) -> u64 {
@@ -617,6 +623,10 @@ impl Manager {
             *self.plugin_links.lock().expect("links lock") = links;
         }
         s.stored.tracking = git::tracking_of(&repo);
+        let before = s.repo.as_ref().map(|r| r.anomalies.as_slice()).unwrap_or_default();
+        for anomaly in new_anomalies(before, &repo.anomalies) {
+            tracing::info!("{}: {anomaly}", s.entry.name);
+        }
         s.repo = Some(repo);
         self.save(s).await;
     }
@@ -1248,6 +1258,14 @@ mod tests {
         m.add_pending(&e("filter_monitor", json!({"managed_services": "klipper moonraker"})));
         m.add_pending(&e("led_effect", json!({"is_system_service": false})));
         assert_eq!(*m.pending.lock().unwrap(), ["crowsnest", "klipper"]);
+    }
+
+    #[test]
+    fn anomalies_are_logged_once() {
+        let a = |l: &[&str]| l.iter().map(|s| (*s).to_owned()).collect::<Vec<String>>();
+        assert_eq!(new_anomalies(&[], &a(&["x", "y"])), ["x", "y"]);
+        assert!(new_anomalies(&a(&["x", "y"]), &a(&["y", "x"])).is_empty());
+        assert_eq!(new_anomalies(&a(&["x"]), &a(&["y"])), ["y"]);
     }
 
     #[test]

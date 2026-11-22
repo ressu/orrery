@@ -167,7 +167,9 @@ The runner sends API keys as headers. Logins wait for orrery's user logins (`no-
 The `orrery-updater` agent answers these (`update-agent` and `update-safety` in
 `docs/regressions.md`). The cases are orrery only: they check the agent's answers and
 refusals, without network access. Real updates are checked on a printer, and in the agent's
-unit tests against local git repos and a stand-in for GitHub.
+unit tests against local git repos and a stand-in for GitHub. Those tests also cover Klipper's
+entry: Klipper or Kalico, its sections, the source from `orrery.toml`, plugin links,
+collisions, and unencrypted remotes.
 
 | Method | Status | Cases |
 |---|---|---|

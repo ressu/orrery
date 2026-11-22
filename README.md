@@ -122,6 +122,19 @@ Mainsail reach it under Moonraker's names, so their update pages work as before.
   `system_dependencies`, and the system's Debian packages.
 - It adds an entry for Klipper or Kalico, named after the one Klippy runs. It has no
   `moonraker` entry, and doesn't update `web` or `zip` entries yet.
+- Klipper's entry expects the project's own repo and branch. To run a fork on purpose, name
+  it in `orrery.toml`, and the entry reports no anomaly:
+
+  ```toml
+  [update_manager.klipper]
+  origin = "https://github.com/someone/klipper"
+  primary_branch = "main"
+  ```
+
+- Plugins linked into Klipper's folder belong to their own entries, and updating one restarts
+  Klipper. Klipper's update stops before it would overwrite a plugin's file, and says which.
+- A remote that starts with `http://` or `git://` is an anomaly, since the connection isn't
+  encrypted.
 - It checks for updates once a week by default, and never installs one by itself. Set
   `refresh_interval`, in hours, for another interval.
 - It refuses an update while a print runs, and restarts each service once, after the print.

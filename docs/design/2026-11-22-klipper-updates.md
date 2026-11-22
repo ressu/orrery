@@ -6,8 +6,8 @@ detects whether the printer runs Klipper or Kalico, names the entry after it, `k
 the user learns that their setup changed, and the update still runs. The entry also reports
 which plugins changed Klipper's own folder.
 
-**Status (2026-11-22):** approved. Steps 2 to 4 are built: the entry, Klipper or Kalico with
-its name, the remotes, and the plugin links. Step 5 isn't.
+**Status (2026-11-22):** built, steps 2 to 5. Mainsail, KlipperScreen, and Mobileraker
+aren't checked with a `kalico` entry yet.
 
 "Klipper" here means Klipper or Kalico, Klipper's fork. Both printers run Kalico, and both
 work the same way for updates.
@@ -140,7 +140,8 @@ the same rule, with the detected project as its `origin`.
 - **The update still runs,** as in Moonraker. A strict mode, which refuses updates with
   anomalies, may come later (user, 2026-11-22).
 - **`report_anomalies = false`** hides the entry's anomalies from frontends, as in Moonraker.
-  The agent still logs them once, when they first appear.
+  The agent still logs each one once, when a refresh first finds it after the agent
+  starts.
 - **For Klipper's entry, `orrery.toml` can name the expected source:** `origin`, `primary_branch`,
   and `moved_origin`. Moonraker fixes those three. A printer that runs a fork on purpose names
   it there, and then gets no anomaly:
