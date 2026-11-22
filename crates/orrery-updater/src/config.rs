@@ -86,6 +86,8 @@ pub struct Entry {
     pub kind: Kind,
     /// For Klipper's own entry: the project it runs.
     pub klippy: Option<Project>,
+    /// The check that the new version can run, as words; empty for none ([`preflight`]).
+    pub preflight: Vec<String>,
 }
 
 /// The projects Klipper's entry knows (docs/design/2026-11-22-klipper-updates.md).
@@ -163,6 +165,31 @@ pub struct KlipperSection {
     pub from_orrery_toml: Vec<String>,
 }
 
+/// An entry's `preflight`: a command as a list of words. It's orrery's own option, and runs a
+/// command, so it's taken only from `orrery.toml`; in `moonraker.conf` it's ignored, with a
+/// warning. For an executable, the words are arguments to the new program; for a `git_repo`,
+/// the first word is a file in the repo.
+pub fn preflight(
+    section: &str,
+    map: &Map<String, Value>,
+    from_orrery_toml: &[String],
+    warnings: &mut Vec<String>,
+) -> Result<Vec<String>, String> {
+    let Some(value) = map.get("preflight") else { return Ok(Vec::new()) };
+    if !from_orrery_toml.iter().any(|k| k == "preflight") {
+        warnings.push(ignored_options(section, &["preflight"], "it takes it only from orrery.toml"));
+        return Ok(Vec::new());
+    }
+    let words = value
+        .as_array()
+        .and_then(|items| items.iter().map(|i| i.as_str().map(str::to_owned)).collect::<Option<Vec<_>>>())
+        .filter(|w| !w.is_empty())
+        .ok_or_else(|| {
+            format!("[{section}] preflight: expected a list of words, such as [\"--check\"], got {value}")
+        })?;
+    Ok(words)
+}
+
 /// "[update_manager klipper]: orrery ignores the option path, since …"
 fn ignored_options(section: &str, keys: &[&str], since: &str) -> String {
     let what = if keys.len() == 1 { "option" } else { "options" };
@@ -206,7 +233,7 @@ pub fn klipper_entry(
     let ignored: Vec<&str> = map
         .keys()
         .map(String::as_str)
-        .filter(|k| !KLIPPER_OPTIONS.contains(k) && !KLIPPER_SOURCE.contains(k))
+        .filter(|k| !KLIPPER_OPTIONS.contains(k) && !KLIPPER_SOURCE.contains(k) && *k != "preflight")
         .collect();
     if !ignored.is_empty() {
         let them = if ignored.len() == 1 { "it" } else { "them" };
@@ -222,6 +249,7 @@ pub fn klipper_entry(
     let source = |key: &str| -> Result<Option<String>, String> {
         if from_toml.iter().any(|t| t == key) { o.text(key) } else { Ok(None) }
     };
+    let preflight = preflight(&o.section, map, from_toml, warnings)?;
     // Two folders above Klippy's Python is its virtualenv, as for Moonraker's `env` option.
     let virtualenv =
         k.python.parent().and_then(Path::parent).filter(|v| v.join("bin/activate").is_file()).map(Path::to_path_buf);
@@ -250,6 +278,7 @@ pub fn klipper_entry(
             install_script: Some("scripts/install-octopi.sh".into()),
         }),
         klippy: Some(k.project),
+        preflight,
     }))
 }
 
@@ -492,6 +521,7 @@ pub fn system_entry(global: &Global) -> Entry {
         hash: "system".into(),
         kind: Kind::System,
         klippy: None,
+        preflight: Vec::new(),
     }
 }
 
@@ -559,6 +589,7 @@ pub fn entry(name: &str, map: &Map<String, Value>, global: &Global) -> Result<En
         hash: hash(map),
         kind,
         klippy: None,
+        preflight: Vec::new(),
     })
 }
 
@@ -809,6 +840,19 @@ mod tests {
         );
         assert!(w.is_empty(), "{w:?}");
 
+        // A preflight, from orrery.toml only, as for any entry.
+        let sections = vec![section("klipper", json!({"preflight": ["scripts/check_config.sh"]}), &["preflight"])];
+        let e = klipper_entry(&klippy(Project::Kalico, dir.path()), &sections, &g, &mut w).unwrap().unwrap();
+        assert_eq!(e.preflight, ["scripts/check_config.sh"]);
+        assert!(w.is_empty(), "{w:?}");
+        let sections = vec![section("klipper", json!({"preflight": "scripts/check_config.sh"}), &[])];
+        let e = klipper_entry(&klippy(Project::Kalico, dir.path()), &sections, &g, &mut w).unwrap().unwrap();
+        assert!(e.preflight.is_empty());
+        assert_eq!(
+            w,
+            ["[update_manager klipper]: orrery ignores the option preflight, since it takes it only from orrery.toml"]
+        );
+
         // Either name works, for either project; both at once is an error.
         let sections = vec![section("kalico", json!({"channel": "beta"}), &["channel"])];
         let e = klipper_entry(&klippy(Project::Kalico, dir.path()), &sections, &g, &mut Vec::new()).unwrap().unwrap();
@@ -830,5 +874,28 @@ mod tests {
         let e = klipper_entry(&klippy(Project::Klipper, other.path()), &[], &g, &mut Vec::new()).unwrap().unwrap();
         let Kind::Git(o) = &e.kind else { panic!("a git entry") };
         assert_eq!((e.name.as_str(), o.primary_branch.as_str(), o.virtualenv.as_ref()), ("klipper", "master", None));
+    }
+
+    #[test]
+    fn preflight_only_from_orrery_toml() {
+        let sec = "update_manager tool";
+        let mut w = Vec::new();
+        let m = map(json!({"preflight": ["--check", "--quiet"]}));
+        assert_eq!(preflight(sec, &m, &["preflight".into()], &mut w).unwrap(), ["--check", "--quiet"]);
+        assert!(w.is_empty());
+        // From moonraker.conf, it's text, and it's ignored.
+        let m = map(json!({"preflight": "--check"}));
+        assert!(preflight(sec, &m, &[], &mut w).unwrap().is_empty());
+        assert_eq!(
+            w,
+            ["[update_manager tool]: orrery ignores the option preflight, since it takes it only from orrery.toml"]
+        );
+        // In orrery.toml, it's a list of words.
+        let err = preflight(sec, &m, &["preflight".into()], &mut Vec::new()).unwrap_err();
+        assert_eq!(
+            err,
+            r#"[update_manager tool] preflight: expected a list of words, such as ["--check"], got "--check""#
+        );
+        assert!(preflight(sec, &map(json!({})), &[], &mut Vec::new()).unwrap().is_empty());
     }
 }

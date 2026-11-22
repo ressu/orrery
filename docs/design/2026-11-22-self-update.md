@@ -5,10 +5,11 @@ agent gets an `orrery` entry that installs a release over the running binaries, 
 the download and running the new version's preflight. A command-line `self-update` and
 `rollback` work when orrery itself doesn't.
 
-**Status (2026-11-22):** approved. Steps 2 and 3 are built: the `LICENSE` file, the build's
-version and release flag, `just dist`, the CI workflows, and the release notes in
-`CHANGELOG.md`. The workflows haven't run yet:
-the repository isn't on GitHub.
+**Status (2026-11-22):** approved. Steps 2 to 4 are built:
+- the `LICENSE` file, the build's version and release flag, and `just dist`;
+- the CI workflows and the release notes in `CHANGELOG.md`, which haven't run yet, since the
+  repository isn't on GitHub;
+- `preflight` and `.previous/` for the existing update entries.
 
 ## What exists today
 

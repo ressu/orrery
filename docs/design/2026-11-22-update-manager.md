@@ -210,10 +210,12 @@ already uses.
   program in one step. Then `release_info.json` gets the new version, written the same way
   and with the old file's permissions. A failed or short download leaves the old program as
   it was. Moonraker deletes the old program before it moves the new one in.
-- **Rollback:** the release the last update replaced, downloaded again by its tag. The
-  rollback version is stored, not the old program, so an update doesn't double the disk use.
-  orrery downloads the asset `release_info.json` names; Moonraker takes the release's first
-  asset, which is the wrong program when a release has one per architecture.
+- **Rollback:** the release the last update replaced. The update keeps the old program and
+  its `release_info.json` in `<path>/.previous/`, so a rollback renames them back without the
+  network (docs/design/2026-11-22-self-update.md, 2026-11-22). Without `.previous/`, the
+  release is downloaded again by its tag. orrery downloads the asset `release_info.json`
+  names; Moonraker takes the release's first asset, which is the wrong program when a release
+  has one per architecture.
 - **Recover** is refused, as in Moonraker: "Updater printerkeep is not a Git Repo Type".
 - **`system_dependencies`** works as for `git_repo`. An executable has no Python packages.
 - **Rate limits:** GitHub allows 60 requests an hour without a token. `status` reports what's

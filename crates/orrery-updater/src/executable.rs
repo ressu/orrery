@@ -429,17 +429,89 @@ pub async fn install(
     }
     let _ = out.send(format!("{prefix}Download Complete, extracting release to '{}'", opts.path.display()));
     // Executable for its owner and group, as Moonraker's `_set_exec_perms` makes it.
-    let finish = async {
+    let executable = async {
         use std::os::unix::fs::PermissionsExt;
         let mode = tokio::fs::metadata(&partial).await?.permissions().mode();
-        tokio::fs::set_permissions(&partial, std::fs::Permissions::from_mode(mode | 0o110)).await?;
-        tokio::fs::rename(&partial, &target).await
+        tokio::fs::set_permissions(&partial, std::fs::Permissions::from_mode(mode | 0o110)).await
     };
-    if let Err(e) = finish.await {
+    let ready = match executable.await {
+        Err(e) => Err(format!("Can't put the new {name} in place: {e}")),
+        Ok(()) => check(entry, name, &partial, out).await,
+    };
+    let ready = match ready {
+        Ok(()) => keep_previous(&opts.path, name).await,
+        Err(e) => Err(e),
+    };
+    if let Err(e) = ready {
+        let _ = tokio::fs::remove_file(&partial).await;
+        return Err(e);
+    }
+    if let Err(e) = tokio::fs::rename(&partial, &target).await {
         let _ = tokio::fs::remove_file(&partial).await;
         return Err(format!("Can't put the new {name} in place: {e}"));
     }
     set_version(&opts.path.join("release_info.json"), version).await
+}
+
+/// The entry's preflight, run from `program` before it takes `name`'s place.
+async fn check(entry: &Entry, name: &str, program: &Path, out: &Messages) -> Result<(), String> {
+    if entry.preflight.is_empty() {
+        return Ok(());
+    }
+    let crate::config::Kind::Executable(opts) = &entry.kind else { return Ok(()) };
+    let _ = out.send(format!("{}Running the preflight check...", entry.prefix()));
+    crate::preflight::run(name, program, &entry.preflight, &opts.path, crate::preflight::LIMIT).await
+}
+
+/// The folder that keeps the program and `release_info.json` an update replaced, for a
+/// rollback without network access.
+pub const PREVIOUS: &str = ".previous";
+
+/// Hard-links the program `name` and `release_info.json` in `path` into `.previous/`,
+/// replacing what an earlier update kept there. They're the same files until the update
+/// renames new ones over them.
+async fn keep_previous(path: &Path, name: &str) -> Result<(), String> {
+    let previous = path.join(PREVIOUS);
+    tokio::fs::create_dir_all(&previous).await.map_err(|e| format!("Can't make {}: {e}", previous.display()))?;
+    for file in [name, "release_info.json"] {
+        let (from, to) = (path.join(file), previous.join(file));
+        let _ = tokio::fs::remove_file(&to).await;
+        if from.exists() {
+            tokio::fs::hard_link(&from, &to)
+                .await
+                .map_err(|e| format!("Can't keep the old {file} in {}: {e}", previous.display()))?;
+        }
+    }
+    Ok(())
+}
+
+/// The version `.previous/` holds for the program `name`, when it holds the program and its
+/// `release_info.json`.
+pub async fn previous_version(path: &Path, name: &str) -> Option<String> {
+    let previous = path.join(PREVIOUS);
+    if !previous.join(name).is_file() {
+        return None;
+    }
+    let text = tokio::fs::read_to_string(previous.join("release_info.json")).await.ok()?;
+    let data: Value = serde_json::from_str(&text).ok()?;
+    data["version"].as_str().map(str::to_owned)
+}
+
+/// Puts the program and `release_info.json` from `.previous/` back, after the entry's
+/// preflight passes for the old program. `.previous/` is empty afterwards.
+pub async fn restore_previous(entry: &Entry, name: &str, out: &Messages) -> Result<(), String> {
+    let crate::config::Kind::Executable(opts) = &entry.kind else { return Err("Not an executable entry".into()) };
+    let previous = opts.path.join(PREVIOUS);
+    check(entry, name, &previous.join(name), out).await?;
+    for file in ["release_info.json", name] {
+        let from = previous.join(file);
+        if from.exists() {
+            tokio::fs::rename(&from, opts.path.join(file))
+                .await
+                .map_err(|e| format!("Can't put the old {file} back from {}: {e}", previous.display()))?;
+        }
+    }
+    Ok(())
 }
 
 /// Writes `version` into `release_info.json`, when it says another one. The file is written
@@ -690,6 +762,58 @@ mod tests {
         let gone = entry(dir.path(), json!({"channel": "beta"}));
         refresh(&gh, &gone, &i, &mut saved).await;
         assert!(saved.last_error.starts_with("GitHub answered 404"), "{}", saved.last_error);
+    }
+
+    #[tokio::test]
+    async fn keeps_the_old_program_and_checks_the_new_one() {
+        const GOOD: &[u8] = b"#!/bin/sh\ntest \"$1\" = --check\n";
+        const BAD: &[u8] = b"#!/bin/sh\necho broken config >&2\nexit 2\n";
+        let base =
+            server(|_| HashMap::from([("/dl/good".to_owned(), GOOD.to_vec()), ("/dl/bad".to_owned(), BAD.to_vec())]))
+                .await;
+        let gh = Github::with_api(&base).unwrap();
+        let asset = |name: &str, body: &[u8]| Asset {
+            url: format!("{base}dl/{name}"),
+            content_type: "application/octet-stream".into(),
+            size: body.len() as u64,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        install_v1(dir.path());
+        let mut e = entry(dir.path(), json!({}));
+        e.preflight = vec!["--check".into()];
+        let i = installed(opts(&e)).await;
+        let program = dir.path().join("printerkeep-linux-aarch64");
+        let previous = dir.path().join(PREVIOUS);
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        // A failed preflight leaves everything as it was.
+        let err = install(&gh, &e, &i, &asset("bad", BAD), "v1.2.0", "printerkeep", &tx).await.unwrap_err();
+        assert_eq!(
+            err,
+            "The preflight check `printerkeep-linux-aarch64 --check` failed with exit status 2:\nbroken config"
+        );
+        assert_eq!(std::fs::read(&program).unwrap(), b"old");
+        assert!(!dir.path().join(".printerkeep-linux-aarch64.download").exists());
+        assert!(!previous.exists());
+        assert_eq!(installed(opts(&e)).await.version, "v1.1.0");
+
+        // A passing one: the old program and release_info.json go to .previous/.
+        install(&gh, &e, &i, &asset("good", GOOD), "v1.2.0", "printerkeep", &tx).await.unwrap();
+        assert_eq!(std::fs::read(&program).unwrap(), GOOD);
+        assert_eq!(std::fs::read(previous.join("printerkeep-linux-aarch64")).unwrap(), b"old");
+        assert_eq!(previous_version(dir.path(), "printerkeep-linux-aarch64").await.as_deref(), Some("v1.1.0"));
+        assert_eq!(installed(opts(&e)).await.version, "v1.2.0");
+
+        // A rollback puts them back, without the network, after the old program's preflight.
+        // The old program here is "old", which can't run, so the check fails first.
+        let err = restore_previous(&e, "printerkeep-linux-aarch64", &tx).await.unwrap_err();
+        assert!(err.starts_with("The preflight check `printerkeep-linux-aarch64 --check` can't start"), "{err}");
+        assert_eq!(std::fs::read(&program).unwrap(), GOOD);
+        e.preflight.clear();
+        restore_previous(&e, "printerkeep-linux-aarch64", &tx).await.unwrap();
+        assert_eq!(std::fs::read(&program).unwrap(), b"old");
+        assert_eq!(installed(opts(&e)).await.version, "v1.1.0");
+        assert_eq!(previous_version(dir.path(), "printerkeep-linux-aarch64").await, None);
     }
 
     #[test]

@@ -135,6 +135,18 @@ Mainsail reach it under Moonraker's names, so their update pages work as before.
   Klipper. Klipper's update stops before it would overwrite a plugin's file, and says which.
 - A remote that starts with `http://` or `git://` is an anomaly, since the connection isn't
   encrypted.
+- An entry in `orrery.toml` can name a check that the new version must pass before the update
+  takes effect. For an executable, it's arguments to the new program; for a `git_repo`, a file
+  in the repo and its arguments:
+
+  ```toml
+  [update_manager.printerkeep]
+  preflight = ["--version"]
+  ```
+
+  If the check fails, the old version stays, and the update dialog shows the check's output.
+- An executable keeps the program an update replaced, in `.previous/` beside it, so a
+  rollback needs no download.
 - It checks for updates once a week by default, and never installs one by itself. Set
   `refresh_interval`, in hours, for another interval.
 - It refuses an update while a print runs, and restarts each service once, after the print.

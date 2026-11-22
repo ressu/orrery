@@ -380,10 +380,18 @@ change how safe or complete orrery is to run.
     `managed_services` say.
   - **Klipper's update stops before git** when it adds a file that's already there untracked,
     and names the file and its entry. Moonraker runs git, which refuses halfway.
+  - **`preflight`,** orrery's own option, read only from `orrery.toml`: a check that the new
+    version can run, before the update takes effect. For an executable, it runs the new
+    program with the given arguments before the rename; a failure leaves the old program. For
+    a `git_repo` entry, it runs a file in the repo after the update; a failure resets the repo
+    to its old commit and restarts nothing. In `moonraker.conf`, it's ignored, with a warning.
+  - **An executable keeps the program an update replaced,** in `<path>/.previous/`, so a
+    rollback needs no download. Moonraker downloads the old release again.
   - **pip isn't upgraded** before an entry's Python packages are installed.
   - **An executable's update replaces the program in one step,** so a failed download leaves
-    the old one working. Moonraker deletes the old program first. A rollback downloads the
-    asset `release_info.json` names; Moonraker takes the release's first asset.
+    the old one working. Moonraker deletes the old program first. Without `.previous/`, a
+    rollback downloads the asset `release_info.json` names; Moonraker takes the release's
+    first asset.
   - **The system check lists updates from the old package lists** when a refresh fails, and
     logs why. An update needs a working refresh, and a failed one says why. Moonraker says
     only "Error updating system packages".

@@ -573,6 +573,11 @@ async fn recovery_ref(path: &Path, upstream: &str, pinned: Option<&str>, current
     upstream.to_owned()
 }
 
+/// Puts the repo's branch back at `commit`, after an update whose preflight failed.
+pub async fn reset_to(opts: &GitOptions, commit: &str) -> Result<(), String> {
+    step(&opts.path, &["reset", "--hard", "-q", commit]).await.map(drop)
+}
+
 /// A soft recover: tracked files back as committed, on `primary_branch`, at the commit
 /// [`recovery_ref`] picks. Untracked files stay.
 pub async fn soft_recover(opts: &GitOptions, s: &RepoState) -> Result<(), String> {
@@ -672,7 +677,7 @@ pub fn summary(s: &RepoState) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -706,12 +711,12 @@ mod tests {
     }
 
     /// A bare remote with commits and tags, and a clone of it on `main`.
-    struct Repos {
+    pub(crate) struct Repos {
         dir: tempfile::TempDir,
     }
 
     impl Repos {
-        fn new() -> Self {
+        pub(crate) fn new() -> Self {
             let dir = tempfile::tempdir().unwrap();
             let r = Self { dir };
             r.sh("git init -q --bare -b main origin.git");
@@ -722,11 +727,11 @@ mod tests {
             r
         }
 
-        fn path(&self, name: &str) -> std::path::PathBuf {
+        pub(crate) fn path(&self, name: &str) -> std::path::PathBuf {
             self.dir.path().join(name)
         }
 
-        fn sh(&self, script: &str) {
+        pub(crate) fn sh(&self, script: &str) {
             let status = std::process::Command::new("sh")
                 .arg("-c")
                 .arg(script)
@@ -750,7 +755,7 @@ mod tests {
             self.sh("cd work && git push -q origin main --tags");
         }
 
-        fn entry(&self, channel: &str) -> (Entry, GitOptions) {
+        pub(crate) fn entry(&self, channel: &str) -> (Entry, GitOptions) {
             let g = crate::config::global(&serde_json::Map::new(), &mut Vec::new());
             let origin = self.path("origin.git").display().to_string();
             let map = json!({"type": "git_repo", "path": self.path("clone"), "origin": origin, "primary_branch": "main", "channel": channel});

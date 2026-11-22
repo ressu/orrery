@@ -16,6 +16,7 @@ use crate::executable::{self, Github, Installed, Saved};
 use crate::git::{self, RepoState, Rollback, Tracking};
 use crate::packagekit::PackageKit;
 use crate::plugins;
+use crate::preflight;
 
 /// Moonraker skips a refresh of everything within this long of the last one.
 const REFRESH_SPAM: Duration = Duration::from_secs(60);
@@ -179,6 +180,7 @@ impl Progress {
 
 /// Why a command stopped: the messages for the update dialog, the last one completing it, and
 /// the error for the request.
+#[derive(Debug)]
 struct Failure {
     messages: Vec<String>,
     code: i64,
@@ -361,7 +363,13 @@ impl Manager {
                 klipper_sections.push(config::KlipperSection { name, options: map, from_orrery_toml });
                 continue;
             }
-            match config::entry(&name, &map, &global) {
+            let section = format!("{SECTION} {name}");
+            let from_orrery_toml = agent.config_from_orrery_toml(Some(&section)).await?;
+            let entry = config::entry(&name, &map, &global).and_then(|mut e| {
+                e.preflight = config::preflight(&section, &map, &from_orrery_toml, &mut warnings)?;
+                Ok(e)
+            });
+            match entry {
                 Ok(e) => {
                     warnings.extend(e.services_warning());
                     warnings.extend(e.channel_warning.clone());
@@ -821,8 +829,28 @@ impl Manager {
         let rollback = Rollback::of(repo);
         let before = Deps::read(&s.entry.kind.deps()).await;
         git::fast_forward(opts, repo).await.map_err(|e| Failure::new(500, e))?;
-        s.stored.rollback = Some(rollback);
         self.update_deps(s, &before, false, p).await;
+        if !s.entry.preflight.is_empty() {
+            p.send(&format!("Git Repo {name}: Running the preflight check..."), false).await;
+            let program = opts.path.join(&s.entry.preflight[0]);
+            let checked =
+                preflight::run(&s.entry.preflight[0], &program, &s.entry.preflight[1..], &opts.path, preflight::LIMIT)
+                    .await;
+            if let Err(e) = checked {
+                // The update doesn't take effect: the repo goes back, and nothing restarts.
+                let reset = git::reset_to(opts, &rollback.commit).await;
+                self.read_repo(s, false).await;
+                let back = match reset {
+                    Ok(()) => format!("{name} is back at {}.", rollback.version),
+                    Err(r) => format!("{name} couldn't go back to {}: {r}", rollback.version),
+                };
+                return Err(Failure::new(
+                    500,
+                    format!("{e}\n{back} Python packages that the update installed stay installed."),
+                ));
+            }
+        }
+        s.stored.rollback = Some(rollback);
         self.read_repo(s, false).await;
         self.add_pending(&s.entry);
         Ok(true)
@@ -1023,6 +1051,31 @@ impl Manager {
         }
         if saved.rollback_version == installed.version {
             return Ok(false);
+        }
+        // The program the last update replaced, kept in .previous/, needs no download.
+        let Kind::Executable(opts) = &s.entry.kind else { unreachable!("an executable entry") };
+        if let Some(name) = installed.asset_name.clone()
+            && executable::previous_version(&opts.path, &name).await.as_deref() == Some(saved.rollback_version.as_str())
+        {
+            let prefix = s.entry.prefix();
+            p.send(&format!("{prefix}Rolling Back..."), false).await;
+            p.send(&format!("{prefix}Restoring {} from {}...", saved.rollback_version, executable::PREVIOUS), false)
+                .await;
+            let before = Deps::read(&s.entry.kind.deps()).await;
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+            let entry = &s.entry;
+            let work = async move { executable::restore_previous(entry, &name, &tx).await };
+            let forward = async {
+                while let Some(line) = rx.recv().await {
+                    p.output(&line).await;
+                }
+            };
+            let (restored, ()) = tokio::join!(work, forward);
+            restored.map_err(|e| Failure::new(500, e))?;
+            self.update_deps(s, &before, false, p).await;
+            self.read_repo(s, false).await;
+            self.add_pending(&s.entry);
+            return Ok(true);
         }
         let gh = self.github.as_ref().map_err(|e| Failure::new(500, e.clone()))?;
         let release = match gh.release(&saved.rollback_repo, s.entry.channel, Some(&saved.rollback_version), None).await
@@ -1266,6 +1319,44 @@ mod tests {
         assert_eq!(new_anomalies(&[], &a(&["x", "y"])), ["x", "y"]);
         assert!(new_anomalies(&a(&["x", "y"]), &a(&["y", "x"])).is_empty());
         assert_eq!(new_anomalies(&a(&["x"]), &a(&["y"])), ["y"]);
+    }
+
+    #[tokio::test]
+    async fn a_failed_preflight_undoes_a_git_update() {
+        let r = git::tests::Repos::new();
+        let (mut entry, _) = r.entry("dev");
+        entry.preflight = vec!["check.sh".into()];
+        let head = || {
+            let out =
+                std::process::Command::new("git").args(["rev-parse", "HEAD"]).current_dir(r.path("clone")).output();
+            String::from_utf8(out.unwrap().stdout).unwrap().trim().to_owned()
+        };
+        let start = head();
+        // Upstream adds a check that fails.
+        let check = |body: &str| {
+            r.sh(&format!(
+                "cd work && printf '#!/bin/sh\\n{body}\\n' > check.sh && chmod +x check.sh && git add check.sh && git commit -q -m check && git push -q origin main"
+            ));
+        };
+        check("echo not ready; exit 1");
+        let m = Manager::new();
+        let mut s = EntryState { entry, stored: Stored::default(), repo: None, installed: None };
+        let p = Progress { agent: None, application: "test".into(), proc_id: 1 };
+        let err = m.update_entry(&mut s, &p).await.unwrap_err();
+        assert_eq!(
+            err.error,
+            "The preflight check `check.sh` failed with exit status 1:\nnot ready\ntest is back at v1.0.0-0. Python packages that the update installed stay installed."
+        );
+        assert_eq!(head(), start);
+        assert!(s.stored.rollback.is_none() && m.pending.lock().unwrap().is_empty());
+
+        // Once the check passes, the update takes effect.
+        check("exit 0");
+        s.entry.managed_services = Some(vec!["test".into()]);
+        assert!(m.update_entry(&mut s, &p).await.unwrap());
+        assert_ne!(head(), start);
+        assert_eq!(s.stored.rollback.as_ref().unwrap().commit, start);
+        assert_eq!(*m.pending.lock().unwrap(), ["test"]);
     }
 
     #[test]
