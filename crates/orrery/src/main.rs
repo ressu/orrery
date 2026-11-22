@@ -15,14 +15,14 @@ use orrery::{agent_process, expand_home, history, job_queue, logfile, unix_socke
 #[command(version, about = "Experimental Moonraker-compatible API server for Klipper")]
 struct Cli {
     /// The printer's data folder.
-    #[arg(short = 'd', long = "datapath", env = "MOONRAKER_DATA_PATH", value_name = "data path")]
+    #[arg(short = 'd', long = "datapath", env = "MOONRAKER_DATA_PATH", value_name = "data path", global = true)]
     data_path: Option<PathBuf>,
     /// The config file. The default is config/moonraker.conf in the data folder.
-    #[arg(short = 'c', long = "configfile", env = "MOONRAKER_CONFIG_PATH", value_name = "config file")]
+    #[arg(short = 'c', long = "configfile", env = "MOONRAKER_CONFIG_PATH", value_name = "config file", global = true)]
     config_file: Option<PathBuf>,
     /// orrery's own config, which wins over the config file. The default is orrery.toml next to
     /// the config file. It's optional, unless this option names it.
-    #[arg(long = "orrery-config", env = "ORRERY_CONFIG", value_name = "orrery.toml")]
+    #[arg(long = "orrery-config", env = "ORRERY_CONFIG", value_name = "orrery.toml", global = true)]
     orrery_config: Option<PathBuf>,
     /// The log file. The default is logs/orrery.log in the data folder.
     #[arg(short = 'l', long = "logfile", value_name = "log file")]
@@ -55,6 +55,33 @@ enum Command {
         #[command(subcommand)]
         action: UserAction,
     },
+    /// Run with sudo. Writes orrery.service, the orrery-admin group, and a polkit rule that lets
+    /// orrery.service manage services, reboot, and shut down. Run it again after an upgrade.
+    /// -d, -c, and --orrery-config go into the service; without them, the installed ones stay.
+    Setup(SetupArgs),
+}
+
+#[derive(clap::Args)]
+struct SetupArgs {
+    /// Report what's in place, and change nothing. It works without sudo.
+    #[arg(long, conflicts_with_all = ["remove", "disable_moonraker", "start", "migrate"])]
+    check: bool,
+    /// Stop and disable orrery.service, then remove the unit, the polkit rule, and the group.
+    #[arg(long, conflicts_with_all = ["strict", "disable_moonraker", "start", "migrate"])]
+    remove: bool,
+    /// Let orrery manage only its allowed services: moonraker.asvc, Klipper's and orrery's own,
+    /// and agents' units. Run setup again after adding one.
+    #[arg(long)]
+    strict: bool,
+    /// Stop and disable moonraker.service.
+    #[arg(long)]
+    disable_moonraker: bool,
+    /// Enable orrery.service and start it, or restart it if it runs.
+    #[arg(long)]
+    start: bool,
+    /// Switch from Moonraker to orrery: --disable-moonraker and --start.
+    #[arg(long)]
+    migrate: bool,
 }
 
 #[derive(clap::Subcommand)]
@@ -190,6 +217,44 @@ fn orrery_config_path(cli: &Cli, paths: &Paths) -> Result<(PathBuf, bool)> {
     }
 }
 
+fn setup_command(cli: &Cli, args: &SetupArgs) -> ExitCode {
+    let euid = rustix::process::geteuid();
+    let exe = match std::env::current_exe().and_then(|e| e.canonicalize()) {
+        Ok(exe) => exe,
+        Err(e) => {
+            eprintln!("orrery can't set up: it can't tell where its own binary is: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let options = orrery::setup::Options {
+        check: args.check,
+        remove: args.remove,
+        strict: args.strict,
+        disable_moonraker: args.disable_moonraker || args.migrate,
+        start: args.start || args.migrate,
+        data_path: cli.data_path.clone(),
+        config_file: cli.config_file.clone(),
+        orrery_config: cli.orrery_config.clone(),
+        sudo_user: std::env::var("SUDO_USER").ok(),
+        is_root: euid.is_root(),
+        uid: euid.as_raw(),
+        exe,
+        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
+    };
+    match orrery::setup::run(&options, Path::new("/"), &mut orrery::setup::System) {
+        Ok(report) => {
+            for line in &report.lines {
+                println!("{line}");
+            }
+            if report.ok { ExitCode::SUCCESS } else { ExitCode::FAILURE }
+        }
+        Err(e) => {
+            eprintln!("orrery can't set up: {e:#}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 /// Runs orrery until it's stopped. Returns whether a client asked it to restart.
 async fn run(paths: Paths, socket_path: PathBuf, toml: (PathBuf, bool), log_warning: Option<String>) -> Result<bool> {
     for dir in [paths.data.clone(), paths.data.join("comms"), paths.logs_dir(), paths.gcodes_dir(), paths.config_dir()]
@@ -250,6 +315,9 @@ fn restart() -> ExitCode {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    if let Some(Command::Setup(args)) = &cli.command {
+        return setup_command(&cli, args);
+    }
     let paths = match resolve_paths(&cli) {
         Ok(p) => p,
         Err(e) => {
@@ -278,7 +346,7 @@ fn main() -> ExitCode {
     match &cli.command {
         Some(Command::Key { action }) => return key_command(&socket_path, action),
         Some(Command::User { action }) => return user_command(&socket_path, action),
-        None => {}
+        Some(Command::Setup(_)) | None => {}
     }
     let (_log_guard, log_warning) = init_logging(&cli, &paths);
     let runtime = match tokio::runtime::Runtime::new() {

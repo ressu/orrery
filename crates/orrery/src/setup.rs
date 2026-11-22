@@ -1,0 +1,810 @@
+//! `sudo orrery setup`: the system files orrery needs to run as a service and to control
+//! services (docs/design/2026-11-19-service-control.md, "Deployment").
+//!
+//! - `orrery-admin`, a system group. Only `orrery.service` gets it, with
+//!   `SupplementaryGroups`, so the printer's user's own shells aren't trusted.
+//! - `/etc/systemd/system/orrery.service`, which runs orrery as the user who ran sudo.
+//! - `/etc/polkit-1/rules.d/orrery.rules`, which lets processes of that user with the group
+//!   manage units, reboot, and shut down. The strict rule allows only orrery's allowed units.
+//!
+//! By default setup only writes the files, so it's also how orrery's setup is upgraded.
+//! `--disable-moonraker` and `--start` switch over from Moonraker, and `--migrate` does both.
+//! Every system path is joined to a root folder, and every command goes through [`Host`], so
+//! the tests run in a temporary folder.
+
+use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result, bail};
+
+pub const GROUP: &str = "orrery-admin";
+const UNIT_PATH: &str = "etc/systemd/system/orrery.service";
+const RULE_PATH: &str = "etc/polkit-1/rules.d/orrery.rules";
+const SERVICE: &str = "orrery.service";
+const MOONRAKER: &str = "moonraker.service";
+/// The first line of the strict rule, so `--check` knows which rule is installed.
+const STRICT_MARK: &str = "// orrery setup: strict rule";
+
+/// The actions orrery needs from logind: power off, reboot, and halt.
+const POWER_ACTIONS: &[&str] = &[
+    "org.freedesktop.login1.power-off",
+    "org.freedesktop.login1.power-off-multiple-sessions",
+    "org.freedesktop.login1.reboot",
+    "org.freedesktop.login1.reboot-multiple-sessions",
+    "org.freedesktop.login1.halt",
+    "org.freedesktop.login1.halt-multiple-sessions",
+];
+const MANAGE_UNITS: &str = "org.freedesktop.systemd1.manage-units";
+
+/// Runs the programs setup needs: `getent`, `groupadd`, `systemctl`, and so on.
+pub trait Host {
+    /// Runs a program. Returns whether it succeeded, and what it printed. An error means it
+    /// couldn't run at all.
+    fn run(&mut self, program: &str, args: &[&str]) -> Result<(bool, String)>;
+}
+
+/// The real system.
+pub struct System;
+
+impl Host for System {
+    fn run(&mut self, program: &str, args: &[&str]) -> Result<(bool, String)> {
+        let out =
+            std::process::Command::new(program).args(args).output().with_context(|| format!("can't run {program}"))?;
+        Ok((out.status.success(), String::from_utf8_lossy(&out.stdout).into_owned()))
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct Options {
+    /// Report what's in place, and change nothing.
+    pub check: bool,
+    /// Remove what setup installed.
+    pub remove: bool,
+    /// Allow only orrery's allowed units, not every unit.
+    pub strict: bool,
+    /// Stop and disable `moonraker.service`.
+    pub disable_moonraker: bool,
+    /// Enable `orrery.service`, and start or restart it.
+    pub start: bool,
+    /// The server's path options, as given. They go into `ExecStart`.
+    pub data_path: Option<PathBuf>,
+    pub config_file: Option<PathBuf>,
+    pub orrery_config: Option<PathBuf>,
+    /// `SUDO_USER`: who orrery runs as.
+    pub sudo_user: Option<String>,
+    /// Whether setup runs as root.
+    pub is_root: bool,
+    /// The user id setup runs as, for `--check` without sudo.
+    pub uid: u32,
+    /// The orrery binary that `ExecStart` runs.
+    pub exe: PathBuf,
+    /// The folder relative paths are relative to.
+    pub cwd: PathBuf,
+}
+
+/// What setup did or found, one line each, and whether everything is in place.
+#[derive(Debug, Default)]
+pub struct Report {
+    pub lines: Vec<String>,
+    /// `false` when `--check` finds something missing or different.
+    pub ok: bool,
+}
+
+impl Report {
+    fn line(&mut self, text: impl Into<String>) {
+        self.lines.push(text.into());
+    }
+}
+
+/// The account orrery runs as.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Account {
+    pub name: String,
+    pub uid: u32,
+    pub home: PathBuf,
+}
+
+pub fn run(options: &Options, root: &Path, host: &mut dyn Host) -> Result<Report> {
+    if !options.check && !options.is_root {
+        bail!("orrery setup changes system files, so it needs root. Run it with sudo:\n  sudo orrery setup");
+    }
+    let account = account(options, host)?;
+    let sys = |path: &str| root.join(path);
+    if options.remove {
+        return remove(host, &sys);
+    }
+    check_polkit(host)?;
+    let installed_unit = std::fs::read_to_string(sys(UNIT_PATH)).ok();
+    let args = server_args(options, &account, installed_unit.as_deref())?;
+    let unit = unit_file(&account.name, &options.exe, &args);
+    let gid = group_gid(host)?;
+    let strict = options.strict
+        || (options.check && std::fs::read_to_string(sys(RULE_PATH)).is_ok_and(|r| r.starts_with(STRICT_MARK)));
+    let units = if strict { Some(allowed_units(&account, &args)?) } else { None };
+    let rule = |gid: u32| match &units {
+        Some(units) => strict_rule(&account.name, gid, units),
+        None => normal_rule(&account.name, gid),
+    };
+    let rule_kind = if strict { "the strict rule" } else { "the normal rule" };
+
+    if options.check {
+        let mut report = Report { ok: true, ..Report::default() };
+        report.line(format!("orrery setup for the user {}:", account.name));
+        match gid {
+            Some(gid) => report.line(format!("  The group {GROUP} is there (gid {gid}).")),
+            None => {
+                report.ok = false;
+                report.line(format!("  The group {GROUP} is missing."));
+            }
+        }
+        check_file(&mut report, &sys(UNIT_PATH), &format!("/{UNIT_PATH}"), &unit);
+        let rule = rule(gid.unwrap_or(u32::MAX));
+        check_file(&mut report, &sys(RULE_PATH), &format!("/{RULE_PATH} ({rule_kind})"), &rule);
+        report.line(format!("  {SERVICE} is {}.", unit_state(host, "orrery")?));
+        report.line(format!("  {MOONRAKER} is {}.", unit_state(host, "moonraker")?));
+        if !report.ok {
+            report.line("To put the missing parts in place, run:");
+            report.line(format!("  sudo orrery setup{}", if strict { " --strict" } else { "" }));
+        }
+        return Ok(report);
+    }
+
+    let mut report = Report { ok: true, ..Report::default() };
+    report.line(format!("orrery setup for the user {}:", account.name));
+    let gid = match gid {
+        Some(gid) => {
+            report.line(format!("  The group {GROUP} is already there (gid {gid})."));
+            gid
+        }
+        None => {
+            command(host, "groupadd", &["--system", GROUP])?;
+            let gid = group_gid(host)?.with_context(|| format!("groupadd made {GROUP}, but getent can't find it"))?;
+            report.line(format!("  Made the group {GROUP} (gid {gid})."));
+            gid
+        }
+    };
+    let unit_changed = install(&mut report, &sys(UNIT_PATH), &format!("/{UNIT_PATH}"), &unit)?;
+    install(&mut report, &sys(RULE_PATH), &format!("/{RULE_PATH} ({rule_kind})"), &rule(gid))?;
+    command(host, "systemctl", &["daemon-reload"])?;
+    if options.disable_moonraker {
+        if unit_state(host, "moonraker")? == "not installed" {
+            report.line(format!("  {MOONRAKER} isn't installed, so there's nothing to disable."));
+        } else {
+            command(host, "systemctl", &["disable", "--now", MOONRAKER])?;
+            report.line(format!("  Stopped and disabled {MOONRAKER}."));
+        }
+    }
+    let running = is_active(host, "orrery")?;
+    if options.start {
+        command(host, "systemctl", &["enable", SERVICE])?;
+        // restart, not start: an upgraded unit or binary must take effect.
+        command(host, "systemctl", &[if running { "restart" } else { "start" }, SERVICE])?;
+        report.line(format!("  Enabled {SERVICE} and {} it.", if running { "restarted" } else { "started" }));
+    } else if running && unit_changed {
+        report.line(format!("{SERVICE} runs with the old unit. To use the new one, run:"));
+        report.line(format!("  sudo systemctl restart {SERVICE}"));
+    } else if !running {
+        report.line("orrery.service isn't running. To switch from Moonraker to orrery, run:");
+        report.line("  sudo orrery setup --migrate");
+    }
+    if strict {
+        report.line("The strict rule names each allowed service. After adding a service, run setup again:");
+        report.line("  sudo orrery setup --strict");
+    }
+    Ok(report)
+}
+
+/// Removes the unit, the rule, and the group, after stopping and disabling orrery.service.
+fn remove(host: &mut dyn Host, sys: &dyn Fn(&str) -> PathBuf) -> Result<Report> {
+    let mut report = Report { ok: true, ..Report::default() };
+    let state = unit_state(host, "orrery")?;
+    if state != "not installed" && state != "disabled and stopped" {
+        command(host, "systemctl", &["disable", "--now", SERVICE])?;
+        report.line(format!("Stopped and disabled {SERVICE}."));
+    }
+    for path in [UNIT_PATH, RULE_PATH] {
+        match std::fs::remove_file(sys(path)) {
+            Ok(()) => report.line(format!("Removed /{path}.")),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => report.line(format!("/{path} wasn't there.")),
+            Err(e) => return Err(e).with_context(|| format!("can't remove /{path}")),
+        }
+    }
+    if group_gid(host)?.is_some() {
+        command(host, "groupdel", &[GROUP])?;
+        report.line(format!("Removed the group {GROUP}."));
+    }
+    command(host, "systemctl", &["daemon-reload"])?;
+    let moonraker = unit_state(host, "moonraker")?;
+    if moonraker.starts_with("disabled") {
+        report.line("Moonraker is disabled. To turn it on again, run:");
+        report.line(format!("  sudo systemctl enable --now {MOONRAKER}"));
+    }
+    Ok(report)
+}
+
+/// Who orrery runs as: the user who ran sudo, or for `--check` without sudo, the user running
+/// it.
+fn account(options: &Options, host: &mut dyn Host) -> Result<Account> {
+    let key = match (&options.sudo_user, options.is_root) {
+        (Some(name), _) if !name.is_empty() => name.clone(),
+        (_, false) => options.uid.to_string(),
+        _ => bail!(
+            "orrery setup sets orrery up for the user who runs sudo, and SUDO_USER isn't set. Run it from the printer's user:\n  sudo orrery setup"
+        ),
+    };
+    let (ok, out) = host.run("getent", &["passwd", &key])?;
+    if !ok {
+        bail!("getent can't find the user {key}");
+    }
+    let account = parse_passwd(&out).with_context(|| format!("can't read the user {key}'s entry: {out:?}"))?;
+    if account.uid == 0 {
+        bail!("orrery shouldn't run as root. Run setup with sudo from the printer's user:\n  sudo orrery setup");
+    }
+    Ok(account)
+}
+
+pub fn parse_passwd(entry: &str) -> Option<Account> {
+    let fields: Vec<&str> = entry.lines().next()?.split(':').collect();
+    let [name, _, uid, _, _, home, _] = fields.as_slice() else { return None };
+    Some(Account { name: (*name).to_owned(), uid: uid.parse().ok()?, home: PathBuf::from(home) })
+}
+
+/// The group's id, or `None` when it isn't there.
+fn group_gid(host: &mut dyn Host) -> Result<Option<u32>> {
+    let (ok, out) = host.run("getent", &["group", GROUP])?;
+    if !ok {
+        return Ok(None);
+    }
+    parse_group_gid(&out).map(Some).with_context(|| format!("can't read the group {GROUP}'s entry: {out:?}"))
+}
+
+pub fn parse_group_gid(entry: &str) -> Option<u32> {
+    entry.lines().next()?.split(':').nth(2)?.parse().ok()
+}
+
+/// Refuses polkit 0.105, which has no JavaScript rules and can't check a process's groups.
+fn check_polkit(host: &mut dyn Host) -> Result<()> {
+    let (ok, out) = host.run("pkaction", &["--version"]).context("can't run pkaction, so polkit may be missing")?;
+    if !ok {
+        bail!("pkaction --version failed, so orrery can't tell which polkit this is");
+    }
+    let version = parse_polkit_version(&out).with_context(|| format!("can't read polkit's version from {out:?}"))?;
+    if version < (0, 106) {
+        bail!(
+            "This system has polkit {}.{}, which can't check which groups a process has. A rule for orrery would have to trust every program the printer's user runs. Moonraker's rule and its moonraker-admin group keep working, and orrery can use them: give orrery's unit SupplementaryGroups=moonraker-admin.",
+            version.0,
+            version.1
+        );
+    }
+    Ok(())
+}
+
+/// polkit's version from `pkaction --version`, such as "pkaction version 122" or "0.105".
+pub fn parse_polkit_version(text: &str) -> Option<(u32, u32)> {
+    let word = text.split_whitespace().find(|w| w.starts_with(|c: char| c.is_ascii_digit()))?;
+    let mut parts = word.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next().map_or(Some(0), |m| m.parse().ok())?;
+    Some((major, minor))
+}
+
+/// The options `ExecStart` passes to orrery: the ones given, made absolute, or else the ones in
+/// the installed unit, so an upgrade keeps them.
+fn server_args(options: &Options, account: &Account, installed: Option<&str>) -> Result<Vec<String>> {
+    let given = [("-d", &options.data_path), ("-c", &options.config_file), ("--orrery-config", &options.orrery_config)];
+    if given.iter().all(|(_, v)| v.is_none()) {
+        return Ok(installed.and_then(installed_args).unwrap_or_default());
+    }
+    let mut args = Vec::new();
+    for (flag, value) in given {
+        if let Some(path) = value {
+            args.push(flag.to_owned());
+            args.push(absolute(path, account, &options.cwd).display().to_string());
+        }
+    }
+    Ok(args)
+}
+
+/// A path as orrery's service sees it: `~` is the account's home, and a relative path is
+/// relative to where setup ran.
+fn absolute(path: &Path, account: &Account, cwd: &Path) -> PathBuf {
+    match path.strip_prefix("~") {
+        Ok(rest) => account.home.join(rest),
+        Err(_) if path.is_relative() => cwd.join(path),
+        Err(_) => path.to_path_buf(),
+    }
+}
+
+/// The arguments after the program in an installed unit's `ExecStart`, as setup wrote them.
+fn installed_args(unit: &str) -> Option<Vec<String>> {
+    let line = unit.lines().find_map(|l| l.strip_prefix("ExecStart="))?;
+    let mut words = split_quoted(line)?;
+    if words.is_empty() {
+        return None;
+    }
+    words.remove(0);
+    Some(words)
+}
+
+/// Splits `"a" "b c"` into words, undoing [`quote`]'s escapes.
+fn split_quoted(line: &str) -> Option<Vec<String>> {
+    let mut words = Vec::new();
+    let mut chars = line.chars().peekable();
+    loop {
+        while chars.peek() == Some(&' ') {
+            chars.next();
+        }
+        match chars.next() {
+            None => return Some(words),
+            Some('"') => {}
+            Some(_) => return None,
+        }
+        let mut word = String::new();
+        loop {
+            match chars.next()? {
+                '"' => break,
+                '\\' => word.push(chars.next()?),
+                '%' if chars.peek() == Some(&'%') => {
+                    chars.next();
+                    word.push('%');
+                }
+                c => word.push(c),
+            }
+        }
+        words.push(word);
+    }
+}
+
+/// A double-quoted `ExecStart` word: `%` doubled for systemd's specifiers, and `\` and `"`
+/// escaped, so a path with spaces or quotes stays one word.
+fn quote(word: &str) -> String {
+    let mut out = String::from("\"");
+    for c in word.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '%' => out.push_str("%%"),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+pub fn unit_file(user: &str, exe: &Path, args: &[String]) -> String {
+    let mut exec = quote(&exe.display().to_string());
+    for arg in args {
+        exec.push(' ');
+        exec.push_str(&quote(arg));
+    }
+    format!(
+        "# Written by sudo orrery setup. Run it again instead of editing this file.\n\
+         [Unit]\n\
+         Description=orrery, an API server for Klipper\n\
+         Wants=network-online.target\n\
+         After=network-online.target\n\
+         # Both listen on port 7125, so starting one stops the other.\n\
+         Conflicts={MOONRAKER}\n\
+         \n\
+         [Service]\n\
+         Type=simple\n\
+         User={user}\n\
+         SupplementaryGroups={GROUP}\n\
+         ExecStart={exec}\n\
+         Restart=always\n\
+         RestartSec=10\n\
+         \n\
+         [Install]\n\
+         WantedBy=multi-user.target\n"
+    )
+}
+
+/// The part both rules share: the user, and the group check on the process.
+fn rule_body(user: &str, gid: u32, condition: &str) -> String {
+    let user = serde_json::to_string(user).expect("a string serializes");
+    let power = serde_json::to_string(POWER_ACTIONS).expect("strings serialize");
+    // /proc/<pid>/status has "Groups:" then the process's group ids, separated by whitespace.
+    let regex = serde_json::to_string(&format!(r"^Groups:.*\s{gid}(\s|$)")).expect("a string serializes");
+    let mut out = String::new();
+    let _ = write!(
+        out,
+        "polkit.addRule(function(action, subject) {{\n\
+         \x20   var power = {power};\n\
+         {condition}\
+         \x20   if (!allowed || subject.user != {user}) {{\n\
+         \x20       return polkit.Result.NOT_HANDLED;\n\
+         \x20   }}\n\
+         \x20   // Only processes that have the {GROUP} group, which orrery.service gets.\n\
+         \x20   try {{\n\
+         \x20       polkit.spawn([\"grep\", \"-Pq\", {regex}, \"/proc/\" + subject.pid + \"/status\"]);\n\
+         \x20       return polkit.Result.YES;\n\
+         \x20   }} catch (error) {{\n\
+         \x20       return polkit.Result.NOT_HANDLED;\n\
+         \x20   }}\n\
+         }});\n"
+    );
+    out
+}
+
+/// Moonraker's rule for orrery's group: every unit, reboot, and shutdown. Moonraker's
+/// PackageKit actions are left out, since orrery doesn't update packages.
+pub fn normal_rule(user: &str, gid: u32) -> String {
+    let condition = format!("    var allowed = power.indexOf(action.id) >= 0 || action.id == \"{MANAGE_UNITS}\";\n");
+    format!(
+        "// orrery setup: normal rule. Written by sudo orrery setup; run it again instead of editing this file.\n\
+         // orrery.service may manage every unit, reboot, and shut down.\n{}",
+        rule_body(user, gid, &condition)
+    )
+}
+
+/// The units the strict rule allows: names, and prefixes such as `klipper`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AllowedUnits {
+    pub names: Vec<String>,
+    pub prefixes: Vec<String>,
+}
+
+/// Like the normal rule, but only for the units orrery allows.
+pub fn strict_rule(user: &str, gid: u32, units: &AllowedUnits) -> String {
+    let names = serde_json::to_string(&units.names).expect("strings serialize");
+    let prefixes = serde_json::to_string(&units.prefixes).expect("strings serialize");
+    let condition = format!(
+        "    var names = {names};\n\
+         \x20   var prefixes = {prefixes};\n\
+         \x20   function allowedUnit(unit) {{\n\
+         \x20       if (!unit) {{\n\
+         \x20           return false;\n\
+         \x20       }}\n\
+         \x20       var name = unit.replace(/\\.service$/, \"\");\n\
+         \x20       if (names.indexOf(name) >= 0) {{\n\
+         \x20           return true;\n\
+         \x20       }}\n\
+         \x20       for (var i = 0; i < prefixes.length; i++) {{\n\
+         \x20           if (name.indexOf(prefixes[i]) == 0) {{\n\
+         \x20               return true;\n\
+         \x20           }}\n\
+         \x20       }}\n\
+         \x20       return false;\n\
+         \x20   }}\n\
+         \x20   var allowed = power.indexOf(action.id) >= 0 ||\n\
+         \x20       (action.id == \"{MANAGE_UNITS}\" && allowedUnit(action.lookup(\"unit\")));\n"
+    );
+    format!(
+        "{STRICT_MARK}. Written by sudo orrery setup; run it again instead of editing this file.\n\
+         // orrery.service may reboot, shut down, and manage only the units orrery allows:\n\
+         // moonraker.asvc, units whose names start with {}, and agents' units.\n{}",
+        units.prefixes.join(", "),
+        rule_body(user, gid, &condition)
+    )
+}
+
+/// The units orrery allows, read as orrery reads them: `moonraker.asvc` in the data folder,
+/// the names that are always allowed, and the system units of agents in the config.
+fn allowed_units(account: &Account, args: &[String]) -> Result<AllowedUnits> {
+    let arg = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).map(PathBuf::from);
+    let data = arg("-d").unwrap_or_else(|| account.home.join("printer_data"));
+    let config_file = arg("-c").unwrap_or_else(|| data.join("config/moonraker.conf"));
+    let (toml, required) = match arg("--orrery-config") {
+        Some(path) => (path, true),
+        None => (config_file.with_file_name("orrery.toml"), false),
+    };
+    let mut config = crate::config::Config::load(&config_file)
+        .with_context(|| format!("the strict rule lists the agents' units, so it needs {}", config_file.display()))?;
+    if required || toml.exists() {
+        config.load_toml(&toml)?;
+    }
+    let asvc = data.join("moonraker.asvc");
+    // Read only: unlike orrery, setup runs as root, so it doesn't write the default list.
+    let text = std::fs::read_to_string(&asvc).unwrap_or_else(|_| crate::services::DEFAULT_ALLOWED.to_owned());
+    let mut names = crate::services::parse_allowed(&text);
+    let (agents, _) = crate::agents::Agents::new(&config, None)?;
+    for (_, unit) in agents.units() {
+        if unit.scope == crate::agents::Scope::System {
+            let name = unit.name.strip_suffix(".service").unwrap_or(&unit.name).to_owned();
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+    }
+    names.sort();
+    let prefixes = crate::services::ALWAYS_ALLOWED.iter().map(|p| (*p).to_owned()).collect();
+    Ok(AllowedUnits { names, prefixes })
+}
+
+fn command(host: &mut dyn Host, program: &str, args: &[&str]) -> Result<()> {
+    let (ok, _) = host.run(program, args)?;
+    if !ok {
+        bail!("{program} {} failed", args.join(" "));
+    }
+    Ok(())
+}
+
+fn is_active(host: &mut dyn Host, unit: &str) -> Result<bool> {
+    let (_, out) = host.run("systemctl", &["is-active", &format!("{unit}.service")])?;
+    Ok(out.trim() == "active")
+}
+
+/// A unit's state in words: "enabled and running", "disabled and stopped", "not installed".
+fn unit_state(host: &mut dyn Host, unit: &str) -> Result<String> {
+    let service = format!("{unit}.service");
+    let (_, enabled) = host.run("systemctl", &["is-enabled", &service])?;
+    let enabled = enabled.trim();
+    if enabled.is_empty() || enabled == "not-found" {
+        return Ok("not installed".to_owned());
+    }
+    let running = if is_active(host, unit)? { "running" } else { "stopped" };
+    let enabled = if enabled == "enabled" { "enabled" } else { "disabled" };
+    Ok(format!("{enabled} and {running}"))
+}
+
+fn check_file(report: &mut Report, path: &Path, name: &str, want: &str) {
+    match std::fs::read_to_string(path) {
+        Ok(have) if have == want => report.line(format!("  {name} is in place.")),
+        Ok(_) => {
+            report.ok = false;
+            report.line(format!("  {name} differs from what setup writes."));
+        }
+        Err(_) => {
+            report.ok = false;
+            report.line(format!("  {name} is missing."));
+        }
+    }
+}
+
+/// Writes a file through a temporary file and a rename, unless it's already current. Returns
+/// whether it changed.
+fn install(report: &mut Report, path: &Path, name: &str, contents: &str) -> Result<bool> {
+    let old = std::fs::read_to_string(path).ok();
+    if old.as_deref() == Some(contents) {
+        report.line(format!("  {name} is already current."));
+        return Ok(false);
+    }
+    let dir = path.parent().context("a system file has a folder")?;
+    std::fs::create_dir_all(dir).with_context(|| format!("can't make {}", dir.display()))?;
+    let mut temp = tempfile_in(dir)?;
+    use std::io::Write as _;
+    temp.1.write_all(contents.as_bytes()).with_context(|| format!("can't write {}", temp.0.display()))?;
+    drop(temp.1);
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::set_permissions(&temp.0, std::fs::Permissions::from_mode(0o644))?;
+    std::fs::rename(&temp.0, path).with_context(|| format!("can't write {}", path.display()))?;
+    report.line(format!("  {} {name}.", if old.is_some() { "Updated" } else { "Installed" }));
+    Ok(true)
+}
+
+/// A new file in `dir` with a name nothing else uses.
+fn tempfile_in(dir: &Path) -> Result<(PathBuf, std::fs::File)> {
+    for n in 0..100u32 {
+        let path = dir.join(format!(".orrery-setup-{}-{n}", std::process::id()));
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(file) => return Ok((path, file)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e).with_context(|| format!("can't write in {}", dir.display())),
+        }
+    }
+    bail!("can't make a temporary file in {}", dir.display())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::{HashMap, HashSet};
+
+    /// A system that records commands and answers from a script.
+    #[derive(Default)]
+    struct Fake {
+        ran: Vec<String>,
+        group: Option<u32>,
+        enabled: HashMap<&'static str, &'static str>,
+        active: HashSet<&'static str>,
+        polkit: &'static str,
+    }
+
+    impl Fake {
+        fn new() -> Self {
+            Self {
+                polkit: "pkaction version 122\n",
+                enabled: [("orrery.service", ""), ("moonraker.service", "enabled")].into_iter().collect(),
+                active: ["moonraker.service"].into_iter().collect(),
+                ..Self::default()
+            }
+        }
+    }
+
+    impl Host for Fake {
+        fn run(&mut self, program: &str, args: &[&str]) -> Result<(bool, String)> {
+            let line = format!("{program} {}", args.join(" "));
+            let reply = match (program, args) {
+                ("getent", ["passwd", "printer" | "1000"]) => {
+                    (true, "printer:x:1000:1000::/home/printer:/bin/bash\n".into())
+                }
+                ("getent", ["group", _]) => match self.group {
+                    Some(gid) => (true, format!("{GROUP}:x:{gid}:\n")),
+                    None => (false, String::new()),
+                },
+                ("groupadd", _) => {
+                    self.group = Some(994);
+                    (true, String::new())
+                }
+                ("groupdel", _) => {
+                    self.group = None;
+                    (true, String::new())
+                }
+                ("pkaction", _) => (true, self.polkit.to_owned()),
+                ("systemctl", ["is-enabled", unit]) => {
+                    (false, self.enabled.get(unit).map_or("not-found", |s| s).to_owned() + "\n")
+                }
+                ("systemctl", ["is-active", unit]) => {
+                    let active = self.active.contains(unit);
+                    (active, if active { "active\n" } else { "inactive\n" }.to_owned())
+                }
+                ("systemctl", ["disable", "--now", unit]) => {
+                    let unit: &'static str = if *unit == SERVICE { SERVICE } else { MOONRAKER };
+                    self.enabled.insert(unit, "disabled");
+                    self.active.remove(unit);
+                    (true, String::new())
+                }
+                ("systemctl", ["enable", _]) => {
+                    self.enabled.insert(SERVICE, "enabled");
+                    (true, String::new())
+                }
+                ("systemctl", ["start" | "restart", _]) => {
+                    self.active.insert(SERVICE);
+                    (true, String::new())
+                }
+                ("systemctl", _) => (true, String::new()),
+                _ => (false, String::new()),
+            };
+            if !matches!(args.first(), Some(&"is-enabled" | &"is-active" | &"group" | &"passwd" | &"--version")) {
+                self.ran.push(line);
+            }
+            Ok(reply)
+        }
+    }
+
+    fn options() -> Options {
+        Options {
+            sudo_user: Some("printer".into()),
+            is_root: true,
+            uid: 0,
+            exe: "/home/printer/orrery-test/bin/orrery".into(),
+            cwd: "/home/printer".into(),
+            ..Options::default()
+        }
+    }
+
+    #[test]
+    fn units_quote_their_words_and_keep_options_on_upgrade() {
+        let args = vec!["--orrery-config".to_owned(), "/home/printer/my 100% \"x\".toml".to_owned()];
+        let unit = unit_file("printer", Path::new("/opt/orrery/orrery"), &args);
+        assert!(unit.contains("User=printer\nSupplementaryGroups=orrery-admin\n"));
+        assert!(
+            unit.contains(r#"ExecStart="/opt/orrery/orrery" "--orrery-config" "/home/printer/my 100%% \"x\".toml""#)
+        );
+        assert!(unit.contains("Conflicts=moonraker.service\n"));
+        assert_eq!(installed_args(&unit).unwrap(), args);
+        let account = Account { name: "printer".into(), uid: 1000, home: "/home/printer".into() };
+        // Without new options, an upgrade keeps the installed ones.
+        assert_eq!(server_args(&options(), &account, Some(&unit)).unwrap(), args);
+        let given = Options { orrery_config: Some("~/o.toml".into()), data_path: Some("pd".into()), ..options() };
+        assert_eq!(
+            server_args(&given, &account, Some(&unit)).unwrap(),
+            ["-d", "/home/printer/pd", "--orrery-config", "/home/printer/o.toml"]
+        );
+    }
+
+    #[test]
+    fn parsers() {
+        assert_eq!(parse_polkit_version("pkaction version 122\n"), Some((122, 0)));
+        assert_eq!(parse_polkit_version("pkaction version 0.105\n"), Some((0, 105)));
+        assert_eq!(parse_polkit_version("nothing"), None);
+        assert_eq!(parse_group_gid("orrery-admin:x:994:\n"), Some(994));
+        let a = parse_passwd("printer:x:1000:1000:,,,:/home/printer:/bin/bash\n").unwrap();
+        assert_eq!((a.name.as_str(), a.uid, a.home.as_path()), ("printer", 1000, Path::new("/home/printer")));
+    }
+
+    #[test]
+    fn rules_check_the_user_and_the_group() {
+        let rule = normal_rule("printer", 994);
+        assert!(rule.starts_with("// orrery setup: normal rule"));
+        assert!(rule.contains(r#"subject.user != "printer""#));
+        assert!(rule.contains(r#""^Groups:.*\\s994(\\s|$)""#));
+        assert!(rule.contains("org.freedesktop.login1.reboot-multiple-sessions"));
+        assert!(!rule.contains("packagekit"));
+        let units = AllowedUnits { names: vec!["crowsnest".into(), "it\"s".into()], prefixes: vec!["klipper".into()] };
+        let rule = strict_rule("printer", 994, &units);
+        assert!(rule.starts_with(STRICT_MARK));
+        assert!(rule.contains(r#"var names = ["crowsnest","it\"s"];"#));
+        assert!(rule.contains(r#"allowedUnit(action.lookup("unit"))"#));
+    }
+
+    #[test]
+    fn setup_installs_checks_and_removes() {
+        let root = tempfile::tempdir().unwrap();
+        let mut host = Fake::new();
+        // --check before anything is there.
+        let check = Options { check: true, ..options() };
+        let report = run(&check, root.path(), &mut host).unwrap();
+        assert!(!report.ok, "{:#?}", report.lines);
+        assert!(host.ran.is_empty(), "--check changes nothing: {:?}", host.ran);
+
+        let report = run(&options(), root.path(), &mut host).unwrap();
+        assert!(
+            report.lines.iter().any(|l| l.contains("Made the group orrery-admin (gid 994)")),
+            "{:#?}",
+            report.lines
+        );
+        assert_eq!(host.ran, ["groupadd --system orrery-admin", "systemctl daemon-reload"]);
+        let unit = std::fs::read_to_string(root.path().join(UNIT_PATH)).unwrap();
+        assert!(unit.contains(r#"ExecStart="/home/printer/orrery-test/bin/orrery""#));
+        let rule = std::fs::read_to_string(root.path().join(RULE_PATH)).unwrap();
+        assert!(rule.contains(r"\\s994(\\s|$)"));
+        assert!(run(&check, root.path(), &mut host).unwrap().ok);
+
+        // Again: nothing to change.
+        let report = run(&options(), root.path(), &mut host).unwrap();
+        assert_eq!(report.lines.iter().filter(|l| l.contains("already current")).count(), 2, "{:#?}", report.lines);
+
+        // --check finds a file someone changed.
+        std::fs::write(root.path().join(RULE_PATH), "edited").unwrap();
+        let report = run(&check, root.path(), &mut host).unwrap();
+        assert!(!report.ok && report.lines.iter().any(|l| l.contains("differs")), "{:#?}", report.lines);
+
+        // --migrate: Moonraker stops and orrery starts.
+        host.ran.clear();
+        let migrate = Options { disable_moonraker: true, start: true, ..options() };
+        run(&migrate, root.path(), &mut host).unwrap();
+        assert_eq!(
+            host.ran,
+            [
+                "systemctl daemon-reload",
+                "systemctl disable --now moonraker.service",
+                "systemctl enable orrery.service",
+                "systemctl start orrery.service"
+            ]
+        );
+        // An upgrade with --start restarts it.
+        host.ran.clear();
+        run(&Options { start: true, ..options() }, root.path(), &mut host).unwrap();
+        assert_eq!(host.ran.last().unwrap(), "systemctl restart orrery.service");
+
+        host.ran.clear();
+        let report = run(&Options { remove: true, ..options() }, root.path(), &mut host).unwrap();
+        assert_eq!(
+            host.ran,
+            ["systemctl disable --now orrery.service", "groupdel orrery-admin", "systemctl daemon-reload"]
+        );
+        assert!(!root.path().join(UNIT_PATH).exists() && !root.path().join(RULE_PATH).exists());
+        assert!(report.lines.iter().any(|l| l.contains("enable --now moonraker.service")), "{:#?}", report.lines);
+    }
+
+    #[test]
+    fn setup_refuses_without_root_and_on_old_polkit() {
+        let root = tempfile::tempdir().unwrap();
+        let mut host = Fake::new();
+        let e = run(&Options { is_root: false, ..options() }, root.path(), &mut host).unwrap_err();
+        assert!(format!("{e:#}").contains("sudo orrery setup"));
+        host.polkit = "pkaction version 0.105\n";
+        let e = run(&options(), root.path(), &mut host).unwrap_err();
+        assert!(format!("{e:#}").contains("polkit 0.105"), "{e:#}");
+        assert!(host.ran.is_empty(), "nothing changes: {:?}", host.ran);
+        // --check works without sudo, for the user running it.
+        let check = Options { check: true, is_root: false, sudo_user: None, uid: 1000, ..options() };
+        host.polkit = "pkaction version 122\n";
+        assert!(run(&check, root.path(), &mut host).unwrap().lines[0].contains("printer"));
+    }
+
+    #[test]
+    fn strict_rule_lists_the_allowed_units() {
+        let home = tempfile::tempdir().unwrap();
+        let data = home.path().join("printer_data");
+        std::fs::create_dir_all(data.join("config")).unwrap();
+        std::fs::write(data.join("config/moonraker.conf"), "[server]\n").unwrap();
+        std::fs::write(data.join("config/orrery.toml"), "[agent.cam]\nsystemd_unit = \"orrery-cam\"\n").unwrap();
+        std::fs::write(data.join("moonraker.asvc"), "crowsnest\nsonar.service\n").unwrap();
+        let account = Account { name: "printer".into(), uid: 1000, home: home.path().to_path_buf() };
+        let units = allowed_units(&account, &[]).unwrap();
+        assert_eq!(units.names, ["crowsnest", "orrery-cam", "sonar"]);
+        assert_eq!(units.prefixes, ["moonraker", "klipper", "orrery"]);
+    }
+}

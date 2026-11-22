@@ -162,26 +162,65 @@ it calls `server.restart`, and its stop button is hidden (`src/mixins/services.t
 allowed-services check allows `orrery` services, as it allows `moonraker` and `klipper` ones.
 orrery refuses to stop its own unit, as Moonraker does.
 
-**For now: Moonraker's group.** `orrery.service` takes `SupplementaryGroups=moonraker-admin`.
-Moonraker's installer has already set up that group and its polkit rule, so service control
-works on a Moonraker install, such as bluev2, with no new files. Testing starts this way.
+**Testing started with Moonraker's group.** The transient `orrery-test` unit takes
+`SupplementaryGroups=moonraker-admin`, whose polkit rule Moonraker's installer put in place. It
+now takes `orrery-admin` too, when that group exists.
 
-**Backlog: `sudo orrery setup`.** One command with root, run again whenever what's needed
-changes, with `--check` and `--remove`, as `aldis setup` has. It writes `orrery.service`, an
-`orrery-admin` group, and orrery's own polkit rule. A distribution package can call the same
-command, so the files have one source.
+**`sudo orrery setup`** (built 2026-11-22). One command with root, run again whenever what's
+needed changes, with `--check` and `--remove`, as `aldis setup` has. A distribution package can
+call the same command, so the files have one source. It writes:
 
-- **Plugins declare, setup applies.** Most plugins only need a service restarted, and they ask
+- **The group `orrery-admin`,** a system group. The printer's user isn't added to it. Only
+  `orrery.service` gets it, so the user's own shells aren't trusted.
+- **`/etc/systemd/system/orrery.service`,** which runs orrery as the user who ran sudo, with
+  `SupplementaryGroups=orrery-admin`, `Restart=always`, and `Conflicts=moonraker.service`, since
+  both listen on port 7125. `ExecStart` runs the binary setup ran from, with the `-d`, `-c`,
+  and `--orrery-config` options it was given. Without them, setup keeps the installed unit's
+  options, so an upgrade doesn't lose them.
+- **`/etc/polkit-1/rules.d/orrery.rules`,** in the local admin's folder. Like Moonraker's rule,
+  it checks the user and the group's id in `/proc/<pid>/status`. It covers managing units and
+  logind's power-off, reboot, and halt actions. Moonraker's PackageKit actions are left out,
+  since orrery doesn't update packages.
+
+By default setup only writes the files and reloads systemd, which is also how an upgrade is
+applied (user, 2026-11-22). Switching over takes explicit flags:
+
+| Flag | What it does |
+|---|---|
+| `--disable-moonraker` | Stops and disables `moonraker.service` |
+| `--start` | Enables `orrery.service` and starts it, or restarts it if it runs |
+| `--migrate` | Both |
+| `--strict` | Writes the strict rule (below) |
+| `--check` | Reports what's in place and changes nothing; works without sudo |
+| `--remove` | Stops and disables `orrery.service`, then removes the unit, the rule, and the group |
+
+**polkit 0.105** (Debian 11, Raspberry Pi OS Bullseye) has no JavaScript rules, so a rule can't
+check a process's groups. Moonraker's installer then trusts the user in every process. orrery's
+setup refuses instead, and says that Moonraker's rule and group keep working (user, 2026-11-22).
+
+**Checked on bluev2 (2026-11-22),** with polkit 122:
+
+- setup, `--check`, a second run ("already current"), `--migrate`, and `--remove`;
+- polkit loaded both rules without errors;
+- `pkcheck` allows orrery's process to reboot, power off, and manage units, and refuses an SSH
+  shell of the same user;
+- `instance_ids.moonraker` is `orrery`, and restarting crowsnest through the API works;
+- with `--strict`, polkit allows `crowsnest`, `klipper`, and `klipper-mcu`, and refuses `ssh`
+  and `dbus`.
+
+- **Plugins declare, setup applies** (not built yet). Most plugins only need a service restarted, and they ask
   orrery for that over the socket. orrery checks its allowed-services list and makes the D-Bus
   call itself, so only orrery needs bus permissions. A plugin that needs more, such as aldis
   with its udev rules and narrow sudoers file, lists it in its manifest, and `orrery setup`
   writes it. Plugins never run setup code as root. A `server.info` warning names what an
   installed plugin needs that isn't in place yet.
 - **One renderer per system,** as with the providers. systemd and polkit come first.
-- **A normal rule and a strict one.** The normal rule allows managing every unit, as
-  Moonraker's does. The strict rule allows only the units on orrery's allowed-services list:
-  systemd tells polkit which unit each request is for. With the strict rule, a new service or
-  plugin means running setup again. A rule that reads the list while it runs would avoid that,
+- **A normal rule and a strict one,** both built. The normal rule allows managing every unit,
+  as Moonraker's does. The strict rule allows only the units on orrery's allowed-services list:
+  systemd tells polkit which unit each request is for (`action.lookup("unit")`). The list is
+  `moonraker.asvc`, names that start with `klipper`, `moonraker`, or `orrery`, and agents'
+  system units, read as orrery reads them. With the strict rule, a new service or plugin
+  means running setup again. A rule that reads the list while it runs would avoid that,
   but it gains little security, because the list it reads would be one orrery can write.
 
 ## Open questions

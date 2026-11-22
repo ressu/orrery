@@ -24,7 +24,7 @@ const MANAGER: &str = "org.freedesktop.systemd1.Manager";
 const UNIT: &str = "org.freedesktop.systemd1.Unit";
 
 /// Moonraker's `default_allowed_services`, written to `moonraker.asvc` when it's missing.
-const DEFAULT_ALLOWED: &str = "klipper_mcu
+pub(crate) const DEFAULT_ALLOWED: &str = "klipper_mcu
 webcamd
 MoonCord
 KlipperScreen
@@ -43,7 +43,7 @@ const NOT_A_SERVICE: &str = "(unknown)";
 
 /// Services whose names start with these are always allowed. Moonraker allows `moonraker` and
 /// `klipper` ones, such as `klipper-1`; orrery allows its own too.
-const ALWAYS_ALLOWED: &[&str] = &["moonraker", "klipper", "orrery"];
+pub(crate) const ALWAYS_ALLOWED: &[&str] = &["moonraker", "klipper", "orrery"];
 
 pub struct Services {
     /// Whether the provider is `systemd_dbus`.
@@ -516,6 +516,11 @@ fn read_allowed(path: &Path) -> Vec<String> {
             DEFAULT_ALLOWED.to_owned()
         }
     };
+    parse_allowed(&text)
+}
+
+/// The services in a `moonraker.asvc` text, without `.service` and without repeats.
+pub(crate) fn parse_allowed(text: &str) -> Vec<String> {
     let mut allowed: Vec<String> = Vec::new();
     for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
         let name = line.strip_suffix(".service").unwrap_or(line);

@@ -9,8 +9,9 @@
 #
 # Commands:
 #   start   stop Moonraker and orrery.service if they run, then start orrery-test. It runs as
-#           your user with the moonraker-admin group, which Moonraker's polkit rule trusts to
-#           manage services. orrery-test replaces an orrery-test that's already running.
+#           your user with the orrery-admin and moonraker-admin groups, those that exist, which
+#           the polkit rules of orrery setup and Moonraker's installer trust to manage services.
+#           orrery-test replaces an orrery-test that's already running.
 #   stop    stop orrery-test, and start again what start stopped.
 #   status  show orrery-test's state.
 #   log     follow orrery-test's log.
@@ -103,11 +104,19 @@ start)
   if [ -f "$dir/orrery.toml" ]; then
     args+=(--orrery-config "$dir/orrery.toml")
   fi
+  # orrery-admin comes from sudo orrery setup, moonraker-admin from Moonraker'"'"'s installer.
+  # orrery-test gets each one that exists, so either polkit rule lets it manage services.
+  admin_groups=""
+  for group in orrery-admin moonraker-admin; do
+    if getent group "$group" >/dev/null; then
+      admin_groups="$admin_groups $group"
+    fi
+  done
   groups=()
-  if getent group moonraker-admin >/dev/null; then
-    groups=(-p SupplementaryGroups=moonraker-admin)
+  if [ -n "$admin_groups" ]; then
+    groups=(-p "SupplementaryGroups=${admin_groups# }")
   else
-    echo "There'"'"'s no moonraker-admin group, so orrery-test can'"'"'t manage services." >&2
+    echo "There'"'"'s no orrery-admin or moonraker-admin group, so orrery-test can'"'"'t manage services. Run: sudo orrery setup" >&2
   fi
   sudo systemd-run --quiet --unit="$unit" --uid="$(id -u)" --gid="$(id -g)" "${groups[@]}" \
     -p WorkingDirectory="$dir/bin" -p KillMode=mixed \

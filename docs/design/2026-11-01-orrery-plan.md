@@ -353,26 +353,21 @@ Tiers, in order:
 
 ## Open work
 
-In order, as of 2026-11-21:
+In order, as of 2026-11-22:
 
-1. **Authorization: user logins.** Roles, trusted networks and proxies, and API keys are in
-   (see [2026-11-20-authorization.md](2026-11-20-authorization.md)). Local logins, JWTs, one-shot
-   tokens, `force_logins`, the lockout, the import of Moonraker's users, and proxy logins are in
-   too: see [2026-11-21-logins.md](2026-11-21-logins.md). Left to check on bluev2: Fluidd
-   behind oauth2-proxy with Dex.
-2. **A real print on bluev2,** to check job state, history, and Spoolman's usage end to end.
-3. **The thumbnail memory check.**
-4. **`sudo orrery setup`,** which writes `orrery.service`, an `orrery-admin` group, and a polkit
-   rule (normal or strict). See the service-control note's Deployment section.
-5. **Processors,** starting with `.gcode.3mf`. See the plugin note's "Processors".
-6. **A `moonraker.conf` to `orrery.toml` converter,** the musl allocator, and a check of
+1. **A real print on bluev2,** to check job state, history, and Spoolman's usage end to end.
+2. **The thumbnail memory check.**
+3. **`sudo orrery setup`** is built and checked on bluev2 (2026-11-22). Left: plugins that
+   declare what setup should write. See the service-control note's Deployment section.
+4. **Processors,** starting with `.gcode.3mf`. See the plugin note's "Processors".
+5. **A `moonraker.conf` to `orrery.toml` converter,** the musl allocator, and a check of
    Mainsail.
-7. **orrery edits `orrery.toml`** to give users roles, from Fluidd's add-user button or the CLI.
+6. **orrery edits `orrery.toml`** to give users roles, from Fluidd's add-user button or the CLI.
    See "Editing orrery.toml (later)" in [2026-11-21-logins.md](2026-11-21-logins.md).
-8. **How Fluidd's login flows are triggered,** to learn which kinds of login orrery can offer
+7. **How Fluidd's login flows are triggered,** to learn which kinds of login orrery can offer
    without changing Fluidd, OIDC above all. See "OIDC (later)" in
    [2026-11-21-logins.md](2026-11-21-logins.md).
-9. **Patches for the frontends,** from the entries in
+8. **Patches for the frontends,** from the entries in
    [frontend-issues.md](../frontend-issues.md), to send upstream. The first is
    `fluidd-login-error`: Fluidd's login form hides the server's reason, so a locked-out user
    isn't told to wait.
