@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use orrery::dbus::{Bus, Call, Error, Kind, Value};
+use orrery_dbus::{Bus, Call, Error, Kind, Value};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 /// A bus of the tests' own, which stops when dropped.

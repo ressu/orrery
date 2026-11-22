@@ -11,11 +11,13 @@ publish = false
 [workspace.dependencies]
 orrery-proto = { path = "crates/orrery-proto" }
 orrery-agent = { path = "crates/orrery-agent" }
+orrery-dbus = { path = "crates/orrery-dbus" }
 fake-klippy = { path = "crates/fake-klippy" }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 regex = "1"
+rustix = { version = "1.1.6", features = ["process"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "multipart", "query"] }
 # TLS for agents that reach https servers, with a pure-Rust crypto provider: no ring, no aws-lc.
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }

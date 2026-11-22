@@ -189,7 +189,7 @@ already uses.
 ### `system`
 
 PackageKit is the system's package service. orrery talks to it over D-Bus with the client it
-already has for systemd (`crates/orrery/src/dbus/`).
+already has for systemd (`crates/orrery-dbus`).
 
 - **Refresh:** `RefreshCache`, then `GetUpdates`. `package_list` holds the package names.
 - **Update:** `UpdatePackages` with `ONLY_TRUSTED`, so packages from unsigned sources aren't
@@ -315,8 +315,8 @@ on. It's a small change, left for when someone wants it.
   `update_manager`.
 - An `[agent.update]` table in `orrery.toml` overrides the built-in options one at a time.
 - The agent reads its config with `orrery.agent.config`, the way the Spoolman agent does.
-- For PackageKit, the D-Bus client moves from `crates/orrery/src/dbus/` into its own crate,
-  which orrery and the agent share.
+- For PackageKit, the agent uses orrery's D-Bus client, which moved from
+  `crates/orrery/src/dbus/` into its own crate, `crates/orrery-dbus`, so both can use it.
 
 ## Differences from Moonraker
 

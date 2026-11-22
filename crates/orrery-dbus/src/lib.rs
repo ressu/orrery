@@ -1,7 +1,8 @@
-//! A small D-Bus client: enough to talk to systemd, logind, and polkit on the system bus.
+//! A small D-Bus client: enough for orrery and its agents to talk to systemd, logind, polkit, and
+//! PackageKit on the system bus.
 //!
-//! It connects over a unix socket, logs in with `EXTERNAL` (the kernel vouches for orrery's user
-//! id), makes method calls, and receives the signals it subscribes to. It doesn't offer objects
+//! It connects over a unix socket, logs in with `EXTERNAL` (the kernel vouches for the process's
+//! user id), makes method calls, and receives the signals it subscribes to. It doesn't offer objects
 //! of its own: a call to orrery gets an `UnknownMethod` error. See
 //! `docs/design/2026-11-19-service-control.md` for why it's orrery's own and not `zbus`.
 

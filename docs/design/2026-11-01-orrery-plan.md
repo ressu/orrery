@@ -319,7 +319,7 @@ Tiers, in order:
   [2026-11-15-plugin-interface.md](2026-11-15-plugin-interface.md).
 - **2026-11-19: service control over D-Bus, with orrery's own client.** Polling `systemctl`
   costs about 2.7% of a core on bluev2, and `zbus` adds 1.3 to 1.6 MB, so orrery has a small
-  D-Bus client of its own (`crates/orrery/src/dbus/`), tested against a private `dbus-daemon`.
+  D-Bus client of its own (`crates/orrery-dbus`, moved there from `crates/orrery/src/dbus/` on 2026-11-22), tested against a private `dbus-daemon`.
   systemd comes first; nothing outside service control may depend on it. orrery gets its own
   `orrery.service`, and uses Moonraker's `moonraker-admin` polkit rule until `orrery setup`
   writes its own. See [2026-11-19-service-control.md](2026-11-19-service-control.md).

@@ -8,6 +8,7 @@ publish.workspace = true
 
 [dependencies]
 orrery-proto.workspace = true
+orrery-dbus.workspace = true
 anyhow.workspace = true
 argon2 = { version = "0.6", default-features = false, features = ["alloc"] }
 base64 = { version = "0.22", default-features = false, features = ["alloc"] }
@@ -22,7 +23,7 @@ pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"] }
 percent-encoding = "2.3.2"
 redb = "4"
 regex.workspace = true
-rustix = { version = "1.1.6", features = ["fs", "param", "process", "rand", "system", "termios", "time"] }
+rustix = { workspace = true, features = ["fs", "param", "rand", "system", "termios", "time"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.11.1"

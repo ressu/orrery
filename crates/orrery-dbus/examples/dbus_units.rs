@@ -1,7 +1,7 @@
 //! Lists the loaded services on the system bus, read-only, to try the D-Bus client on a
 //! printer: `dbus_units [pid]`. With a process id, it also shows that process's unit.
 
-use orrery::dbus::{Bus, Call, Value};
+use orrery_dbus::{Bus, Call, Value};
 
 const SYSTEMD: &str = "org.freedesktop.systemd1";
 const MANAGER: &str = "/org/freedesktop/systemd1";

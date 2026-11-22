@@ -1480,6 +1480,7 @@ dependencies = [
  "futures-util",
  "hmac",
  "image",
+ "orrery-dbus",
  "orrery-proto",
  "pbkdf2",
  "percent-encoding",
@@ -1510,6 +1511,16 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "orrery-dbus"
+version = "0.1.0"
+dependencies = [
+ "rustix",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

@@ -1,0 +1,15 @@
+[package]
+name = "orrery-dbus"
+description = "A small D-Bus client for orrery and its agents: systemd, logind, polkit, and PackageKit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+rustix = { workspace = true }
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

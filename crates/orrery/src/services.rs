@@ -15,8 +15,8 @@ use tokio::sync::broadcast::error::RecvError;
 
 use crate::agents::Scope;
 use crate::api::{ApiError, ApiResult, Request, RequestType, Transports, handler};
-use crate::dbus::{self, Bus, Call, Message, Value};
 use crate::server::{App, Paths};
+use orrery_dbus::{self as dbus, Bus, Call, Message, Value};
 
 const SYSTEMD: &str = "org.freedesktop.systemd1";
 const MANAGER_PATH: &str = "/org/freedesktop/systemd1";
