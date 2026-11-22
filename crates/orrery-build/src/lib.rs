@@ -16,7 +16,7 @@ pub const TARGET: &str = env!("ORRERY_BUILD_TARGET");
 /// The repository a release came from, as `owner/name`. Empty for a development build.
 pub const REPO: &str = env!("ORRERY_BUILD_REPO");
 
-/// orrery's version, as `v0.2.0`, or `v0.2.0-rc.1` for a prerelease.
+/// orrery's version, as `v0.2.0`.
 pub const VERSION: &str = env!("ORRERY_BUILD_VERSION");
 
 /// The version with the kind of build: `v0.2.0 (aarch64)` for a release, and

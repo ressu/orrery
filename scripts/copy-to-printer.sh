@@ -91,6 +91,8 @@ for name in "${binaries[@]}"; do
     echo "==> Copying $name to $host:$test_dir/bin/"
     # Copy to a temporary name, then rename, so a running orrery isn't overwritten mid-copy.
     scp -q "$binary" "$host:orrery-test/bin/$name.new"
+    # The paths expand here, on purpose; the printer's shell expands the "~" in them.
+    # shellcheck disable=SC2029
     ssh "$host" "chmod +x $test_dir/bin/$name.new && mv $test_dir/bin/$name.new $test_dir/bin/$name"
   fi
 done

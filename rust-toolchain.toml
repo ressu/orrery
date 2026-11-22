@@ -1,3 +1,5 @@
 [toolchain]
 channel = "1.93.1"
 components = ["rustfmt", "clippy", "rust-analyzer", "rust-src"]
+# The release targets, for `just dist`. The flake adds them for its dev shell too.
+targets = ["aarch64-unknown-linux-musl", "armv7-unknown-linux-musleabihf", "x86_64-unknown-linux-musl"]

@@ -39,6 +39,8 @@
               pkgs.just
               pkgs.dbus # dbus-daemon, for the D-Bus client tests
               pkgs.qemu # run ARM release binaries locally
+              pkgs.shellcheck # scripts/
+              pkgs.git-cliff # drafts the release notes in CHANGELOG.md
               # Only for the conformance reference tiers: upstream Moonraker and real Klipper.
               pkgs.uv
               pkgs.python3

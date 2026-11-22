@@ -5,8 +5,10 @@ agent gets an `orrery` entry that installs a release over the running binaries, 
 the download and running the new version's preflight. A command-line `self-update` and
 `rollback` work when orrery itself doesn't.
 
-**Status (2026-11-22):** approved. Step 2 is built: the `LICENSE` file, the build's version
-and release flag, and `just dist`.
+**Status (2026-11-22):** approved. Steps 2 and 3 are built: the `LICENSE` file, the build's
+version and release flag, `just dist`, the CI workflows, and the release notes in
+`CHANGELOG.md`. The workflows haven't run yet:
+the repository isn't on GitHub.
 
 ## What exists today
 
@@ -41,8 +43,13 @@ and release flag, and `just dist`.
 ## Releases
 
 - **Versions:** tags are `v0.1.0`, `v0.2.0`, and so on: the workspace version in
-  `Cargo.toml`, with a `v`. A tag with a suffix, such as `v0.2.0-rc.1`, is a GitHub
-  prerelease. CI refuses a tag that doesn't match `Cargo.toml`.
+  `Cargo.toml`, with a `v`. CI refuses a tag that doesn't match `Cargo.toml`, and a version
+  that isn't three numbers.
+  - Fluidd and Mainsail offer an update only when both versions are valid semantic versions,
+    which need three numbers. printerkeep learned this with its `v0.1`, which Fluidd never
+    offered as an update.
+  - **No prereleases,** as in printerkeep (user, 2026-11-22). A `beta` channel can come later
+    if testers need one.
 - **Archives:** each release has one archive per target, and one `SHA256SUMS` file for all of
   them. `orrery-v0.2.0-aarch64.tar.gz` holds `orrery`, `orrery-import`, `orrery-spoolman`,
   `orrery-updater`, `LICENSE`, and `README.md`.
@@ -56,8 +63,19 @@ and release flag, and `just dist`.
   | `armv7` | `armv7-unknown-linux-musleabihf` | 32-bit Raspberry Pi OS on a Pi 2 or newer |
   | `x86_64` | `x86_64-unknown-linux-musl` | PCs |
 
-- **Release notes:** GitHub generates them from the commits. They can be edited on GitHub
-  after the release.
+- **Release notes,** as printerkeep writes them (user, 2026-11-22):
+  - **Commit subjects are the notes.** A change users notice is a `feat:` or `fix:` commit,
+    and its subject says what users get. A scope, such as `feat(updater):`, is optional and
+    stays out of the notes. Other types (`docs:`, `test:`, `refactor:`, `chore:`, `ci:`,
+    `release:`) stay out of the notes, however big the change.
+  - **Notes are written as you go.** Each `feat:` or `fix:` commit adds its note under
+    `## Unreleased` in `CHANGELOG.md`, in the same commit.
+  - **A release** is one commit, `release: <version>`. It sets the version in `Cargo.toml` and
+    renames `## Unreleased` to `## <version> (<date>)`. `git cliff --unreleased`, set up in
+    `cliff.toml`, checks that every `feat:` and `fix:` commit has a note.
+  - **The release's text** is that section, from `scripts/release-notes.sh`, with a link to
+    the whole changelog for users who skip releases. The workflow checks it before the builds,
+    so a release without notes fails early. Fluidd and Mainsail link to the release's page.
 - **Release builds and development builds:** CI builds with `ORRERY_RELEASE=1`. A `build.rs`
   bakes that flag, the target's archive name, and the repository into each binary. The
   repository is the one CI runs in, from GitHub's `GITHUB_REPOSITORY`, so a fork's releases
@@ -70,10 +88,10 @@ and release flag, and `just dist`.
 ## The `orrery` entry
 
 - **It's built in,** like `system`, and listed after it in `machine.update.status`.
-- **Channels:** `stable` follows GitHub's latest release, and `beta` takes prereleases too.
-  The default is `stable`. `dev` isn't offered: it would need a build for each commit.
-- **Options:** `[update_manager.orrery]` in `orrery.toml` can set `channel`, `enabled`, and
-  `repo`. `repo` overrides the repository the build names, for anyone who wants to follow
+- **One channel:** the entry follows GitHub's latest release. With no prereleases, there's
+  nothing for `beta` to follow, and `dev` would need a build for each commit. A `channel`
+  option for this entry is ignored, with a warning.
+- **Options:** `[update_manager.orrery]` in `orrery.toml` can set `enabled` and `repo`. `repo` overrides the repository the build names, for anyone who wants to follow
   their own fork (user, 2026-11-22). It's read only from `orrery.toml`, as Klipper's `origin`
   is.
 - **Clients:** Fluidd's Update button calls `machine.update.client` for any entry other than

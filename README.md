@@ -272,6 +272,50 @@ Later `ssh`, `scp`, and `copy-to-printer` runs can share it. It closes after 12 
 just disconnect-printer <ssh host>
 ```
 
+## Releases
+
+GitHub Actions checks every push: format, lint, unit tests, the conformance cases against
+orrery, and the shell scripts.
+
+**Commit subjects are the release notes.** A change users notice is a `feat:` or `fix:` commit,
+such as `feat(updater): Kalico's update stops before it overwrites a plugin's link`. The scope
+is optional. The same commit adds its note under `## Unreleased` in `CHANGELOG.md`: what users
+get, and what they notice after the update. Other changes are `docs:`, `test:`, `refactor:`,
+`ci:`, or `chore:`, and stay out of the notes. When users must do something after the update,
+mark the commit `feat!:` and say what in a `BREAKING CHANGE:` footer.
+
+To make a release:
+
+1. Set the new version in `Cargo.toml`, under `[workspace.package]`, such as `0.2.0`, and run
+   `cargo check` to update `Cargo.lock`.
+2. In `CHANGELOG.md`, rename `## Unreleased` to `## <version> (<date>)`. Check it against the
+   commits: each `feat:` and `fix:` commit has a note in this list:
+
+   ```
+   git cliff --unreleased
+   ```
+
+   To see the release's text, run `scripts/release-notes.sh <version>`.
+3. Commit as `release: <version>`, push, then tag `v<version>` and push the tag:
+
+   ```
+   git tag v0.2.0
+   git push origin v0.2.0
+   ```
+
+The release workflow refuses a tag that doesn't match `Cargo.toml`, and a version without
+notes. It runs the checks, builds an archive for `aarch64`, `armv7`, and `x86_64`, tries each
+one, and publishes them with their `SHA256SUMS` and the version's notes. "Run workflow" on the
+workflow's page builds and tests the archives without a release.
+
+To build an archive locally, run:
+
+```
+just dist <arch>
+```
+
+`<arch>` is `aarch64`, `armv7`, or `x86_64`. The archive and its checksum go to `dist/`.
+
 ## License
 
 orrery is a Moonraker-compatible API server, heavily inspired by

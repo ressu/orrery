@@ -1,0 +1,124 @@
+# A tag "v<major>.<minor>.<patch>" (for example v0.2.0) runs the checks, builds an archive for
+# each CPU, and publishes them with their SHA256SUMS and the version's notes from CHANGELOG.md
+# (docs/design/2026-11-22-self-update.md, "Releases"). No prereleases. "Run workflow" builds
+# and tests the archives without a release.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Fluidd and Mainsail offer an update only when the installed version and the release's
+      # title are both valid semantic versions: three numbers, no prerelease part.
+      - name: Tag matches the version
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          if ! printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::The version in Cargo.toml must be <major>.<minor>.<patch>, not $version."
+            exit 1
+          fi
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::The tag $TAG isn't v$version, the version in Cargo.toml."
+            exit 1
+          fi
+
+      # The text of the GitHub release, which Fluidd and Mainsail link to. Checked here, so a
+      # release without notes fails before the builds.
+      - name: Release notes in CHANGELOG.md
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAG: ${{ github.ref_name }}
+        run: scripts/release-notes.sh "${TAG#v}" > /dev/null
+
+  check:
+    needs: version
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    needs: check
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - arch: aarch64
+            target: aarch64-unknown-linux-musl
+            run: qemu-aarch64
+          - arch: armv7
+            target: armv7-unknown-linux-musleabihf
+            run: qemu-arm
+          - arch: x86_64
+            target: x86_64-unknown-linux-musl
+            run: ""
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: ${{ matrix.target }}
+
+      - name: Install qemu
+        if: matrix.run != ''
+        run: sudo apt-get update && sudo apt-get install -y qemu-user
+
+      # dist.sh builds with ORRERY_RELEASE=1, and links with rust-lld (.cargo/config.toml): no C
+      # cross toolchain. GITHUB_REPOSITORY, which Actions sets, names the repository the
+      # binaries update from, so a fork's releases update from the fork.
+      - name: Build the archive
+        run: scripts/dist.sh ${{ matrix.arch }}
+
+      - name: Smoke test
+        run: |
+          mkdir smoke
+          tar -xzf dist/orrery-*-${{ matrix.arch }}.tar.gz -C smoke
+          for program in orrery orrery-import; do
+            ${{ matrix.run }} smoke/$program --version
+          done
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist-${{ matrix.arch }}
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Collect the archives and their checksums
+        run: |
+          mkdir dist
+          mv artifacts/*/*.tar.gz dist/
+          cat artifacts/*/SHA256SUMS | sort -k2 > dist/SHA256SUMS
+          (cd dist && sha256sum --check SHA256SUMS)
+
+      # The release's title is the tag, which the update entry compares with orrery's version.
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          scripts/release-notes.sh "${TAG#v}" > release-notes.md
+          gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" \
+            --notes-file release-notes.md

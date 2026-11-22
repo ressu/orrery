@@ -1,0 +1,46 @@
+# Lint, unit tests, and orrery's conformance cases. The toolchain is the one rust-toolchain.toml
+# pins, the same as the flake's dev shell. The reference tiers (upstream Moonraker, real
+# Klipper) need their sources checked out beside this repository, so they run only locally.
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  # The release workflow runs these checks before it builds.
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Installs the toolchain from rust-toolchain.toml and caches the build.
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      # The D-Bus client's tests start a private dbus-daemon.
+      - name: Install dbus-daemon
+        run: command -v dbus-daemon || { sudo apt-get update && sudo apt-get install -y dbus-daemon; }
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --workspace
+
+      # The cases start orrery and its update agent, so both are built first.
+      - name: Conformance cases against orrery
+        run: |
+          cargo build -p conformance -p orrery -p orrery-updater
+          cargo run -q -p conformance -- --target orrery
+
+      # shellcheck is installed on the GitHub runners.
+      - name: Shell scripts
+        run: shellcheck scripts/*.sh
