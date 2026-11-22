@@ -281,8 +281,8 @@ An update installs packages and restarts services, which are admin rights alread
 is admin too (user, 2026-11-22): only someone who can act on the result needs it. That may
 change if some entries later get roles of their own, so that an operator could update them.
 
-Today an agent has one `call_role` for all its methods (`crates/orrery/src/agents.rs:113`).
-This needs a role per mapped method, such as a `roles` table in `[agent.<name>]`.
+The built-in agent gets `call_role = "admin"`, and `call_roles` gives `status` to viewers (see
+"Agents" in the authorization note).
 
 **The agent itself** has the `admin` role, because it calls `machine.services.restart`.
 Processes of the same user are admin anyway (see the authorization note).

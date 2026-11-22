@@ -156,8 +156,9 @@ pub enum Need {
     Role(Role),
     /// The agent of this name, or `admin`: its database namespace, its own unit.
     Owner(String),
-    /// Calling the agent of this name: its `call_role`, `operator` by default.
-    Call(String),
+    /// Calling a method of the agent of this name, named under `agent.<name>.`: the agent's
+    /// `call_roles` or `call_role`, `operator` by default.
+    Call(String, String),
 }
 
 /// Checks a request against what its endpoint needs. A refusal says what the request would
@@ -180,8 +181,8 @@ pub fn authorize(app: &App, access: &Access, endpoint: &str, kind: RequestType, 
             }
             (Role::Admin, format!("Only the agent {agent} or an admin"))
         }
-        Need::Call(agent) => {
-            let r = app.agents.call_role(agent);
+        Need::Call(agent, method) => {
+            let r = app.agents.call_role(agent, method);
             (r, format!("Only {}", plural(r)))
         }
     };
@@ -222,7 +223,7 @@ pub fn audit(app: &App, access: &Access, endpoint: &str, kind: RequestType, args
         Need::Anyone => return,
         Need::Role(role) => role == Role::Admin,
         Need::Owner(_) => true,
-        Need::Call(agent) => app.agents.call_role(&agent) == Role::Admin,
+        Need::Call(agent, method) => app.agents.call_role(&agent, &method) == Role::Admin,
     };
     let mut line = format!("{} asked to {}", access.requester(), action(app, endpoint, kind, args));
     let shown: Vec<String> = AUDIT_ARGS
@@ -312,10 +313,17 @@ fn action(app: &App, endpoint: &str, kind: RequestType, args: &Args) -> String {
         }
     }
     if endpoint.starts_with("/agent/") || endpoint == "/server/extensions/request" {
-        let agent = match endpoint.strip_prefix("/agent/") {
-            Some(rest) => rest.split('/').next().unwrap_or_default().to_owned(),
-            None => arg("agent"),
+        let (agent, method) = match endpoint.strip_prefix("/agent/") {
+            Some(rest) => {
+                let (agent, method) = rest.split_once('/').unwrap_or((rest, ""));
+                (agent.to_owned(), method.replace('/', "."))
+            }
+            None => (arg("agent"), arg("method")),
         };
+        // When the agent's methods have roles of their own, the method is what was refused.
+        if !method.is_empty() && app.agents.has_call_roles(&agent) {
+            return format!("call {method} on the agent {agent}");
+        }
         return format!("use the agent {agent}");
     }
     if let Some(verb) = endpoint.strip_prefix("/machine/services/") {
@@ -367,7 +375,8 @@ fn need(app: &App, endpoint: &str, kind: RequestType, args: &Args) -> Need {
         return klippy_need(endpoint);
     }
     if let Some(rest) = endpoint.strip_prefix("/agent/") {
-        return Need::Call(rest.split('/').next().unwrap_or_default().to_owned());
+        let (agent, method) = rest.split_once('/').unwrap_or((rest, ""));
+        return Need::Call(agent.to_owned(), method.to_owned());
     }
     if let Some(rest) = endpoint.strip_prefix("/server/files/") {
         return files_need(rest, kind, args);
@@ -414,7 +423,8 @@ fn need(app: &App, endpoint: &str, kind: RequestType, args: &Args) -> Need {
         "/connection/register_remote_method" | "/connection/send_event" => Viewer,
         e if e.starts_with("/orrery/agent/") => Viewer,
         "/server/extensions/request" => {
-            return Need::Call(args.get("agent").and_then(Value::as_str).unwrap_or_default().to_owned());
+            let arg = |k| args.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
+            return Need::Call(arg("agent"), arg("method"));
         }
         "/server/database/item" => return database_need(app, kind, args),
         e if e.starts_with("/machine/services/") => return service_need(app, e, args),

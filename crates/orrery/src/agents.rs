@@ -47,6 +47,10 @@ pub struct AgentConfig {
     pub role: Role,
     /// `call_role`: what a client needs to call the agent. The default is operator.
     pub call_role: Role,
+    /// `call_roles`: roles for some of the agent's methods, by their names under
+    /// `agent.<name>.`, such as `("status", Viewer)`. A name covers the methods under it too,
+    /// and the longest name that matches wins over `call_role`.
+    pub call_roles: Vec<(String, Role)>,
 }
 
 /// A systemd service that runs an agent.
@@ -110,10 +114,22 @@ impl Agents {
         &self.configs
     }
 
-    /// What a client needs to call an agent: its `call_role`, or operator for an agent that
-    /// isn't configured.
-    pub fn call_role(&self, name: &str) -> Role {
-        self.get(name).map_or(Role::Operator, |c| c.call_role)
+    /// What a client needs to call one of an agent's methods, named under `agent.<name>.` with
+    /// dots or slashes, such as `status`: the longest matching `call_roles` name, the agent's
+    /// `call_role`, or operator for an agent that isn't configured.
+    pub fn call_role(&self, name: &str, method: &str) -> Role {
+        let Some(c) = self.get(name) else { return Role::Operator };
+        let method = method.trim_matches('/').replace('/', ".");
+        c.call_roles
+            .iter()
+            .filter(|(prefix, _)| is_under(&method, prefix))
+            .max_by_key(|(prefix, _)| prefix.len())
+            .map_or(c.call_role, |(_, role)| *role)
+    }
+
+    /// Whether some of an agent's methods have roles of their own, in `call_roles`.
+    pub fn has_call_roles(&self, name: &str) -> bool {
+        self.get(name).is_some_and(|c| !c.call_roles.is_empty())
     }
 
     /// The agent whose unit a service name, as clients see it, refers to: `orrery-spoolman`
@@ -280,6 +296,30 @@ fn parse_section(config: &Config, section: &str, name: &str) -> Result<AgentConf
     let call_role = Role::parse(&call_role).ok_or_else(|| {
         anyhow::anyhow!("[{section}] call_role: expected \"viewer\", \"operator\", or \"admin\", got {call_role:?}")
     })?;
+    let mut call_roles = Vec::new();
+    match s.get_value("call_roles") {
+        None => {}
+        Some(Value::Object(roles)) => {
+            for (method, role) in roles {
+                let valid = !method.is_empty()
+                    && method.split('.').all(|part| {
+                        !part.is_empty() && part.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+                    });
+                if !valid || method.starts_with("agent.") {
+                    bail!(
+                        "[{section}] call_roles: {method:?} isn't one of this agent's method names; name it as under {own}., such as \"status\" for {own}.status"
+                    );
+                }
+                let role = role.as_str().and_then(Role::parse).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "[{section}] call_roles: {method} must be \"viewer\", \"operator\", or \"admin\", got {role}"
+                    )
+                })?;
+                call_roles.push((method, role));
+            }
+        }
+        Some(other) => bail!("[{section}] call_roles: expected a table, got {other}"),
+    }
     Ok(AgentConfig {
         name: name.to_owned(),
         component,
@@ -291,7 +331,13 @@ fn parse_section(config: &Config, section: &str, name: &str) -> Result<AgentConf
         unit,
         role,
         call_role,
+        call_roles,
     })
+}
+
+/// Whether `method` is `prefix`, or a method under it.
+fn is_under(method: &str, prefix: &str) -> bool {
+    method.strip_prefix(prefix).is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
 }
 
 /// The built-in Spoolman agent. It's off until `[spoolman]` has a `server`, in `moonraker.conf`
@@ -328,6 +374,7 @@ fn builtin_spoolman(
                 unit: None,
                 role: Role::Viewer,
                 call_role: Role::Operator,
+                call_roles: Vec::new(),
             });
             configs.last_mut().expect("just pushed")
         }
@@ -681,6 +728,7 @@ command = ["~/bin/orrery-spoolman", "-v"]
                 unit: None,
                 role: Role::Viewer,
                 call_role: Role::Operator,
+                call_roles: Vec::new(),
             })
         );
         assert_eq!(a.notification("spoolman", "active_spool_set"), Some("active_spool_set"));
@@ -719,6 +767,37 @@ command = ["~/bin/orrery-spoolman", "-v"]
         let mut child = child;
         let _ = child.kill();
         let _ = child.wait();
+    }
+
+    #[test]
+    fn roles_per_method() {
+        let a = agents(
+            r#"
+[agent.update]
+call_role = "admin"
+[agent.update.call_roles]
+status = "viewer"
+"jobs" = "operator"
+"jobs.reset" = "admin"
+"#,
+        )
+        .unwrap();
+        assert_eq!(a.call_role("update", "status"), Role::Viewer);
+        assert_eq!(a.call_role("update", "/status"), Role::Viewer);
+        assert_eq!(a.call_role("update", "refresh"), Role::Admin);
+        // A name covers the methods under it, and the longest one wins.
+        assert_eq!(a.call_role("update", "jobs/list"), Role::Operator);
+        assert_eq!(a.call_role("update", "jobs.reset"), Role::Admin);
+        // A name matches whole parts only.
+        assert_eq!(a.call_role("update", "status_all"), Role::Admin);
+        assert_eq!(a.call_role("update", ""), Role::Admin);
+        assert_eq!(a.call_role("other", "status"), Role::Operator);
+
+        let err = |t: &str| agents(t).unwrap_err().to_string();
+        assert!(err("[agent.a.call_roles]\n\"agent.a.x\" = \"viewer\"\n").contains("under agent.a."));
+        assert!(err("[agent.a.call_roles]\n\"x..y\" = \"viewer\"\n").contains("method names"));
+        assert!(err("[agent.a.call_roles]\nx = \"root\"\n").contains("must be"));
+        assert!(err("[agent.a]\ncall_roles = \"x\"\n").contains("expected a table"));
     }
 
     #[test]

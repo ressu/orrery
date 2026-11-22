@@ -310,6 +310,20 @@ know, so the check would mostly get in the way.
 
   `call_role` can also be `viewer`, for an agent that only reports. `role` is what the agent
   may do; `call_role` is what a client needs to call it.
+- **Some methods can have roles of their own** (2026-11-22), in `call_roles`. The names are the
+  agent's own, under `agent.<name>.`, so a mapped name such as `machine.update.status` gets the
+  role of the method it reaches. A name covers the methods under it, and the longest name that
+  matches wins. Every other method needs `call_role`:
+
+  ```toml
+  [agent.update]
+  call_role = "admin"
+
+  [agent.update.call_roles]
+  status = "viewer"   # agent.update.status, and machine.update.status through maps
+  ```
+
+  The refusal then names the method: "Only an admin can call refresh on the agent update."
 - **Gcode can reach an agent past `call_role`.** That's a known gap, to revisit later.
   - An agent can register a remote method with `connection.register_remote_method`
     (`crates/orrery/src/extensions.rs:164`). orrery registers it with Klipper.

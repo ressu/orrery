@@ -1,0 +1,53 @@
+name: call_roles gives some of an agent's methods their own role
+description: >
+  orrery only. The agent's call_role is admin, and call_roles lets viewers call its status
+  method. A mapped name gets the role of the agent method it reaches.
+targets: [orrery]
+transports: [http]
+klippy: none
+files:
+  config/orrery.toml: |
+    [authorization.keys]
+    viewer = ["dashboard"]
+
+    [agent.update]
+    call_role = "admin"
+
+    [agent.update.maps]
+    "machine.update" = "agent.update"
+
+    [agent.update.call_roles]
+    status = "viewer"
+steps:
+  - call: orrery.access.key.get
+    http: {verb: GET, path: /orrery/access/key/get, query: "name=dashboard"}
+    save: {viewer: key}
+  - agent:
+      connect:
+        name: update
+        via: unix
+        replies:
+          status: {result: {busy: false}}
+          refresh: {result: {busy: true}}
+  - call: orrery.agent.register_endpoint
+    as_agent: true
+    params: {path: status, request_methods: [GET]}
+  - call: orrery.agent.register_endpoint
+    as_agent: true
+    params: {path: refresh, request_methods: [POST]}
+  # The viewer may call status, by its mapped name and by the agent's own.
+  - call: machine.update.status
+    http: {verb: GET, path: /machine/update/status, headers: {X-Api-Key: "${viewer}"}}
+    expect: {busy: false}
+  - call: agent.update.status
+    http: {verb: GET, path: /agent/update/status, headers: {X-Api-Key: "${viewer}"}}
+    expect: {busy: false}
+  # The rest needs the agent's call_role.
+  - call: machine.update.refresh
+    http: {verb: POST, path: /machine/update/refresh, headers: {X-Api-Key: "${viewer}"}}
+    expect_error:
+      code: 403
+      message: "Only an admin can call refresh on the agent update. This connection has the viewer role, from its API key, so it can watch the printer but can't control it."
+  - call: machine.update.refresh
+    http: {verb: POST, path: /machine/update/refresh}
+    expect: {busy: true}
