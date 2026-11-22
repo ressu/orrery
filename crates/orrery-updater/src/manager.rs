@@ -15,6 +15,7 @@ use crate::deps::{self, Deps};
 use crate::executable::{self, Github, Installed, Saved};
 use crate::git::{self, RepoState, Rollback, Tracking};
 use crate::packagekit::PackageKit;
+use crate::plugins;
 
 /// Moonraker skips a refresh of everything within this long of the last one.
 const REFRESH_SPAM: Duration = Duration::from_secs(60);
@@ -128,6 +129,10 @@ pub struct Manager {
     config_warnings: Mutex<Vec<String>>,
     /// The `klipper` and `kalico` sections, for Klipper's entry once Klippy says where it runs.
     klipper_sections: Mutex<Vec<config::KlipperSection>>,
+    /// Every `git_repo` entry's name and path, to find the plugins linked into Klipper.
+    git_paths: Mutex<Vec<(String, std::path::PathBuf)>>,
+    /// The plugin links in Klipper's folder, from its entry's last refresh.
+    plugin_links: Mutex<plugins::Links>,
     /// Commands waiting for the one that runs. While one waits, restarts wait for it too.
     waiting: AtomicUsize,
     /// Services to restart once the updates are done, in the order they were added.
@@ -222,6 +227,8 @@ impl Manager {
             warnings: Mutex::new(Vec::new()),
             config_warnings: Mutex::new(Vec::new()),
             klipper_sections: Mutex::new(Vec::new()),
+            git_paths: Mutex::new(Vec::new()),
+            plugin_links: Mutex::new(plugins::Links::default()),
             waiting: AtomicUsize::new(0),
             pending: Mutex::new(Vec::new()),
             restart_after_print: AtomicBool::new(false),
@@ -382,6 +389,13 @@ impl Manager {
             if global.enable_auto_refresh { "" } else { " only at startup" }
         );
         *self.view.lock().expect("view lock") = states.iter().map(|s| (s.entry.name.clone(), view_of(s))).collect();
+        *self.git_paths.lock().expect("paths lock") = states
+            .iter()
+            .filter_map(|s| match &s.entry.kind {
+                Kind::Git(o) => Some((s.entry.name.clone(), o.path.clone())),
+                _ => None,
+            })
+            .collect();
         *self.entries.lock().await = states;
         *self.global.lock().expect("global lock") = Some(global);
         *self.klipper_sections.lock().expect("sections lock") = klipper_sections;
@@ -457,6 +471,11 @@ impl Manager {
             let mut view = self.view.lock().expect("view lock");
             let at_view = at.min(view.len());
             view.insert(at_view, (s.entry.name.clone(), view_of(&s)));
+        }
+        // The links decide restarts, so they're found now even when no refresh is due.
+        if let Kind::Git(o) = &s.entry.kind {
+            let others = self.git_paths.lock().expect("paths lock").clone();
+            *self.plugin_links.lock().expect("links lock") = plugins::find(&o.path, &others).await;
         }
         let due = is_due(&s.entry, &s.stored, now()) || s.stored.config_hash != s.entry.hash;
         if due && !self.is_printing() {
@@ -590,7 +609,13 @@ impl Manager {
                 return;
             }
         };
-        let repo = git::refresh(&s.entry, opts, &s.stored.tracking, fetch).await;
+        let mut repo = git::refresh(&s.entry, opts, &s.stored.tracking, fetch).await;
+        if let (Some(project), true) = (s.entry.klippy, repo.repo_detected) {
+            let others = self.git_paths.lock().expect("paths lock").clone();
+            let links = plugins::find(&opts.path, &others).await;
+            repo.set_plugins(project.title(), &links);
+            *self.plugin_links.lock().expect("links lock") = links;
+        }
         s.stored.tracking = git::tracking_of(&repo);
         s.repo = Some(repo);
         self.save(s).await;
@@ -772,6 +797,17 @@ impl Manager {
         p.send(&format!("Updating Application {name}..."), false).await;
         p.send(&format!("Git Repo {name}: Updating Repo..."), false).await;
         let Kind::Git(opts) = &s.entry.kind else { unreachable!("an executable updates above") };
+        if let Some(project) = s.entry.klippy {
+            // Git would stop halfway on a file the update adds that's already there.
+            let added = plugins::added(&opts.path, &repo.current_commit, &repo.upstream_commit)
+                .await
+                .map_err(|e| Failure::new(500, e))?;
+            let links = self.plugin_links.lock().expect("links lock").clone();
+            let collisions = plugins::collisions(project.title(), &added, &links);
+            if !collisions.is_empty() {
+                return Err(Failure::new(400, collisions.join(" ")));
+            }
+        }
         let rollback = Rollback::of(repo);
         let before = Deps::read(&s.entry.kind.deps()).await;
         git::fast_forward(opts, repo).await.map_err(|e| Failure::new(500, e))?;
@@ -992,8 +1028,14 @@ impl Manager {
 
     /// Adds the entry's services to the restarts that wait for the end of the updates.
     fn add_pending(&self, entry: &Entry) {
+        let links_into_klipper = self.plugin_links.lock().expect("links lock").by_entry.contains_key(&entry.name);
         let mut pending = self.pending.lock().expect("pending lock");
-        for service in entry.services() {
+        let mut services = entry.services();
+        // A plugin linked into Klipper's folder changes what Klippy loads.
+        if links_into_klipper && !services.iter().any(|s| s == "klipper") {
+            services.push("klipper".into());
+        }
+        for service in services {
             if service == "moonraker" {
                 tracing::info!("{}: managed_services names moonraker, which orrery doesn't restart", entry.name);
             } else if !pending.contains(&service) {
@@ -1206,6 +1248,19 @@ mod tests {
         m.add_pending(&e("filter_monitor", json!({"managed_services": "klipper moonraker"})));
         m.add_pending(&e("led_effect", json!({"is_system_service": false})));
         assert_eq!(*m.pending.lock().unwrap(), ["crowsnest", "klipper"]);
+    }
+
+    #[test]
+    fn plugins_linked_into_klipper_restart_it() {
+        let g = config::global(&Map::new(), &mut Vec::new());
+        let map = json!({"type": "git_repo", "path": "/x", "origin": "o", "is_system_service": false});
+        let led = config::entry("led_effect", map.as_object().unwrap(), &g).unwrap();
+        let m = Manager::new();
+        m.add_pending(&led);
+        assert!(m.pending.lock().unwrap().is_empty());
+        m.plugin_links.lock().unwrap().by_entry.insert("led_effect".into(), vec!["klippy/extras/led_effect.py".into()]);
+        m.add_pending(&led);
+        assert_eq!(*m.pending.lock().unwrap(), ["klipper"]);
     }
 
     #[test]

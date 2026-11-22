@@ -12,13 +12,14 @@ use crate::version::GitVersion;
 
 /// How long one `git` command may run. A fetch over a slow link takes the longest.
 const FETCH_TIMEOUT: Duration = Duration::from_secs(300);
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
+pub const COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
 /// Moonraker lists at most this many commits behind, and keeps the first 30 and the tagged ones.
 const MAX_LOG: usize = 100;
 const KEEP_UNTAGGED: usize = 30;
 /// Untracked files with these endings are reported, as Moonraker does: they may be code that
 /// changes how the repo runs.
 const SOURCE_ENDINGS: &[&str] = &[".py", ".c", ".cpp"];
+const UNTRACKED: &str = "Repo has untracked source files: ";
 const LOG_FORMAT: &str = "--format=sha:%H%x1Dauthor:%an%x1Ddate:%ct%x1Dsubject:%s%x1Dmessage:%b%x1E";
 const REF_FORMAT: &str = "--format=%(if)%(*objecttype)%(then)%(*objecttype) %(*objectname)%(else)%(objecttype) %(objectname)%(end) %(refname)";
 
@@ -88,6 +89,8 @@ pub struct RepoState {
     pub diverged: bool,
     pub modified: Vec<String>,
     pub untracked: Vec<String>,
+    /// For Klipper's entry: the files other entries link into its folder, by entry.
+    pub plugin_links: std::collections::BTreeMap<String, Vec<String>>,
     pub pinned_valid: bool,
     pub warnings: Vec<String>,
     pub anomalies: Vec<String>,
@@ -113,6 +116,7 @@ impl RepoState {
             diverged: false,
             modified: Vec::new(),
             untracked: Vec::new(),
+            plugin_links: std::collections::BTreeMap::new(),
             pinned_valid: true,
             warnings: Vec::new(),
             anomalies: Vec::new(),
@@ -134,7 +138,7 @@ impl RepoState {
     /// The entry's object in `version_info`, with Moonraker's fields.
     pub fn status(&self, entry: &Entry, rollback_version: Option<&str>) -> Value {
         let current = self.current.short();
-        json!({
+        let mut status = json!({
             "name": entry.name,
             "configured_type": "git_repo",
             "detected_type": "git_repo",
@@ -165,7 +169,23 @@ impl RepoState {
             "corrupt": false,
             "warnings": self.warnings,
             "anomalies": if entry.report_anomalies { self.anomalies.clone() } else { Vec::new() },
-        })
+        });
+        if entry.klippy.is_some() {
+            status["plugin_links"] = json!(self.plugin_links);
+        }
+        status
+    }
+
+    /// For Klipper's entry: plugin links that belong to another entry aren't anomalies, and
+    /// each other untracked source file is a warning. Neither makes the entry invalid.
+    pub fn set_plugins(&mut self, project: &str, links: &crate::plugins::Links) {
+        self.anomalies.retain(|a| !a.starts_with(UNTRACKED));
+        self.untracked.clear();
+        for file in links.unknown.iter().filter(|f| SOURCE_ENDINGS.iter().any(|e| f.ends_with(e))) {
+            self.warnings.push(format!("{file} isn't {project}'s, and no update entry has it."));
+            self.untracked.push(file.clone());
+        }
+        self.plugin_links.clone_from(&links.by_entry);
     }
 }
 
@@ -409,7 +429,7 @@ fn warnings(s: &mut RepoState, opts: &GitOptions) {
         s.anomalies.push(format!("Unencrypted remote url: {}", s.url));
     }
     if !s.untracked.is_empty() {
-        s.anomalies.push(format!("Repo has untracked source files: {}", s.untracked.join(", ")));
+        s.anomalies.push(format!("{UNTRACKED}{}", s.untracked.join(", ")));
     }
     if s.diverged {
         s.anomalies.push("Repo has diverged from remote".into());
@@ -930,6 +950,21 @@ mod tests {
         let s = refresh(&e, &opts, &Tracking::default(), false).await;
         assert_eq!(s.url, opts.origin);
         assert!(s.anomalies.is_empty(), "{:?}", s.anomalies);
+    }
+
+    #[test]
+    fn plugin_links_are_not_anomalies() {
+        let mut s = RepoState::unknown();
+        s.untracked = vec!["klippy/extras/led_effect.py".into(), "klippy/extras/auto_tap.py".into()];
+        s.anomalies = vec!["Unofficial remote url: x".into(), format!("{UNTRACKED}{}", s.untracked.join(", "))];
+        let mut links = crate::plugins::Links::default();
+        links.by_entry.insert("led_effect".into(), vec!["klippy/extras/led_effect.py".into()]);
+        links.unknown = vec!["klippy/extras/auto_tap.py".into(), "klippy/extras/notes.txt".into()];
+        s.set_plugins("Kalico", &links);
+        assert_eq!(s.anomalies, ["Unofficial remote url: x"]);
+        assert_eq!(s.warnings, ["klippy/extras/auto_tap.py isn't Kalico's, and no update entry has it."]);
+        assert_eq!(s.untracked, ["klippy/extras/auto_tap.py"]);
+        assert_eq!(s.plugin_links["led_effect"], ["klippy/extras/led_effect.py"]);
     }
 
     #[test]

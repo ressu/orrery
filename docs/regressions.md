@@ -372,6 +372,14 @@ change how safe or complete orrery is to run.
   - **`moved_origin`** is matched by its URL, without a request to GitHub.
   - **An unencrypted remote,** `http://` or `git://`, is an anomaly: "Unencrypted remote
     url: …". Kalico's own repo and branch aren't anomalies.
+  - **Plugin links in Klipper's folder** aren't anomalies when they point into another entry's
+    repo. Klipper's entry lists them in `plugin_links`. Any other untracked source file there
+    is a warning of its own, which doesn't block the update. Moonraker lists every one in its
+    "Repo has untracked source files" anomaly.
+  - **A plugin entry with links into Klipper's folder restarts Klipper,** whatever its
+    `managed_services` say.
+  - **Klipper's update stops before git** when it adds a file that's already there untracked,
+    and names the file and its entry. Moonraker runs git, which refuses halfway.
   - **pip isn't upgraded** before an entry's Python packages are installed.
   - **An executable's update replaces the program in one step,** so a failed download leaves
     the old one working. Moonraker deletes the old program first. A rollback downloads the

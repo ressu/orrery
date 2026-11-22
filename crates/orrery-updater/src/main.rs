@@ -13,6 +13,7 @@ mod executable;
 mod git;
 mod manager;
 mod packagekit;
+mod plugins;
 mod version;
 
 /// Logs a warning with only the first line of `detail`, such as apt's first error, and the rest

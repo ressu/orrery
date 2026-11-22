@@ -6,8 +6,8 @@ detects whether the printer runs Klipper or Kalico, names the entry after it, `k
 the user learns that their setup changed, and the update still runs. The entry also reports
 which plugins changed Klipper's own folder.
 
-**Status (2026-11-22):** approved. Steps 2 and 3 are built: the entry, Klipper or Kalico with
-its name, and the remotes. Steps 4 and 5 aren't.
+**Status (2026-11-22):** approved. Steps 2 to 4 are built: the entry, Klipper or Kalico with
+its name, the remotes, and the plugin links. Step 5 isn't.
 
 "Klipper" here means Klipper or Kalico, Klipper's fork. Both printers run Kalico, and both
 work the same way for updates.
@@ -160,16 +160,19 @@ the same rule, with the detected project as its `origin`.
 
 ### Plugins in Klipper's folder
 
-- **The agent finds the links.** Each untracked file in `klippy/extras` that links into another
-  entry's repo belongs to that entry. The status lists them under the entry, and they aren't
-  anomalies.
+- **The agent finds the links.** Each untracked file in Klipper's repo that links into another
+  `git_repo` entry's folder belongs to that entry. Klipper's entry lists them in
+  `plugin_links`, by entry, and they aren't anomalies. An entry whose folder holds Klipper's
+  own, such as one for the home folder, isn't a plugin. The links are found when Klipper's
+  entry is set up and at each refresh; that's a local `git ls-files`, with no network.
 - **Other untracked files are warnings**, named one by one: "klippy/extras/foo.py isn't
   Klipper's, and no update entry has it." The update still runs (user, 2026-11-22).
 - **A plugin entry that links into Klipper restarts `klipper`**, whatever `managed_services`
   says, since its update changes what Klippy loads.
 - **A collision stops the update** before git does, with both names: "Kalico's update adds
-  klippy/extras/led_effect.py, which is the led_effect entry's link. Remove the link, or update
-  led_effect first, then update again."
+  klippy/extras/led_effect.py, which is the led_effect entry's link. Remove the link, then
+  update again." For a file no entry has: "… which is already there and isn't Kalico's. Move
+  it away, then update again."
 - **Kalico's `klippy/plugins` folder** is checked the same way. Git ignores it, so its files
   are never warnings, and they can't collide with an update. That's what Kalico made it for.
 

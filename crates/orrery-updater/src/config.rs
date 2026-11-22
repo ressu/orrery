@@ -96,6 +96,14 @@ pub enum Project {
 }
 
 impl Project {
+    /// The project's name in messages.
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Klipper => "Klipper",
+            Self::Kalico => "Kalico",
+        }
+    }
+
     /// The entry's name.
     pub fn name(self) -> &'static str {
         match self {
