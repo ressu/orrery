@@ -360,8 +360,9 @@ In order, as of 2026-11-22:
 3. **`sudo orrery setup`** is built and checked on bluev2 (2026-11-22). Left: plugins that
    declare what setup should write. See the service-control note's Deployment section.
 4. **Processors,** starting with `.gcode.3mf`. See the plugin note's "Processors".
-5. **A `moonraker.conf` to `orrery.toml` converter,** the musl allocator, and a check of
-   Mainsail.
+5. **`orrery config upgrade`,** which also converts `moonraker.conf`: see
+   [2026-11-22-config-upgrade.md](2026-11-22-config-upgrade.md), a draft. Then the musl
+   allocator, and a check of Mainsail.
 6. **orrery edits `orrery.toml`** to give users roles, from Fluidd's add-user button or the CLI.
    See "Editing orrery.toml (later)" in [2026-11-21-logins.md](2026-11-21-logins.md).
 7. **How Fluidd's login flows are triggered,** to learn which kinds of login orrery can offer
