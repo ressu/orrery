@@ -1556,6 +1556,11 @@ version = "0.1.0"
 dependencies = [
  "orrery-agent",
  "orrery-dbus",
+ "reqwest",
+ "rustix",
+ "rustls",
+ "rustls-platform-verifier",
+ "rustls-rustcrypto",
  "serde_json",
  "tempfile",
  "tokio",

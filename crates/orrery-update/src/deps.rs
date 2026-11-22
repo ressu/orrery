@@ -10,12 +10,22 @@ use std::time::Duration;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-use crate::config::GitOptions;
 use crate::packagekit::Messages;
 
 /// How long one `pip install` may run, and how often it's tried, as in Moonraker.
 const PIP_TIMEOUT: Duration = Duration::from_secs(1200);
 const PIP_ATTEMPTS: usize = 3;
+
+/// Where an entry's dependencies are listed. Paths are relative to `path`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DepFiles {
+    pub path: PathBuf,
+    pub virtualenv: Option<PathBuf>,
+    pub pip_env: Vec<(String, String)>,
+    pub requirements: Option<String>,
+    pub system_dependencies: Option<String>,
+    pub install_script: Option<String>,
+}
 
 /// What an entry depends on at one point in time.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -26,7 +36,7 @@ pub struct Deps {
 
 impl Deps {
     /// Reads the entry's dependency files as they are now.
-    pub async fn read(opts: &GitOptions) -> Self {
+    pub async fn read(opts: &DepFiles) -> Self {
         Self { packages: system_packages(opts).await, modules: python_modules(opts).await }
     }
 
@@ -41,12 +51,12 @@ impl Deps {
 
 /// The requirements file, when the entry has a virtualenv: Moonraker reads `requirements`
 /// only then.
-pub fn requirements_file(opts: &GitOptions) -> Option<PathBuf> {
+pub fn requirements_file(opts: &DepFiles) -> Option<PathBuf> {
     opts.virtualenv.as_ref()?;
     opts.requirements.as_ref().map(|r| opts.path.join(r))
 }
 
-async fn python_modules(opts: &GitOptions) -> Vec<String> {
+async fn python_modules(opts: &DepFiles) -> Vec<String> {
     let Some(path) = requirements_file(opts) else { return Vec::new() };
     match tokio::fs::read_to_string(&path).await {
         Ok(text) => read_requirements(&text),
@@ -70,7 +80,7 @@ pub fn read_requirements(text: &str) -> Vec<String> {
         .collect()
 }
 
-async fn system_packages(opts: &GitOptions) -> Vec<String> {
+async fn system_packages(opts: &DepFiles) -> Vec<String> {
     if let Some(file) = &opts.system_dependencies {
         let path = opts.path.join(file);
         let parsed = tokio::fs::read_to_string(&path)
@@ -304,7 +314,7 @@ fn compare_parts(a: &[Part], b: &[Part]) -> Option<Ordering> {
 
 /// Runs `<virtualenv>/bin/python -m pip install -U -r <requirements>`, and passes on each line
 /// pip prints. It's tried three times, as in Moonraker.
-pub async fn pip_install(opts: &GitOptions, requirements: &Path, on_line: &Messages) -> Result<(), String> {
+pub async fn pip_install(opts: &DepFiles, requirements: &Path, on_line: &Messages) -> Result<(), String> {
     let venv = opts.virtualenv.as_ref().ok_or("The entry has no virtualenv")?;
     let python = venv.join("bin/python");
     if !python.is_file() {
@@ -406,18 +416,14 @@ mod tests {
         assert_eq!(v("sid"), [Part::Text("sid".into())]);
     }
 
-    fn venv_opts(dir: &Path, script: &str) -> GitOptions {
+    fn venv_opts(dir: &Path, script: &str) -> DepFiles {
         use std::os::unix::fs::PermissionsExt;
         let python = dir.join("env/bin/python");
         std::fs::create_dir_all(python.parent().unwrap()).unwrap();
         std::fs::write(&python, script).unwrap();
         std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755)).unwrap();
-        GitOptions {
+        DepFiles {
             path: dir.to_path_buf(),
-            origin: String::new(),
-            moved_origin: None,
-            primary_branch: "main".into(),
-            pinned_commit: None,
             virtualenv: Some(dir.join("env")),
             pip_env: vec![("PIP_TEST".into(), "yes".into())],
             requirements: Some("requirements.txt".into()),
@@ -448,7 +454,7 @@ mod tests {
         assert_eq!(pip_install(&opts, &req, &tx).await.unwrap_err(), "pip install failed: ERROR: no such package");
         assert_eq!(std::fs::read_to_string(&calls).unwrap().lines().count(), 3);
         // Without a virtualenv, there's nothing to install into.
-        assert!(requirements_file(&GitOptions { virtualenv: None, ..opts }).is_none());
+        assert!(requirements_file(&DepFiles { virtualenv: None, ..opts }).is_none());
     }
 
     #[test]

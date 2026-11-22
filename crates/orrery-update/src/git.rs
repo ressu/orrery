@@ -715,7 +715,7 @@ mod tests {
             let origin = self.path("origin.git").display().to_string();
             let map = json!({"type": "git_repo", "path": self.path("clone"), "origin": origin, "primary_branch": "main", "channel": channel});
             let e = crate::config::entry("test", map.as_object().unwrap(), &g).unwrap();
-            let crate::config::Kind::Git(opts) = e.kind.clone();
+            let crate::config::Kind::Git(opts) = e.kind.clone() else { panic!("a git entry") };
             (e, opts)
         }
 

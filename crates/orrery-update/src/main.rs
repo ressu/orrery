@@ -9,6 +9,7 @@
 
 mod config;
 mod deps;
+mod executable;
 mod git;
 mod manager;
 mod packagekit;

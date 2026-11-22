@@ -197,17 +197,29 @@ already uses.
 
 ### `executable`
 
-- **Refresh:** GitHub's `releases/latest` for `stable`, or the newest release for `beta`. The
-  release's tag is the `remote_version`. `release_info.json` in `path` gives the installed
-  version and asset.
-- **Update:** download `asset_name` to a temporary file in the same folder, make it executable,
-  and rename it over the old binary in one step. Then write the new `release_info.json`. A
-  failed download leaves the old binary as it was.
-- **Rollback:** download the previous release again. The rollback version is stored, not the
-  old binary, so an update doesn't double the disk use.
+- **Refresh:** GitHub's `releases/latest` for `stable`, or the newest release for `beta`, as in
+  Moonraker. The release's tag is the `remote_version`. `release_info.json` in `path` gives
+  the installed version and the asset's name; its `project_owner/project_name` wins over
+  `repo`, with an anomaly, as in Moonraker. An entry without a valid `release_info.json`,
+  outside a writable folder, or inside a git repo is invalid, and isn't checked.
+- **Channels:** `stable` and `beta` only. `channel: dev` falls back to `stable` with Moonraker's
+  warning.
+- **Update:** the release's asset that `release_info.json` names is downloaded to a hidden file
+  beside the program, made executable for its owner and group, and renamed over the old
+  program in one step. Then `release_info.json` gets the new version, written the same way
+  and with the old file's permissions. A failed or short download leaves the old program as
+  it was. Moonraker deletes the old program before it moves the new one in.
+- **Rollback:** the release the last update replaced, downloaded again by its tag. The
+  rollback version is stored, not the old program, so an update doesn't double the disk use.
+  orrery downloads the asset `release_info.json` names; Moonraker takes the release's first
+  asset, which is the wrong program when a release has one per architecture.
+- **Recover** is refused, as in Moonraker: "Updater printerkeep is not a Git Repo Type".
+- **`system_dependencies`** works as for `git_repo`. An executable has no Python packages.
 - **Rate limits:** GitHub allows 60 requests an hour without a token. `status` reports what's
-  left, as Moonraker does. A refresh asks only with `If-None-Match`, and an unchanged release
-  doesn't count against the limit.
+  left, as Moonraker does. A check sends the `ETag` from the last answer, so an unchanged
+  release answers with 304 and no body. GitHub still counts the request without a token.
+- **HTTPS** uses `reqwest` with rustls and the system's certificates, as the Spoolman agent
+  does.
 
 ### `system`
 
@@ -363,10 +375,12 @@ Each one becomes an entry in `docs/regressions.md` when it's built.
 7. A rollback refuses a repo with changed files.
 8. A hard recover of a missing repo clones it from `origin`.
 9. pip isn't upgraded before the Python packages are installed.
-10. No `klipper` or `moonraker` entry, and `moonraker` in `managed_services` restarts nothing.
-11. No `sudo apt-get` fallback.
-12. `web` and `zip` entries are in the backlog, and `python` entries come later.
-13. Periodic checks are on by default, weekly unless `refresh_interval` says otherwise, with no
+10. An executable's update replaces the program in one step, and its rollback downloads the
+    asset `release_info.json` names, not the release's first one.
+11. No `klipper` or `moonraker` entry, and `moonraker` in `managed_services` restarts nothing.
+12. No `sudo apt-get` fallback.
+13. `web` and `zip` entries are in the backlog, and `python` entries come later.
+14. Periodic checks are on by default, weekly unless `refresh_interval` says otherwise, with no
     `refresh_window`.
 
 ## The order of work

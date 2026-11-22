@@ -9,6 +9,11 @@ publish.workspace = true
 [dependencies]
 orrery-agent.workspace = true
 orrery-dbus.workspace = true
+reqwest = { workspace = true, features = ["rustls-no-provider"] }
+rustix = { workspace = true, features = ["fs"] }
+rustls.workspace = true
+rustls-platform-verifier.workspace = true
+rustls-rustcrypto.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true

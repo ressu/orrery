@@ -11,6 +11,8 @@ use std::time::Duration;
 
 use serde_json::{Map, Value};
 
+use crate::deps::DepFiles;
+
 /// The section, and the agent's name.
 pub const SECTION: &str = "update_manager";
 /// Names Moonraker gives its own entries. orrery has none of them yet, and refuses them as
@@ -63,6 +65,8 @@ pub struct Global {
 pub struct Entry {
     pub name: String,
     pub channel: Channel,
+    /// Set when the entry asked for a channel its type doesn't have.
+    pub channel_warning: Option<String>,
     pub refresh_interval: Duration,
     /// As written; `None` when the option isn't there. [`Entry::services`] reads it.
     pub managed_services: Option<Vec<String>>,
@@ -77,14 +81,46 @@ pub struct Entry {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Kind {
     Git(GitOptions),
+    Executable(ExecOptions),
 }
 
 impl Kind {
     pub fn configured_type(&self) -> &'static str {
         match self {
             Self::Git(_) => "git_repo",
+            Self::Executable(_) => "executable",
         }
     }
+
+    /// Where the entry lists its dependencies. An executable has only system packages, as in
+    /// Moonraker.
+    pub fn deps(&self) -> DepFiles {
+        match self {
+            Self::Git(g) => DepFiles {
+                path: g.path.clone(),
+                virtualenv: g.virtualenv.clone(),
+                pip_env: g.pip_env.clone(),
+                requirements: g.requirements.clone(),
+                system_dependencies: g.system_dependencies.clone(),
+                install_script: g.install_script.clone(),
+            },
+            Self::Executable(e) => DepFiles {
+                path: e.path.clone(),
+                system_dependencies: e.system_dependencies.clone(),
+                ..DepFiles::default()
+            },
+        }
+    }
+}
+
+/// An `executable` entry: a program from a project's GitHub releases.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExecOptions {
+    /// The folder with the program and its `release_info.json`.
+    pub path: PathBuf,
+    /// `owner/name` on GitHub.
+    pub repo: String,
+    pub system_dependencies: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -281,16 +317,43 @@ pub fn entry(name: &str, map: &Map<String, Value>, global: &Global) -> Result<En
             system_dependencies: o.text("system_dependencies")?,
             install_script: o.text("install_script")?,
         }),
-        Some(t @ ("web" | "zip" | "python" | "executable")) => {
+        Some("executable") => Kind::Executable(ExecOptions {
+            path: expand_home(&o.required("path")?),
+            repo: {
+                let repo = o.required("repo")?.trim().trim_matches('/').to_owned();
+                if repo.split('/').filter(|p| !p.is_empty()).count() != 2 {
+                    return Err(format!("[{}] repo: expected owner/name, got {repo:?}", o.section));
+                }
+                repo
+            },
+            system_dependencies: o.text("system_dependencies")?,
+        }),
+        Some(t @ ("web" | "zip" | "python")) => {
             return Err(format!("[{}]: orrery doesn't update {t} entries yet, so this entry is left out", o.section));
         }
         Some(t) => return Err(format!("[{}] type: orrery doesn't know the type {t:?}", o.section)),
         None => return Err(format!("[{}] needs a type option, such as git_repo", o.section)),
     };
-    let channel = o.channel()?.or(global.channel).unwrap_or(Channel::Dev);
+    let (channel, channel_warning) = match &kind {
+        Kind::Git(_) => (o.channel()?.or(global.channel).unwrap_or(Channel::Dev), None),
+        // Releases have no dev channel. Moonraker warns about one in the entry, and falls back
+        // to stable.
+        Kind::Executable(_) => match o.channel()? {
+            Some(Channel::Dev) => (
+                Channel::Stable,
+                Some(format!(
+                    "[{}]: Invalid value 'dev' for option 'channel'. Type 'executable' supports the following channels: ['stable', 'beta'].  Falling back to channel 'stable'",
+                    o.section
+                )),
+            ),
+            Some(c) => (c, None),
+            None => (global.channel.filter(|c| *c != Channel::Dev).unwrap_or(Channel::Stable), None),
+        },
+    };
     Ok(Entry {
         name: name.to_owned(),
         channel,
+        channel_warning,
         refresh_interval: o.hours("refresh_interval")?.unwrap_or(global.refresh_interval),
         managed_services: o.map.contains_key("managed_services").then(|| o.list("managed_services")).transpose()?,
         is_system_service: o.bool("is_system_service", true)?,
@@ -302,6 +365,14 @@ pub fn entry(name: &str, map: &Map<String, Value>, global: &Global) -> Result<En
 }
 
 impl Entry {
+    /// What Moonraker puts before the entry's progress messages.
+    pub fn prefix(&self) -> String {
+        match self.kind {
+            Kind::Git(_) => format!("Git Repo {}: ", self.name),
+            Kind::Executable(_) => format!("Executable {}: ", self.name),
+        }
+    }
+
     /// The services an update restarts, as Moonraker's `_configure_managed_services` picks
     /// them: by default the entry's own service, unless `is_system_service` is false. Only
     /// the entry's name, `klipper`, and `moonraker` are allowed, in that order.
@@ -391,7 +462,7 @@ mod tests {
         .unwrap();
         assert_eq!(e.services(), ["klipper", "moonraker"]);
         assert_eq!((e.channel, e.is_system_service, e.refresh_interval), (Channel::Dev, true, g.refresh_interval));
-        let Kind::Git(git) = &e.kind;
+        let Kind::Git(git) = &e.kind else { panic!("a git entry") };
         assert_eq!((git.primary_branch.as_str(), git.install_script.as_deref()), ("main", Some("install.sh")));
 
         // orrery.toml's types.
@@ -416,7 +487,7 @@ mod tests {
         )
         .unwrap();
         assert!(none.services().is_empty());
-        let Kind::Git(git) = &e.kind;
+        let Kind::Git(git) = &e.kind else { panic!("a git entry") };
         assert_eq!(git.primary_branch, "master");
 
         // `virtualenv` is relative to the repo; the older `env` names the virtualenv's Python.
@@ -424,7 +495,7 @@ mod tests {
             let mut m = json!({"type": "git_repo", "path": "/home/pi/repo", "origin": "o"});
             m.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
             let e = entry("v", &map(m), &g).unwrap();
-            let Kind::Git(git) = e.kind;
+            let Kind::Git(git) = e.kind else { panic!("a git entry") };
             git
         };
         assert_eq!(v(json!({"virtualenv": "env"})).virtualenv, Some(PathBuf::from("/home/pi/repo/env")));

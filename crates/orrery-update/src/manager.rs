@@ -12,6 +12,7 @@ use tokio::sync::{Notify, watch};
 
 use crate::config::{self, Entry, Global, Kind, SECTION};
 use crate::deps::{self, Deps};
+use crate::executable::{self, Github, Installed, Saved};
 use crate::git::{self, RepoState, Rollback, Tracking};
 use crate::packagekit::PackageKit;
 
@@ -22,8 +23,10 @@ const REFRESH_SPAM: Duration = Duration::from_secs(60);
 struct EntryState {
     entry: Entry,
     stored: Stored,
-    /// The last refresh's findings, since this agent started.
+    /// The last refresh's findings for a git repo, since this agent started.
     repo: Option<RepoState>,
+    /// The same for an executable.
+    installed: Option<Installed>,
 }
 
 /// What the database keeps for each entry, under its name in the `update_manager` namespace.
@@ -37,6 +40,8 @@ pub struct Stored {
     pub tracking: Tracking,
     /// Where a rollback goes: the state before the last update, or after the last recover.
     pub rollback: Option<Rollback>,
+    /// An executable's release and rollback.
+    pub release: Saved,
 }
 
 impl Stored {
@@ -52,6 +57,7 @@ impl Stored {
                 branch: text("rollback_branch").unwrap_or_else(|| "?".into()),
                 version: text("rollback_version").unwrap_or_else(|| "?".into()),
             }),
+            release: Saved::from_json(&v["release"]),
         }
     }
 
@@ -65,6 +71,7 @@ impl Stored {
             "rollback_commit": self.rollback.as_ref().map(|r| &r.commit),
             "rollback_branch": self.rollback.as_ref().map(|r| &r.branch),
             "rollback_version": self.rollback.as_ref().map(|r| &r.version),
+            "release": self.release.to_json(),
         })
     }
 }
@@ -118,6 +125,8 @@ pub struct Manager {
     /// Whether a task waits for a print to end, to restart the pending services.
     restart_after_print: AtomicBool,
     next_proc_id: AtomicU64,
+    /// GitHub, for executables; the error when HTTPS can't be set up.
+    github: Result<Github, String>,
 }
 
 /// One command's progress messages, sent as `notify_update_response` and logged.
@@ -205,6 +214,7 @@ impl Manager {
             pending: Mutex::new(Vec::new()),
             restart_after_print: AtomicBool::new(false),
             next_proc_id: AtomicU64::new(now() as u64),
+            github: Github::new(),
         })
     }
 
@@ -314,6 +324,7 @@ impl Manager {
             match config::entry(&name, &map, &global) {
                 Ok(e) => {
                     warnings.extend(e.services_warning());
+                    warnings.extend(e.channel_warning.clone());
                     entries.push(e);
                 }
                 Err(w) => warnings.push(w),
@@ -333,7 +344,7 @@ impl Manager {
             .into_iter()
             .map(|entry| {
                 let stored = stored.get(&entry.name).map(Stored::from_json).unwrap_or_default();
-                EntryState { entry, stored, repo: None }
+                EntryState { entry, stored, repo: None, installed: None }
             })
             .collect();
         tracing::info!(
@@ -381,12 +392,13 @@ impl Manager {
 
     fn status_json(&self) -> Value {
         let version_info: Map<String, Value> = self.view.lock().expect("view lock").iter().cloned().collect();
+        let rate = self.github.as_ref().map(Github::rate).unwrap_or_default();
         json!({
             "version_info": version_info,
             "busy": self.is_busy(),
-            "github_rate_limit": Value::Null,
-            "github_requests_remaining": Value::Null,
-            "github_limit_reset_time": Value::Null,
+            "github_rate_limit": rate.limit,
+            "github_requests_remaining": rate.remaining,
+            "github_limit_reset_time": rate.reset,
         })
     }
 
@@ -409,12 +421,37 @@ impl Manager {
 
     async fn refresh_one(&self, s: &mut EntryState) {
         self.read_repo(s, true).await;
-        tracing::info!("Checked {}: {}", s.entry.name, s.repo.as_ref().map_or_else(String::new, git::summary));
+        let summary = match (&s.repo, &s.installed) {
+            (Some(repo), _) => git::summary(repo),
+            (_, Some(i)) if s.stored.release.remote_version == i.version => format!("up to date at {}", i.version),
+            (_, Some(i)) => format!("at {}, {} available", i.version, s.stored.release.remote_version),
+            _ => String::new(),
+        };
+        tracing::info!("Checked {}: {summary}", s.entry.name);
     }
 
-    /// Reads the entry's repo, fetching first when `fetch` is set, and stores what it finds.
+    /// Reads the entry's state, checking for updates first when `fetch` is set, and stores
+    /// what it finds: a git repo, or an executable and its newest release.
     async fn read_repo(&self, s: &mut EntryState, fetch: bool) {
-        let Kind::Git(opts) = &s.entry.kind;
+        let opts = match &s.entry.kind {
+            Kind::Git(opts) => opts,
+            Kind::Executable(opts) => {
+                let installed = executable::installed(opts).await;
+                if fetch {
+                    match &self.github {
+                        Ok(gh) => executable::refresh(gh, &s.entry, &installed, &mut s.stored.release).await,
+                        Err(e) => s.stored.release.last_error.clone_from(e),
+                    }
+                }
+                if s.stored.release.rollback_version == "?" && installed.valid {
+                    s.stored.release.rollback_version.clone_from(&installed.version);
+                    s.stored.release.rollback_repo.clone_from(&installed.repo);
+                }
+                s.installed = Some(installed);
+                self.save(s).await;
+                return;
+            }
+        };
         let repo = git::refresh(&s.entry, opts, &s.stored.tracking, fetch).await;
         s.stored.tracking = git::tracking_of(&repo);
         s.repo = Some(repo);
@@ -425,6 +462,9 @@ impl Manager {
     async fn save(&self, s: &mut EntryState) {
         if let Some(repo) = &s.repo {
             s.stored.status = repo.status(&s.entry, s.stored.rollback.as_ref().map(|r| r.version.as_str()));
+        }
+        if let Some(installed) = &s.installed {
+            s.stored.status = executable::status(&s.entry, installed, &s.stored.release);
         }
         s.stored.last_refresh_time = now();
         s.stored.config_hash = s.entry.hash.clone();
@@ -469,7 +509,7 @@ impl Manager {
             Some(name) => {
                 let s = entries.iter_mut().find(|s| &s.entry.name == name).expect("checked above");
                 match m.update_entry(s, p).await {
-                    Ok(true) => Ok(Some(format!("Git Repo {name}: Update Finished..."))),
+                    Ok(true) => Ok(Some(format!("{}Update Finished...", s.entry.prefix()))),
                     // Moonraker says nothing for an entry that's up to date.
                     Ok(false) => Ok(None),
                     Err(e) => Err(Failure { messages: vec![format!("Error updating {name}: {}", e.error)], ..e }),
@@ -497,6 +537,9 @@ impl Manager {
         let name = params["name"].as_str().ok_or_else(|| MethodError::new(400, "No data for argument: name"))?;
         if !self.has_entry(name) {
             return Err(Self::not_available(name));
+        }
+        if self.view.lock().expect("view lock").iter().any(|(n, v)| n == name && v["configured_type"] != "git_repo") {
+            return Err(MethodError::new(400, format!("Updater {name} is not a Git Repo Type")));
         }
         let hard = flag(params, "hard");
         let all_deps = flag(params, "update_deps");
@@ -527,7 +570,7 @@ impl Manager {
                 .rollback_entry(s, p)
                 .await
                 .map_err(|e| Failure { messages: vec![format!("Error Rolling Back {name}"), e.error.clone()], ..e })?;
-            Ok(Some(format!("Git Repo {name}: Rollback {}", if done { "Complete" } else { "not performed" })))
+            Ok(Some(format!("{}Rollback {}", s.entry.prefix(), if done { "Complete" } else { "not performed" })))
         })
         .await
     }
@@ -571,6 +614,9 @@ impl Manager {
     /// Updates one entry to the version a fresh check finds. Returns false when it's up to
     /// date.
     async fn update_entry(&self, s: &mut EntryState, p: &Progress) -> Result<bool, Failure> {
+        if let Kind::Executable(_) = s.entry.kind {
+            return self.update_executable(s, p, None).await;
+        }
         let name = s.entry.name.clone();
         self.read_repo(s, true).await;
         let repo = s.repo.as_ref().expect("just read");
@@ -582,9 +628,9 @@ impl Manager {
         }
         p.send(&format!("Updating Application {name}..."), false).await;
         p.send(&format!("Git Repo {name}: Updating Repo..."), false).await;
-        let Kind::Git(opts) = &s.entry.kind;
+        let Kind::Git(opts) = &s.entry.kind else { unreachable!("an executable updates above") };
         let rollback = Rollback::of(repo);
-        let before = Deps::read(opts).await;
+        let before = Deps::read(&s.entry.kind.deps()).await;
         git::fast_forward(opts, repo).await.map_err(|e| Failure::new(500, e))?;
         s.stored.rollback = Some(rollback);
         self.update_deps(s, &before, false, p).await;
@@ -597,8 +643,8 @@ impl Manager {
         let name = s.entry.name.clone();
         p.send(&format!("Git Repo {name}: Attempting Repo Recovery..."), false).await;
         self.read_repo(s, true).await;
-        let Kind::Git(opts) = &s.entry.kind;
-        let before = Deps::read(opts).await;
+        let Kind::Git(opts) = &s.entry.kind else { unreachable!("recover refuses other types") };
+        let before = Deps::read(&s.entry.kind.deps()).await;
         let repo = s.repo.as_ref().expect("just read");
         if hard {
             p.send(&format!("Git Repo {name}: Starting Clone Recovery..."), false).await;
@@ -627,6 +673,9 @@ impl Manager {
     }
 
     async fn rollback_entry(&self, s: &mut EntryState, p: &Progress) -> Result<bool, Failure> {
+        if let Kind::Executable(_) = s.entry.kind {
+            return self.rollback_executable(s, p).await;
+        }
         self.read_repo(s, false).await;
         let repo = s.repo.as_ref().expect("just read");
         // Moonraker resets a changed repo here, and the changes are lost.
@@ -636,8 +685,8 @@ impl Manager {
         let Some(rollback) = s.stored.rollback.clone() else {
             return Err(Failure::new(400, "Incomplete rollback data stored, cannot rollback"));
         };
-        let Kind::Git(opts) = &s.entry.kind;
-        let before = Deps::read(opts).await;
+        let Kind::Git(opts) = &s.entry.kind else { unreachable!("an executable rolls back above") };
+        let before = Deps::read(&s.entry.kind.deps()).await;
         let done = git::rollback(opts, repo, &rollback).await.map_err(|e| Failure::new(500, e))?;
         if done {
             self.update_deps(s, &before, false, p).await;
@@ -650,8 +699,9 @@ impl Manager {
     /// Installs what the entry's dependency files list now and didn't list `before`, or all
     /// of it with `all`. A failure is reported, and the update goes on, as in Moonraker.
     async fn update_deps(&self, s: &EntryState, before: &Deps, all: bool, p: &Progress) {
-        let Kind::Git(opts) = &s.entry.kind;
-        let name = &s.entry.name;
+        let files = s.entry.kind.deps();
+        let opts = &files;
+        let prefix = s.entry.prefix();
         let added = before.added(&Deps::read(opts).await, all);
         if added.packages.is_empty() && added.modules.is_empty() {
             return;
@@ -661,21 +711,21 @@ impl Manager {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
         let work = async move {
             if !added.packages.is_empty() {
-                p.send(&format!("Git Repo {name}: Installing system dependencies..."), false).await;
+                p.send(&format!("{prefix}Installing system dependencies..."), false).await;
                 let installed = match PackageKit::connect().await {
                     Ok(pk) => pk.install(&added.packages, &tx).await,
                     Err(e) => Err(e),
                 };
                 if let Err(e) = installed {
-                    p.send(&format!("Git Repo {name}: Error updating packages: {e}"), false).await;
+                    p.send(&format!("{prefix}Error updating packages: {e}"), false).await;
                 }
             }
             if !added.modules.is_empty()
                 && let Some(requirements) = deps::requirements_file(opts)
             {
-                p.send(&format!("Git Repo {name}: Updating python packages..."), false).await;
+                p.send(&format!("{prefix}Updating python packages..."), false).await;
                 if let Err(e) = deps::pip_install(opts, &requirements, &tx).await {
-                    p.send(&format!("Git Repo {name}: Error updating python requirements: {e}"), false).await;
+                    p.send(&format!("{prefix}Error updating python requirements: {e}"), false).await;
                 }
             }
         };
@@ -685,6 +735,89 @@ impl Manager {
             }
         };
         tokio::join!(work, forward);
+    }
+
+    /// Updates an executable to the newest release, or, with `to`, to the version and download
+    /// a rollback found. Returns false when it's there already.
+    async fn update_executable(
+        &self,
+        s: &mut EntryState,
+        p: &Progress,
+        to: Option<(String, executable::Asset)>,
+    ) -> Result<bool, Failure> {
+        let prefix = s.entry.prefix();
+        let rolling_back = to.is_some();
+        if !rolling_back {
+            self.read_repo(s, true).await;
+        }
+        let installed = s.installed.clone().expect("just read");
+        if !installed.valid {
+            return Err(Failure::new(400, format!("{prefix}Invalid install detected, aborting update")));
+        }
+        let (version, asset) = match to {
+            Some(target) => target,
+            None => {
+                let saved = &s.stored.release;
+                if saved.remote_version == "?" {
+                    return Err(Failure::new(400, format!("{prefix}Unable to locate update")));
+                }
+                if saved.remote_version == installed.version {
+                    return Ok(false);
+                }
+                let asset =
+                    saved.asset.clone().ok_or_else(|| Failure::new(400, format!("{prefix}Invalid download url")))?;
+                (saved.remote_version.clone(), asset)
+            }
+        };
+        let entry = &s.entry;
+        let gh = self.github.as_ref().map_err(|e| Failure::new(500, e.clone()))?;
+        p.send(&format!("{prefix}{}", if rolling_back { "Rolling Back..." } else { "Updating..." }), false).await;
+        p.send(&format!("{prefix}Downloading Release..."), false).await;
+        let before = Deps::read(&s.entry.kind.deps()).await;
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let work =
+            async move { executable::install(gh, entry, &installed, &asset, &version, &p.application, &tx).await };
+        let forward = async {
+            while let Some(line) = rx.recv().await {
+                p.output(&line).await;
+            }
+        };
+        let (installed_ok, ()) = tokio::join!(work, forward);
+        installed_ok.map_err(|e| Failure::new(500, e))?;
+        if !rolling_back {
+            let old = s.installed.as_ref().expect("just read");
+            s.stored.release.rollback_version.clone_from(&old.version);
+            s.stored.release.rollback_repo.clone_from(&old.repo);
+        }
+        self.update_deps(s, &before, false, p).await;
+        self.read_repo(s, false).await;
+        self.add_pending(&s.entry);
+        Ok(true)
+    }
+
+    /// Moonraker's `NetDeploy.rollback`: the release the last update replaced, downloaded
+    /// again. The asset is the one `release_info.json` names; Moonraker takes the release's
+    /// first asset.
+    async fn rollback_executable(&self, s: &mut EntryState, p: &Progress) -> Result<bool, Failure> {
+        self.read_repo(s, false).await;
+        let installed = s.installed.clone().expect("just read");
+        let saved = s.stored.release.clone();
+        if saved.rollback_version == "?" || saved.rollback_repo == "?" {
+            return Err(Failure::new(400, "Incomplete Rollback Data"));
+        }
+        if saved.rollback_version == installed.version {
+            return Ok(false);
+        }
+        let gh = self.github.as_ref().map_err(|e| Failure::new(500, e.clone()))?;
+        let release = match gh.release(&saved.rollback_repo, s.entry.channel, Some(&saved.rollback_version), None).await
+        {
+            Ok(executable::Fetched::Release(r, _)) if r.is_object() => r,
+            Ok(_) => return Err(Failure::new(500, "Failed to retrieve release asset data")),
+            Err(e) => return Err(Failure::new(500, e)),
+        };
+        let (_, asset, _) = executable::read_release(&release, installed.asset_name.as_deref());
+        let asset = asset.ok_or_else(|| Failure::new(500, "Failed to retrieve release asset data"))?;
+        self.update_executable(s, p, Some((saved.rollback_version, asset))).await
     }
 
     /// Adds the entry's services to the restarts that wait for the end of the updates.
@@ -912,6 +1045,19 @@ mod tests {
             status: json!({"version": "v1-0"}),
             tracking: Tracking { branch: Some("main".into()), remote: None },
             rollback: Some(Rollback { commit: "abc".into(), branch: "main".into(), version: "v0-9".into() }),
+            release: Saved {
+                remote_version: "v1.2.0".into(),
+                asset: Some(executable::Asset {
+                    url: "https://x/a".into(),
+                    content_type: "application/octet-stream".into(),
+                    size: 3,
+                }),
+                prerelease: false,
+                etag: Some(("https://api/x".into(), "\"abc\"".into())),
+                last_error: String::new(),
+                rollback_version: "v1.1.0".into(),
+                rollback_repo: "ressu/printerkeep".into(),
+            },
         };
         assert_eq!(Stored::from_json(&s.to_json()), s);
     }
