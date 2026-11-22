@@ -15,6 +15,16 @@ mod manager;
 mod packagekit;
 mod version;
 
+/// Logs a warning with only the first line of `detail`, such as apt's first error, and the rest
+/// in the verbose log. orrery writes each line of an agent's output as its own log line.
+pub fn warn_first_line(what: &str, detail: &str) {
+    let mut lines = detail.lines();
+    tracing::warn!("{what}{}", lines.next().unwrap_or_default());
+    if lines.next().is_some() {
+        tracing::debug!("{what}{detail}");
+    }
+}
+
 use orrery_agent::{AgentBuilder, MethodError};
 
 use manager::Manager;

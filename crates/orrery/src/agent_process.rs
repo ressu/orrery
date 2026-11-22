@@ -33,8 +33,9 @@ pub struct AgentProcesses {
     tasks: Vec<JoinHandle<()>>,
 }
 
-/// Starts every agent with a `command`. Call it once the unix socket is open.
-pub fn start(app: &Arc<App>, socket: Option<&Path>) -> AgentProcesses {
+/// Starts every agent with a `command`. Call it once the unix socket is open. With `verbose`,
+/// the agents log their details too, unless `RUST_LOG` says otherwise.
+pub fn start(app: &Arc<App>, socket: Option<&Path>, verbose: bool) -> AgentProcesses {
     let (stop, _) = watch::channel(false);
     let mut tasks = Vec::new();
     let commands: Vec<(String, Vec<String>)> =
@@ -52,6 +53,7 @@ pub fn start(app: &Arc<App>, socket: Option<&Path>) -> AgentProcesses {
             name,
             command: home_command(command),
             socket: socket.to_owned(),
+            verbose,
             stopping: stop.subscribe(),
         };
         tasks.push(tokio::spawn(agent.supervise()));
@@ -74,6 +76,7 @@ struct Agent {
     name: String,
     command: Vec<String>,
     socket: PathBuf,
+    verbose: bool,
     stopping: watch::Receiver<bool>,
 }
 
@@ -127,8 +130,11 @@ impl Agent {
             .current_dir(&self.app.paths.data)
             .env("ORRERY_SOCKET", &self.socket)
             .env("ORRERY_AGENT", &self.name)
-            .env("NO_COLOR", "1")
-            .stdin(std::process::Stdio::null())
+            .env("NO_COLOR", "1");
+        if self.verbose && std::env::var_os("RUST_LOG").is_none() {
+            cmd.env("RUST_LOG", "debug");
+        }
+        cmd.stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             // Its own process group, so Ctrl-C in orrery's terminal reaches only orrery, which

@@ -518,7 +518,11 @@ and a new endpoint is covered once it's in the roles table. Its target is `orrer
 - **When it failed,** the line ends with the error.
 - **The level depends on the role the request needs,** to spare the SD card. Requests that
   need `admin`, or reach what an agent owns, log at info. The rest log at debug, since Fluidd
-  writes its own settings to the database often.
+  writes its own settings to the database often. So does an agent's write to its own data,
+  such as the update agent saving each entry's state after a check (2026-11-22).
+- **An agent orrery's own user runs** has the `admin` role from the unix socket, and speaks for
+  its agent too, so log lines name the agent. A request error it gets logs at debug: the agent
+  decides what to log, such as the Spoolman agent finding no active spool.
 - **Not logged here:** reading requests; endpoints anyone may call, such as logging in, which log
   their own outcome; and refusals, which have their own line.
 - **Handlers log only what the dispatch can't see,** such as the name the old Klipper log got.

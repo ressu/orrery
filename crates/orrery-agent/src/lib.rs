@@ -179,7 +179,8 @@ impl AgentBuilder {
             "url": self.url,
         });
         agent.call("server.connection.identify", identity).await?;
-        tracing::info!("Connected to orrery at {} as agent {}", path.display(), self.name);
+        // orrery logs "Agent X connected".
+        tracing::debug!("Connected to orrery at {} as agent {}", path.display(), self.name);
         Ok(agent)
     }
 }

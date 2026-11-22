@@ -451,11 +451,20 @@ impl App {
                 // A refusal is logged by log_refusal, once per client and reason, with the client
                 // named, and a failed login by the login. Logging each one here too would fill the
                 // log with lines that don't say who.
+                // An agent gets the error and decides what to log, such as the Spoolman agent
+                // finding no active spool.
                 if !refused && !matches!(e.status, 401 | 403) {
-                    tracing::info!(
-                        "JSON-RPC Request Error - Requested Method: {method}, Code: {}, Message: {e}",
-                        e.status
-                    );
+                    if access.agent.is_some() {
+                        tracing::debug!(
+                            "JSON-RPC Request Error - Requested Method: {method}, Code: {}, Message: {e}",
+                            e.status
+                        );
+                    } else {
+                        tracing::info!(
+                            "JSON-RPC Request Error - Requested Method: {method}, Code: {}, Message: {e}",
+                            e.status
+                        );
+                    }
                 }
                 let mut reply = rpc_error(e.jsonrpc_code(), &e.message, id);
                 if let Some(data) = e.data {
@@ -647,7 +656,12 @@ async fn connection_identify(app: Arc<App>, req: Request) -> ApiResult {
         return Err(e);
     }
     let transport = if app.client_peer(conn).unix { "Unix Socket" } else { "Websocket" };
-    tracing::info!("{transport} {conn} Client Identified - Name: {name}, Version: {version}, Type: {client_type}");
+    // An agent logs "Agent X connected" instead.
+    if client_type == "agent" {
+        tracing::debug!("{transport} {conn} Client Identified - Name: {name}, Version: {version}, Type: {client_type}");
+    } else {
+        tracing::info!("{transport} {conn} Client Identified - Name: {name}, Version: {version}, Type: {client_type}");
+    }
     Ok(json!({"connection_id": conn}))
 }
 

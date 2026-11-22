@@ -241,7 +241,7 @@ pub async fn refresh(entry: &Entry, opts: &GitOptions, tracking: &Tracking, fetc
     if fetch && s.remote != "?" {
         let remote = s.remote.clone();
         if let Err(e) = git(path, &["fetch", &remote, "--prune"], FETCH_TIMEOUT).await {
-            tracing::warn!("{}: {e}", entry.name);
+            crate::warn_first_line(&format!("{}: ", entry.name), &e.to_string());
             s.warnings.push(format!("Can't fetch from {remote}: {}", e.message));
         }
     }

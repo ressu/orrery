@@ -455,15 +455,16 @@ impl Manager {
                         Ok(pk) => match pk.updates(None).await {
                             Ok((packages, refresh_error)) => {
                                 if let Some(e) = refresh_error {
-                                    tracing::warn!(
-                                        "Can't refresh the package lists, so the updates come from the old lists: {e}"
+                                    crate::warn_first_line(
+                                        "Can't refresh the package lists, so the updates come from the old lists: ",
+                                        &e,
                                     );
                                 }
                                 s.stored.packages = packages.iter().map(|p| p.name().to_owned()).collect();
                             }
-                            Err(e) => tracing::warn!("Can't check the system packages: {e}"),
+                            Err(e) => crate::warn_first_line("Can't check the system packages: ", &e),
                         },
-                        Err(e) => tracing::warn!("Can't check the system packages: {e}"),
+                        Err(e) => crate::warn_first_line("Can't check the system packages: ", &e),
                     }
                 }
                 self.save(s).await;

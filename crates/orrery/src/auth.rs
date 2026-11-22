@@ -211,8 +211,8 @@ const AUDIT_ARGS: &[&str] = &[
 
 /// Logs one line for a request that changes something: who asked, what for, and whether it
 /// failed (docs/design/2026-11-20-authorization.md, "Logging"). Requests that need `admin`, or
-/// reach what an agent owns, log at info; the rest at debug, since Fluidd writes its own state
-/// often and the log is on an SD card. Reading requests aren't logged, nor endpoints that need
+/// reach what an agent owns, log at info, except an agent's writes to its own data; the rest at
+/// debug, since Fluidd writes its own state often and the log is on an SD card. Reading requests aren't logged, nor endpoints that need
 /// nothing, such as logging in: those log their own outcome. Refusals are logged by
 /// [`Auth::log_refusal`] instead.
 pub fn audit(app: &App, access: &Access, endpoint: &str, kind: RequestType, args: &Args, outcome: Result<(), &str>) {
@@ -222,7 +222,9 @@ pub fn audit(app: &App, access: &Access, endpoint: &str, kind: RequestType, args
     let important = match need(app, endpoint, kind, args) {
         Need::Anyone => return,
         Need::Role(role) => role == Role::Admin,
-        Need::Owner(_) => true,
+        // An agent's writes to its own data are its routine, such as the update agent saving
+        // each entry's state after a check.
+        Need::Owner(agent) => access.agent.as_deref() != Some(agent.as_str()),
         Need::Call(agent, method) => app.agents.call_role(&agent, &method) == Role::Admin,
     };
     let mut line = format!("{} asked to {}", access.requester(), action(app, endpoint, kind, args));

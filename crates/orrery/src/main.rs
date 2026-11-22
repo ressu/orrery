@@ -263,7 +263,13 @@ fn setup_command(cli: &Cli, args: &SetupArgs) -> ExitCode {
 }
 
 /// Runs orrery until it's stopped. Returns whether a client asked it to restart.
-async fn run(paths: Paths, socket_path: PathBuf, toml: (PathBuf, bool), log_warning: Option<String>) -> Result<bool> {
+async fn run(
+    paths: Paths,
+    socket_path: PathBuf,
+    toml: (PathBuf, bool),
+    log_warning: Option<String>,
+    verbose: bool,
+) -> Result<bool> {
     for dir in [paths.data.clone(), paths.data.join("comms"), paths.logs_dir(), paths.gcodes_dir(), paths.config_dir()]
     {
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
@@ -287,7 +293,7 @@ async fn run(paths: Paths, socket_path: PathBuf, toml: (PathBuf, bool), log_warn
     app.start();
     // Kept until orrery exits, which removes the socket file.
     let _socket = unix_socket::start(&app, &socket_path).await?;
-    let agents = agent_process::start(&app, _socket.as_ref().map(|_| socket_path.as_path()));
+    let agents = agent_process::start(&app, _socket.as_ref().map(|_| socket_path.as_path()), verbose);
     let addr = format!("{host}:{port}");
     let listener = tokio::net::TcpListener::bind(&addr).await.with_context(|| format!("listening on {addr}"))?;
     tracing::info!("Listening on {addr}");
@@ -363,7 +369,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let result = runtime.block_on(run(paths, socket_path, toml, log_warning));
+    let result = runtime.block_on(run(paths, socket_path, toml, log_warning, cli.verbose));
     // Ends the tasks that are left, and writes out the log, before a restart replaces the
     // process.
     drop(runtime);

@@ -167,6 +167,12 @@ impl Agents {
         Ok(child)
     }
 
+    /// Whether `pid` is an agent orrery started, or a process one of them started.
+    pub fn is_started_process(&self, pid: u32) -> bool {
+        let started: Vec<u32> = self.processes.lock().expect("processes lock").values().copied().collect();
+        started.into_iter().any(|s| started_by(pid, s))
+    }
+
     pub fn set_process(&self, name: &str, pid: Option<u32>) {
         let mut processes = self.processes.lock().expect("processes lock");
         match pid {
@@ -531,6 +537,10 @@ pub async fn check_claim(app: &App, name: &str, conn: ConnId) -> Result<(), ApiE
         };
         tracing::info!(target: "orrery::auth", "Connection {conn} is agent {name}: {}", access.requester());
         app.set_client_access(conn, access);
+    } else {
+        // It has a role already, as orrery's own user does, and now speaks for the agent too, so
+        // the log names the agent, and writes to the agent's own data aren't audited at info.
+        app.set_client_access(conn, crate::auth::Access { agent: Some(name.to_owned()), ..access });
     }
     Ok(())
 }
@@ -656,7 +666,7 @@ async fn register_endpoint(app: Arc<App>, req: Request) -> ApiResult {
         }
     });
     r.register(&full, &types, Transports::All, forward);
-    tracing::info!("Agent {agent} registered endpoint {full}");
+    tracing::debug!("Agent {agent} registered endpoint {full}");
     Ok(json!("ok"))
 }
 

@@ -68,6 +68,13 @@ pub async fn start(app: &Arc<App>, path: &Path) -> Result<Option<UnixSocket>> {
     Ok(Some(UnixSocket { path: path.to_path_buf() }))
 }
 
+/// `tracing`'s macros need the level as a constant.
+macro_rules! log_at {
+    ($level:expr, $($arg:tt)+) => {
+        if $level == tracing::Level::DEBUG { tracing::debug!($($arg)+) } else { tracing::info!($($arg)+) }
+    };
+}
+
 async fn serve(app: Arc<App>, stream: UnixStream) {
     let cred = stream.peer_cred().ok();
     let (reader, mut writer) = stream.into_split();
@@ -88,7 +95,11 @@ async fn serve(app: Arc<App>, stream: UnixStream) {
         access.clone(),
     );
     let opened = std::time::Instant::now();
-    tracing::info!(
+    // An agent orrery started logs "Started agent" and "Agent connected" instead.
+    let own_agent = pid.and_then(|p| u32::try_from(p).ok()).is_some_and(|p| app.agents.is_started_process(p));
+    let level = if own_agent { tracing::Level::DEBUG } else { tracing::Level::INFO };
+    log_at!(
+        level,
         "Unix Socket Opened - Client ID: {conn}, Process ID: {}, User ID: {}, Group ID: {}, Access: {}",
         cred.and_then(|c| c.pid()).map_or("unknown".into(), |p| p.to_string()),
         cred.map_or("unknown".into(), |c| c.uid().to_string()),
@@ -109,7 +120,8 @@ async fn serve(app: Arc<App>, stream: UnixStream) {
     let name = app.client_name(conn);
     app.remove_client(conn);
     write_task.abort();
-    tracing::info!(
+    log_at!(
+        level,
         "Unix Socket Closed: ID: {conn}, Close Reason: {reason}, {}",
         crate::server::describe_close(name, opened)
     );
