@@ -181,6 +181,23 @@ unit tests against local git repos and a stand-in for GitHub.
 | `notify_update_response` | Covered | `update/agent` |
 | `notify_update_refreshed` | Covered | `update/agent` |
 
+## Spoolman
+
+The `orrery-spoolman` agent answers these (`spoolman-agent` in `docs/regressions.md`). The case
+is orrery only, with a test agent standing in for it. `crates/orrery-spoolman/tests/agent.rs`
+checks the agent itself, against stand-ins for orrery and Spoolman.
+
+| Method | Status | Cases |
+|---|---|---|
+| `server.spoolman.get_spool_id` | Covered | `agents/builtin_spoolman` |
+| `server.spoolman.post_spool_id` | Covered by the agent's test, not by a case | |
+| `server.spoolman.proxy` | To do | No case yet; Fluidd uses it on bluev2 every day |
+
+| Notification | Status | Cases |
+|---|---|---|
+| `notify_active_spool_set` | Covered by the agent's test, not by a case | |
+| `notify_spoolman_status_changed` | Covered by the agent's test, not by a case | |
+
 ## Out of scope
 
 Fluidd calls these, but they belong to components orrery leaves out for now. Each one needs at
@@ -188,5 +205,4 @@ most a stub answer:
 
 - `machine.device_power.*` (power devices), `notify_power_changed`.
 - `machine.timelapse.*` (timelapse plugin), `notify_timelapse_event`.
-- `server.spoolman.*`, `notify_active_spool_set`, `notify_spoolman_status_changed`.
 - `server.analysis.*` (Klipper Estimator analysis).
