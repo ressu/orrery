@@ -1,7 +1,9 @@
 # Config upgrades
 
-**Status (2026-11-22):** reviewed by the user, who answered the open questions. One question
-is left: where the table of option types lives. Nothing is built.
+**Status (2026-11-23):** reviewed by the user, who answered the open questions. Revised on
+2026-11-23: orrery reads `moonraker.conf` only through the conversion (see
+[One way in](#one-way-in-moonrakerconf-through-the-conversion)), which also settles where the
+table of option types lives. Nothing is built.
 
 As orrery matures, its options will move: a section gets renamed, one option splits in two, or
 something moves into `[moonraker_compat]`. Making every user edit `orrery.toml` by hand for each
@@ -14,13 +16,100 @@ converter.
 - **One command, `orrery config upgrade`,** brings `orrery.toml` to the current version, one
   step at a time. The first step copies settings from `moonraker.conf`.
 - **`moonraker.conf` stays** (user, 2026-11-22). The conversion only copies settings out of it.
-  orrery keeps reading it, and `orrery.toml` wins where both set an option, as now. Deleting it,
-  or telling the user they can, is for much later.
+  Deleting it, or telling the user they can, is for much later.
+- **orrery reads `moonraker.conf` only through the conversion** (user, 2026-11-23). At startup,
+  the conversion turns it into `orrery.toml` settings in memory, and `orrery.toml` wins over
+  them. Only what the conversion understands gets through, so components read one layout,
+  `orrery.toml`'s, and never Moonraker's.
 - **`orrery.toml` gets a version,** and each step is a small, tested function.
 - **orrery itself runs the same steps in memory** when it starts with an older file, and warns.
   So an upgraded orrery still starts, and its components only ever read the current version.
 - **Comments and layout survive,** through `toml_edit`. That's the library the later "orrery
   edits `orrery.toml`" item needs too (see the logins note).
+
+## One way in: moonraker.conf through the conversion
+
+Today orrery reads both files into one config, and remembers which options came from
+`orrery.toml`. Components and agents check that record for orrery's own options. For example,
+the update manager takes `preflight` and `type = "archive"` only from `orrery.toml`, and asks
+orrery which keys came from there (`from_orrery_toml`). So each orrery-only option needs its
+own check, and its warning tends to say that the feature refuses `moonraker.conf`.
+
+The reason is the other way round (user, 2026-11-23): `moonraker.conf` holds what Moonraker
+accepts. An option Moonraker doesn't have isn't converted, because Moonraker doesn't have it.
+
+So the conversion is the only reader of `moonraker.conf`:
+
+1. **At startup,** orrery parses `moonraker.conf` and its `[include]` files, and converts them
+   with step 0 to 1 into `orrery.toml` settings, in memory.
+2. **It lays `orrery.toml` over the result,** after any upgrade steps, so `orrery.toml` wins.
+3. **Components and agents read the merged settings,** in `orrery.toml`'s layout and types.
+   They don't know which file a setting came from, and don't need to.
+4. **`orrery config upgrade`** runs the same conversion and writes the result, as below.
+
+Because this runs at every start, an installer that appends to `moonraker.conf`, such as
+crowsnest's, still works without a conversion by hand.
+
+**The conversion knows Moonraker's options.** It has a table of the sections and options it
+converts, with their types. That table is the one place that knows Moonraker's layout, which
+answers this note's earlier open question.
+
+**It assumes `moonraker.conf` is valid** (user, 2026-11-23). Moonraker already checks the file,
+so the conversion doesn't check it again. It copies the options Moonraker accepts, and changes
+only what needs changing: a text value to its type, or a renamed option. What that means:
+
+- **Update manager entries are all converted,** each with only the options Moonraker accepts
+  in an `[update_manager <name>]` section. `type` and `path` are copied; `wrapper_folders`
+  isn't, since Moonraker has no such option. Values are copied as they are: the conversion
+  doesn't check that `type` is one Moonraker has. So an `archive` entry in `moonraker.conf`
+  arrives without `github`, `asset`, and `format`, and the update manager leaves it out for
+  the missing `github`, as it would in `orrery.toml`.
+- **orrery's own options in `moonraker.conf`,** such as `preflight`, aren't Moonraker's, so
+  they aren't copied. `orrery config upgrade` lists them in its report.
+- **Moonraker's options that orrery doesn't use,** inside a section orrery supports, still get
+  a warning, since the user expects them to do something.
+- **A section orrery doesn't support,** such as `[mqtt]` or `[power]`, is left out without a
+  warning at startup, so the log isn't full of them. `orrery config upgrade` lists them in its
+  report.
+
+**Settings merge one option at a time** (user, 2026-11-23). An option in `orrery.toml` replaces
+the same option from `moonraker.conf`, and nothing else. Rules that depend on which file a
+setting came from go away, and that's accepted. For example, today `[authorization.networks]`
+in `orrery.toml` makes orrery ignore `trusted_clients` as a whole (`auth.rs:664`). After the
+conversion, a rule like that can look only at the merged settings, not at where each came from.
+
+**Agents don't know `moonraker.conf` exists** (user, 2026-11-23). An agent gets its settings
+from orrery, with `orrery.agent.config`, and never reads a file. After the conversion, the reply
+has `orrery.toml`'s layout and types, whichever file a setting came from. So an agent:
+
+- reads each option with one type, such as `[spoolman] sync_rate` as a number, not as a number
+  or text;
+- never asks which file a setting came from;
+- never names `moonraker.conf` in its warnings or docs. A warning about a setting there, such as
+  a Moonraker option orrery doesn't use, comes from the conversion in orrery.
+
+Agents already ask orrery for their settings. What changes is in the reply, and in the code
+that now handles Moonraker's text: the Spoolman agent's `sync_rate`
+(`crates/orrery-spoolman/src/main.rs:236`), and the update manager's config getters and its
+"only from orrery.toml" checks.
+
+**What this removes:**
+
+- `from_orrery_toml` in the agents' config reply, and `config_from_orrery_toml` in
+  `orrery-agent`.
+- Each component's "only from orrery.toml" check, such as `own_options` in the update manager's
+  `config.rs`, and the Klipper entry's checks for `origin` and `primary_branch`.
+- Components' parsing of Moonraker's text values. The conversion gives each value its type from
+  the table (user, 2026-11-23): `force_logins: True` arrives as a boolean, and `sync_rate: 5`
+  as a number. Components and agents read one type per option, and don't parse text.
+- The notices that exist only because of the two files, such as "orrery ignores the option
+  preflight, since it takes it only from orrery.toml", the Klipper entry's warnings about
+  `origin` and `primary_branch` in `moonraker.conf`, and the `archive` warning. An option the
+  conversion doesn't copy never reaches a component, so the component has nothing to say about
+  it.
+
+**What stays the same:** `server.config`'s `orig` is still the text of `moonraker.conf`, and its
+`config` still shows the parsed values, so clients written for Moonraker find what they expect.
 
 ## The command
 
@@ -90,11 +179,10 @@ care.
 
 **Types.** `moonraker.conf` values are text. `orrery.toml` values are typed, so the step has to
 know each option's type: `port: 7125` becomes a number, `force_logins: True` a boolean, and an
-indented list such as `trusted_clients` an array. orrery knows the types only where its
-components read the options. The plan is a table of the options orrery reads, with their types.
-Today they're spread over getter calls with defaults, and `MOONRAKER_OPTIONS` lists Moonraker's
-options that orrery doesn't read (`config.rs:465`). The same table could later check `orrery.toml`
-for unknown options, which orrery doesn't do now.
+indented list such as `trusted_clients` an array. Today the types are spread over
+the components' getter calls, and `MOONRAKER_OPTIONS` lists Moonraker's options that orrery
+doesn't read (`config.rs:465`). The conversion's table replaces both (see
+[One way in](#one-way-in-moonrakerconf-through-the-conversion)).
 
 **What's copied:**
 
@@ -181,5 +269,7 @@ writing to `moonraker.conf`, and orrery reads it as a fallback.
 
 ## Open questions
 
-- Where does the table of option types live: next to each component's getters, or in one place
-  in `config.rs`?
+None. Sections that orrery's agents read, such as `[spoolman]` and `[update_manager <name>]`,
+are Moonraker sections, and the conversion's table lists them like any other. A Moonraker
+section orrery doesn't support yet, such as `[timelapse]`, isn't converted until orrery
+supports it; it goes into the table then.
