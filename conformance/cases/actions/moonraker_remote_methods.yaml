@@ -1,0 +1,41 @@
+name: Moonraker's remote methods run actions, so macros written for Moonraker keep working
+description: >
+  orrery only (docs/design/2026-11-23-buttons-and-actions.md). [moonraker_compat] registers
+  spoolman_set_active_spool with Klipper while the Spoolman agent is configured. It runs the
+  agent's action set_active_spool, which reaches post_spool_id, and that converts "3" as
+  Moonraker's get_int does. The runner's test agent stands in for orrery-spoolman.
+targets: [orrery]
+klippy: ready
+transports: [ws]
+config: |
+  [spoolman]
+  server: http://spoolman.invalid:7912
+files:
+  config/orrery.toml: |
+    [agent.spoolman]
+    command = false
+steps:
+  - agent:
+      connect:
+        name: spoolman
+        via: unix
+        replies:
+          post_spool_id: {result: {spool_id: 3}}
+  - call: orrery.agent.register_endpoint
+    as_agent: true
+    params: {path: spool_id, request_methods: [GET, POST]}
+    expect: ok
+  # A macro: `action_call_remote_method("spoolman_set_active_spool", spool_id=params.ID)`.
+  - klippy: {remote_method: {method: spoolman_set_active_spool, params: {spool_id: "3"}}}
+  - expect_agent_received: {method: post_spool_id, params: {spool_id: "3"}}
+  # The same through run_action, with the full name.
+  - klippy:
+      remote_method:
+        method: run_action
+        params: {action: agent.spoolman.action.set_active_spool, spool_id: 4}
+  - expect_agent_received: {method: post_spool_id, params: {spool_id: 4}}
+  # The agent can't take Orrery's names.
+  - call: connection.register_remote_method
+    as_agent: true
+    params: {method_name: spoolman_set_active_spool}
+    expect_error: {code: 400, message: Remote method (spoolman_set_active_spool) already registered}

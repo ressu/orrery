@@ -22,7 +22,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Result, bail};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::api::{Alias, ApiError, ApiResult, ConnId, Request, RequestType, Transports, handler};
 use crate::auth::Role;
@@ -103,6 +103,7 @@ impl Agents {
         let mut warnings = Vec::new();
         builtin_spoolman(config, agent_dir, &mut configs, &mut warnings);
         builtin_update_manager(config, agent_dir, &mut configs, &mut warnings);
+        builtin_gpio(config, agent_dir, &mut configs, &mut warnings);
         let own = configs
             .iter()
             .filter(|c| match (&c.command, agent_dir) {
@@ -247,6 +248,9 @@ impl Agents {
 fn parse_section(config: &Config, section: &str, name: &str) -> Result<AgentConfig> {
     if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
         bail!("[{section}]: an agent name may use letters, digits, '_' and '-'");
+    }
+    if matches!(name, "action" | "agent") {
+        bail!("[{section}]: an agent can't be named {name}, since action names use it");
     }
     let s = config.section(section);
     let component = s.get_opt_str("component");
@@ -447,6 +451,24 @@ fn builtin_update_manager(
     }
     builtin_command(c, agent_dir, "orrery-updater", "The update manager is set up in [update_manager]", warnings);
 }
+
+/// The built-in GPIO agent (docs/design/2026-11-23-buttons-and-actions.md). It's on when a
+/// button is configured, `[button.<name>]` in `orrery.toml` or `[button <name>]` in
+/// `moonraker.conf`, and orrery starts `orrery-gpio` from `agent_dir`. It reads the buttons with
+/// `orrery.agent.config`, from the section `button`, as orrery converted them.
+fn builtin_gpio(config: &Config, agent_dir: Option<&Path>, configs: &mut Vec<AgentConfig>, warnings: &mut Vec<String>) {
+    if config.section_names("button ").is_empty() {
+        return;
+    }
+    let c = builtin_entry(configs, GPIO);
+    if c.methods.is_empty() && c.notifications.is_empty() {
+        c.notifications = vec![("button_event".into(), "button_event".into())];
+    }
+    builtin_command(c, agent_dir, "orrery-gpio", "A button is set up", warnings);
+}
+
+/// The built-in GPIO agent's name.
+pub const GPIO: &str = "gpio";
 
 /// A built-in agent's table: the one `[agent.<name>]` made, or a new one with the defaults.
 fn builtin_entry<'a>(configs: &'a mut Vec<AgentConfig>, name: &str) -> &'a mut AgentConfig {
@@ -767,6 +789,9 @@ async fn set_warnings(app: Arc<App>, req: Request) -> ApiResult {
 async fn agent_config(app: Arc<App>, req: Request) -> ApiResult {
     let agent = require_agent(&app, &req)?;
     let section = req.args.opt_str("section")?.unwrap_or_else(|| agent.clone());
+    if agent == GPIO && (section == "button" || section.starts_with("button ")) {
+        return Ok(button_config(&app, &section));
+    }
     let own = section == agent || section.starts_with(&format!("{agent} ")) || section == format!("agent {agent}");
     if !own {
         return Err(ApiError::bad_request(format!("Agent {agent} may not read the section [{section}]")));
@@ -782,6 +807,21 @@ async fn agent_config(app: Arc<App>, req: Request) -> ApiResult {
         "from_orrery_toml": app.config.toml_keys(&section),
         "named": named,
     }))
+}
+
+/// The buttons, for the GPIO agent: `button` names them, and `button <name>` has one's
+/// settings, with the actions that can't run left out. A button left with none isn't there.
+fn button_config(app: &App, section: &str) -> Value {
+    let usable: Vec<(&str, Map<String, Value>)> =
+        app.buttons.iter().filter_map(|b| Some((b.name.as_str(), b.resolved(&app.actions)?))).collect();
+    let (exists, options, named) = match section.strip_prefix("button ") {
+        None => (!usable.is_empty(), Map::new(), usable.iter().map(|(n, _)| (*n).to_owned()).collect()),
+        Some(name) => match usable.into_iter().find(|(n, _)| *n == name) {
+            Some((_, options)) => (true, options, Vec::new()),
+            None => (false, Map::new(), Vec::new()),
+        },
+    };
+    json!({"section": section, "exists": exists, "options": options, "from_orrery_toml": [], "named": named})
 }
 
 #[cfg(test)]

@@ -8,7 +8,7 @@
 #   arch  aarch64, armv7, or x86_64
 #
 # The archive is dist/orrery-<arch>.tar.gz: a fixed name, as an update entry's asset_name is.
-# It holds orrery, orrery-import, orrery-spoolman, orrery-updater, LICENSE, and README.md,
+# It holds orrery, orrery-gpio, orrery-import, orrery-spoolman, orrery-updater, LICENSE, and README.md,
 # with no folder around them, so it unpacks straight into ~/orrery. The binaries are release
 # builds (ORRERY_RELEASE=1). In CI, GITHUB_REPOSITORY names the repository they update from,
 # and the archive gets a release_info.json that names it, the version, and the archive, as an
@@ -51,12 +51,12 @@ version="v$cargo_version"
 
 echo "==> Building orrery $version for $arch ($target)"
 ORRERY_RELEASE=1 cargo build --quiet --release --locked --target "$target" \
-  -p orrery -p orrery-spoolman -p orrery-updater --bins
+  -p orrery -p orrery-gpio -p orrery-spoolman -p orrery-updater --bins
 
 stage="target/dist/$arch"
 rm -rf "$stage"
 mkdir -p "$stage" dist
-files=(orrery orrery-import orrery-spoolman orrery-updater)
+files=(orrery orrery-gpio orrery-import orrery-spoolman orrery-updater)
 for name in "${files[@]}"; do
   install -m 755 "target/$target/release/$name" "$stage/$name"
 done

@@ -130,19 +130,6 @@ async fn main() {
         let s = s.clone();
         async move { s.proxy(params).await }
     });
-    // Klippy's SET_ACTIVE_SPOOL and CLEAR_ACTIVE_SPOOL macros.
-    let s = spoolman.clone();
-    builder = builder.method("spoolman_set_active_spool", move |params| {
-        let s = s.clone();
-        async move {
-            let spool_id = match params.get("spool_id") {
-                None | Some(Value::Null) => None,
-                Some(v) => Some(v.as_i64().ok_or_else(|| MethodError::new(400, format!("Invalid spool id: {v}")))?),
-            };
-            s.set_active_spool(spool_id).await;
-            Ok(Value::Null)
-        }
-    });
     let s = spoolman.clone();
     orrery_agent::run(builder, move |agent| {
         let s = s.clone();
@@ -173,7 +160,6 @@ impl Spoolman {
         agent.register_endpoint("spool_id", &["GET", "POST"]).await?;
         agent.register_endpoint("proxy", &["POST"]).await?;
         agent.register_endpoint("status", &["GET"]).await?;
-        agent.register_remote_method("spoolman_set_active_spool").await?;
 
         let s = self.clone();
         let mut notifications = agent.notifications();

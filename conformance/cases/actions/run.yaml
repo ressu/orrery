@@ -1,0 +1,66 @@
+name: actions run for clients and Klipper's macros, with the caller's role
+description: >
+  orrery only (docs/design/2026-11-23-buttons-and-actions.md). The client is an operator. An
+  action's role decides who may run it, and each call is checked as if the caller sent it.
+targets: [orrery]
+klippy: ready
+transports: [ws]
+files:
+  config/orrery.toml: |
+    [authorization.networks]
+    operator = ["127.0.0.0/8"]
+
+    [action.hello]
+    gcode = "ECHO_hello"
+
+    [action.say]
+    method = "printer.gcode.script"
+
+    [action.fixed]
+    method = "printer.gcode.script"
+    params = { script = "ECHO_fixed" }
+
+    [action.admins_only]
+    gcode = "ECHO_admin"
+    role = "admin"
+
+    [action.nothing]
+    method = "server.nothing"
+steps:
+  - call: server.info
+    expect:
+      warnings: {$contains: ["[action.nothing]: Orrery has no method server.nothing, so the action is left out"]}
+  - call: server.actions.run
+    params: {action: hello}
+    expect: ok
+  - expect_notification: notify_gcode_response
+    match: ["// hello"]
+  # The caller's arguments go to the method; the full name works too.
+  - call: server.actions.run
+    params: {action: action.say, script: ECHO_said}
+    expect: ok
+  - expect_notification: notify_gcode_response
+    match: ["// said"]
+  - call: server.actions.run
+    params: {action: fixed, script: ECHO_other}
+    expect_error: {code: 400, message: The action fixed sets script itself}
+  - call: server.actions.run
+    params: {action: hello, script: ECHO_other}
+    expect_error: {code: 400, message: "The action hello runs gcode, and takes no arguments"}
+  - call: server.actions.run
+    params: {action: admins_only}
+    expect_error:
+      code: 403
+      message: "Only an admin can run the action admins_only. This connection has the operator role, from its network, so it can print but can't change the printer's setup."
+  # The built-in shutdown is the operator's to run, but machine.shutdown needs admin.
+  - call: server.actions.run
+    params: {action: shutdown}
+    expect_error:
+      code: 403
+      message: "Only an admin can shut down the printer's computer. This connection has the operator role, from its network, so it can print but can't change the printer's setup."
+  - call: server.actions.run
+    params: {action: nothing}
+    expect_error: {code: 400, message: No action nothing}
+  # A macro calls `action_call_remote_method("run_action", action="say", script="ECHO_macro")`.
+  - klippy: {remote_method: {method: run_action, params: {action: say, script: ECHO_macro}}}
+  - expect_klippy_request: {method: gcode/script, params: {script: ECHO_macro}}

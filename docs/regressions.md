@@ -433,3 +433,23 @@ introduces it lands:
   validation come later.
 - Legacy LMDB databases from before Moonraker v0.9 can't be imported.
 - Out-of-scope components (power, sensors, MQTT, and others) are missing or stubbed.
+
+### button-templates: buttons run actions, not templates
+
+- **Area:** config, API
+- **Moonraker:** a `[button]` section runs Jinja templates on press and release, with
+  `call_method`, `send_notification`, `event`, and `user_data`. Klipper's macros may call any
+  of Moonraker's remote methods, including `shutdown_machine` and `reboot_machine`.
+- **orrery:** a button runs lists of [actions](configuration/actions.md), on `on_press`,
+  `on_release`, `on_click`, and `on_long_press`, through the `orrery-gpio` agent. What's
+  different:
+  - From `moonraker.conf`, only a template that's a single `call_method` with fixed arguments
+    converts. Anything else is left out, with a warning that names the button and the option.
+  - `notify_button_event` is sent for every event that runs actions, with `{name, event}`.
+    Moonraker sends it only from `send_notification`, with `{name, type, event, aux}`.
+  - Klipper's remote methods run actions as `operator`. `shutdown_machine` and
+    `reboot_machine` run as `admin` with `[moonraker_compat] klipper_shutdown`, on by default.
+  - The remote method `run_action` is orrery's own.
+- **Why:** a Jinja engine is a large dependency, and a conversion that guesses wrong runs the
+  wrong thing when someone presses the button. See docs/design/2026-11-23-buttons-and-actions.md.
+- **Cases:** none.

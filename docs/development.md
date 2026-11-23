@@ -19,6 +19,7 @@ the larger features.
 |---|---|
 | `crates/orrery` | The server, `orrery`, and the database import, `orrery-import` |
 | `crates/orrery-agent` | A client for writing agents in Rust; see its `examples/hello.rs` |
+| `crates/orrery-gpio` | Buttons on the printer computer's GPIO lines, as an agent |
 | `crates/orrery-spoolman` | Moonraker's Spoolman integration, as an agent |
 | `crates/orrery-updater` | Moonraker's update manager, as an agent |
 | `crates/orrery-dbus` | A small D-Bus client, for systemd and PackageKit |
@@ -62,8 +63,8 @@ The programs link with `rust-lld` and Rust's bundled musl, so they need no C cro
 
 ### Copying a build to a printer
 
-To build Orrery, `orrery-import`, `orrery-spoolman`, and `orrery-updater` for a printer's CPU
-and copy them over SSH, run:
+To build Orrery, `orrery-gpio`, `orrery-import`, `orrery-spoolman`, and `orrery-updater` for a
+printer's CPU and copy them over SSH, run:
 
 ```
 scripts/copy-to-printer.sh <ssh host>

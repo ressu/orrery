@@ -4,10 +4,12 @@
 //! orrery's store.
 
 mod access;
+mod actions;
 pub mod agent_process;
 mod agents;
 mod api;
 mod auth;
+mod buttons;
 mod compat;
 pub mod config;
 mod data_store;

@@ -8,6 +8,8 @@
 //! legacy_api_key = "admin"  # Moonraker's one API key and its role; false: no such key
 //! user_source_fix = true    # Moonraker's replies call local users' source "moonraker"
 //! service_alias = true      # `orrery setup` makes moonraker.service a name for orrery.service
+//! remote_methods = true     # Moonraker's remote methods for Klipper's macros, as actions
+//! klipper_shutdown = true   # shutdown_machine and reboot_machine run as admin from Klipper
 //! ```
 //!
 //! OctoPrint's compatibility will get a section of its own.
@@ -35,6 +37,12 @@ pub struct MoonrakerCompat {
     /// `orrery setup` makes `moonraker.service` a name for `orrery.service`, so units that start
     /// or wait for Moonraker get orrery.
     pub service_alias: bool,
+    /// Moonraker's remote methods, such as `shutdown_machine`, registered with Klipper, each
+    /// running an action (docs/design/2026-11-23-buttons-and-actions.md).
+    pub remote_methods: bool,
+    /// `shutdown_machine` and `reboot_machine` from Klipper run as `admin`, as in Moonraker,
+    /// where any macro may call them.
+    pub klipper_shutdown: bool,
 }
 
 impl MoonrakerCompat {
@@ -52,7 +60,14 @@ impl MoonrakerCompat {
             Some(other) => bail!("[moonraker_compat] enabled: {other} isn't true or false"),
         };
         if !enabled {
-            return Ok(Self { enabled, api_key: None, user_source_fix: false, service_alias: false });
+            return Ok(Self {
+                enabled,
+                api_key: None,
+                user_source_fix: false,
+                service_alias: false,
+                remote_methods: false,
+                klipper_shutdown: false,
+            });
         }
         let api_key = match table.as_ref().and_then(|t| t.get("legacy_api_key")) {
             // Moonraker's own option, from moonraker.conf: on unless it's turned off.
@@ -69,17 +84,19 @@ impl MoonrakerCompat {
                  key"
             ),
         };
-        let user_source_fix = match table.as_ref().and_then(|t| t.get("user_source_fix")) {
-            None => true,
-            Some(Value::Bool(on)) => *on,
-            Some(other) => bail!("[moonraker_compat] user_source_fix: {other} isn't true or false"),
+        let flag = |key: &str| match table.as_ref().and_then(|t| t.get(key)) {
+            None => Ok(true),
+            Some(Value::Bool(on)) => Ok(*on),
+            Some(other) => Err(anyhow::anyhow!("[moonraker_compat] {key}: {other} isn't true or false")),
         };
-        let service_alias = match table.as_ref().and_then(|t| t.get("service_alias")) {
-            None => true,
-            Some(Value::Bool(on)) => *on,
-            Some(other) => bail!("[moonraker_compat] service_alias: {other} isn't true or false"),
-        };
-        Ok(Self { enabled, api_key, user_source_fix, service_alias })
+        Ok(Self {
+            enabled,
+            api_key,
+            user_source_fix: flag("user_source_fix")?,
+            service_alias: flag("service_alias")?,
+            remote_methods: flag("remote_methods")?,
+            klipper_shutdown: flag("klipper_shutdown")?,
+        })
     }
 
     /// The name of a user's source in Moonraker's replies.

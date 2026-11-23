@@ -24,8 +24,6 @@ use orrery_proto::klippy as wire;
 
 const INIT_TIME: Duration = Duration::from_millis(250);
 /// Endpoints Moonraker uses itself and doesn't offer to clients.
-/// Methods Klippy's macros can call with `action_call_remote_method`.
-pub const REMOTE_METHODS: &[&str] = &["pause_job_queue", "start_job_queue"];
 const RESERVED_ENDPOINTS: &[&str] = &["list_endpoints", "gcode/subscribe_output", "register_remote_method"];
 /// Printer objects Moonraker needs for full function.
 const REQUIRED_OBJECTS: &[&str] = &["virtual_sdcard", "display_status", "pause_resume"];
@@ -431,11 +429,8 @@ fn handle_message(app: &Arc<App>, msg: Value) {
                     app.send_event(Event::GcodeResponse(line.to_owned()));
                 }
             }
-            "pause_job_queue" => {
-                tokio::spawn(crate::job_queue::pause_queue(app.clone()));
-            }
-            "start_job_queue" => {
-                tokio::spawn(crate::job_queue::start_queue(app.clone()));
+            m if crate::actions::is_remote_method(app, m) => {
+                tokio::spawn(crate::actions::from_klipper(app.clone(), m.to_owned(), params));
             }
             other => match app.extensions.method_conn(other) {
                 Some(conn) => crate::extensions::forward_remote_method(app, conn, other, &params),
@@ -538,7 +533,8 @@ async fn initialize(app: Arc<App>) {
         if current == KlippyState::Ready {
             verify_requirements(&app).await;
             let agent_methods = app.extensions.remote_methods();
-            for method in REMOTE_METHODS.iter().copied().chain(agent_methods.iter().map(String::as_str)) {
+            let own = crate::actions::remote_methods(&app);
+            for method in own.into_iter().chain(agent_methods.iter().map(String::as_str)) {
                 register_remote_method(&app, method).await;
             }
             app.klippy.lock().initializing = false;

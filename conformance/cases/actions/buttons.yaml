@@ -1,0 +1,65 @@
+name: a button turns on the GPIO agent, which reads the buttons as orrery converted them
+description: >
+  orrery only (docs/design/2026-11-23-buttons-and-actions.md). pink-0's moonraker.conf button
+  converts to the built-in shutdown action; a template orrery can't convert is left out with a
+  warning. command = false keeps orrery from starting orrery-gpio, so the runner's test agent
+  stands in for it.
+targets: [orrery]
+transports: [ws]
+klippy: none
+config: |
+  [button SKSM]
+  pin: !gpio72
+  on_press:
+    {% do call_method("machine.shutdown") %}
+
+  [button lights]
+  pin: gpio5
+  on_press:
+    {% do call_method("printer.gcode.script", script="SET_PIN PIN=lights VALUE=1") %}
+  on_release:
+    {% if event.elapsed_time > 2 %}{% do call_method("machine.reboot") %}{% endif %}
+files:
+  config/orrery.toml: |
+    [agent.gpio]
+    command = false
+
+    [button.power]
+    pin = "^gpiochip1/gpio23"
+    on_click = ["lights_on_press"]
+    on_long_press = ["shutdown", "no_such_action"]
+    long_press_time = 2.0
+steps:
+  - call: server.info
+    expect:
+      warnings:
+        $exact: true
+        $contains:
+          - "Button lights: Orrery converts only a single call_method from moonraker.conf, so on_release is left out; set this button's actions in orrery.toml"
+          - "[button.power] on_long_press: there's no action no_such_action"
+  - agent: {connect: {name: gpio, via: unix}}
+  - call: orrery.agent.config
+    as_agent: true
+    params: {section: button}
+    expect: {exists: true, named: [sksm, lights, power]}
+  - call: orrery.agent.config
+    as_agent: true
+    params: {section: button sksm}
+    expect: {exists: true, options: {$exact: true, pin: "!gpio72", on_press: [shutdown]}}
+  # Names that don't resolve are left out.
+  - call: orrery.agent.config
+    as_agent: true
+    params: {section: button power}
+    expect:
+      options:
+        $exact: true
+        pin: "^gpiochip1/gpio23"
+        on_click: [lights_on_press]
+        on_long_press: [shutdown]
+        long_press_time: 2.0
+  - call: connection.send_event
+    as_agent: true
+    params: {event: button_event, data: {name: sksm, event: press}}
+    expect: ok
+  - expect_notification: notify_button_event
+    match: [{name: sksm, event: press}]

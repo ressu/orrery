@@ -1529,6 +1529,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "orrery-gpio"
+version = "0.1.2"
+dependencies = [
+ "clap",
+ "orrery-agent",
+ "orrery-build",
+ "rustix",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "orrery-proto"
 version = "0.1.2"
 dependencies = [

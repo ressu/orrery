@@ -386,6 +386,14 @@ impl Registry {
         self.direct_method(method)
     }
 
+    /// The agent a map points `method` at, if one does.
+    pub fn alias_agent(&self, method: &str) -> Option<String> {
+        self.aliases
+            .iter()
+            .find(|a| swap_prefix(method, &a.public_method, &a.agent_method, '.').is_some())
+            .map(|a| a.agent.clone())
+    }
+
     fn direct_method(&self, method: &str) -> Option<(Endpoint, RequestType)> {
         let (path, t) = self.methods.get(method)?;
         Some((self.by_path.get(path)?.clone(), *t))

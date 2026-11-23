@@ -8,6 +8,15 @@ Fluidd and Mainsail link to the release page on GitHub, which shows the same not
 
 ### New
 
+- Buttons on the printer computer's own GPIO lines, with `[button.<name>]` in `orrery.toml`.
+  A button runs actions when it's pressed, released, clicked, or held. A `[button]` from
+  `moonraker.conf` works when its template is a single `call_method`; see
+  [Buttons](https://github.com/ressu/orrery/blob/main/docs/configuration/buttons.md).
+- Actions: named steps, `[action.<name>]` in `orrery.toml`, that buttons, Klipper's macros
+  (`action_call_remote_method("run_action", action="…")`), and clients run, each with the role
+  it needs. Built in: `shutdown`, `reboot`, `emergency_stop`, `job_queue_pause`,
+  `job_queue_start`, and `spoolman.set_active_spool`; see
+  [Actions](https://github.com/ressu/orrery/blob/main/docs/configuration/actions.md).
 - The update manager has a new entry type, `archive`, for programs released as an archive of
   files, such as aldis. It installs every file of the release, removes the files a new release
   drops, and keeps the old ones for a rollback. Set it up in `orrery.toml`; see

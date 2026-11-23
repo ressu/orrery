@@ -1,0 +1,16 @@
+[package]
+name = "orrery-gpio"
+description = "Buttons on the printer's own GPIO lines, as an orrery agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+clap.workspace = true
+orrery-build.workspace = true
+orrery-agent.workspace = true
+rustix = { workspace = true, features = ["fs", "time"] }
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true

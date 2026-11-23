@@ -191,6 +191,8 @@ It's on when Orrery reads a `moonraker.conf`, or when `orrery.toml` has the sect
 legacy_api_key = "admin"
 user_source_fix = true
 service_alias = true
+remote_methods = true
+klipper_shutdown = true
 ```
 
 | Option | Default | What it does |
@@ -199,6 +201,8 @@ service_alias = true
 | `legacy_api_key` | `"admin"` | The role of Fluidd's API key, `moonraker`. With `false`, there's no such key |
 | `user_source_fix` | `true` | Shows local users as Moonraker's, so Fluidd offers to delete them and change their passwords |
 | `service_alias` | `true` | Makes `sudo orrery setup` make `moonraker.service` another name for Orrery's service |
+| `remote_methods` | `true` | Offers Moonraker's remote methods to Klipper's macros, such as `shutdown_machine`; see [Actions](actions.md#moonrakers-remote-methods) |
+| `klipper_shutdown` | `true` | Runs `shutdown_machine` and `reboot_machine` from Klipper as an admin, as Moonraker does. With `false`, Klipper's macros can't shut down or reboot the printer's computer |
 
 Without `legacy_api_key`, Moonraker's `enable_api_key` decides whether the `moonraker` key
 exists. In `orrery.toml`, use `legacy_api_key` instead of `enable_api_key`. Once every program

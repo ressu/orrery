@@ -83,7 +83,7 @@ jobs:
         run: |
           mkdir smoke
           tar -xzf dist/orrery-${{ matrix.arch }}.tar.gz -C smoke
-          for program in orrery orrery-import orrery-spoolman orrery-updater; do
+          for program in orrery orrery-gpio orrery-import orrery-spoolman orrery-updater; do
             ${{ matrix.run }} smoke/$program --version
           done
 

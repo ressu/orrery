@@ -21,7 +21,9 @@ sudo systemctl restart orrery
 | Page | What it covers |
 |---|---|
 | [Access and logins](access.md) | Roles, trusted networks, API keys, users, proxies, and Moonraker compatibility |
+| [Actions](actions.md) | Named steps that buttons, macros, and clients run |
 | [Agents](agents.md) | Programs that add features to Orrery, and how Orrery starts them |
+| [Buttons](buttons.md) | Buttons on the printer computer's GPIO lines |
 | [Spoolman](spoolman.md) | Connecting Orrery to a Spoolman server |
 | [The update manager](update-manager.md) | Updates for Klipper, Orrery, and other software, from Fluidd and Mainsail |
 
@@ -137,10 +139,10 @@ Webcams added from Fluidd or Mainsail are kept in Orrery's database, not in a co
 |---|---|---|
 | `database_path` | `~/printer_data/database` | The folder for Orrery's database, `orrery.redb` |
 
-### `[authorization]`, `[spoolman]`, and `[update_manager]`
+### `[authorization]`, `[button <name>]`, `[spoolman]`, and `[update_manager]`
 
-These have pages of their own: [Access and logins](access.md), [Spoolman](spoolman.md), and
-[The update manager](update-manager.md).
+These have pages of their own: [Access and logins](access.md), [Buttons](buttons.md),
+[Spoolman](spoolman.md), and [The update manager](update-manager.md).
 
 ## Orrery's own sections
 
@@ -151,6 +153,7 @@ These work only in `orrery.toml`:
 | `[authorization.networks]`, `[authorization.keys]`, `[authorization.users]`, `[authorization.proxy_login]` | [Access and logins](access.md) |
 | `[moonraker_compat]` | [Moonraker compatibility](access.md#moonraker-compatibility) |
 | `[agent.<name>]` | [Agents](agents.md) |
+| `[action.<name>]` | [Actions](actions.md) |
 
 ## Command-line options
 

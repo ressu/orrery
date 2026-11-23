@@ -254,6 +254,12 @@ pub fn audit(app: &App, access: &Access, endpoint: &str, kind: RequestType, args
     }
 }
 
+/// A refusal for something that needs `needed`, where the client has `role`: "Only an admin can
+/// run the action reboot. This connection has the operator role, …".
+pub fn refusal(access: &Access, role: Role, needed: Role, what: &str) -> ApiError {
+    ApiError::new(403, format!("Only {} can {what}. {}", plural(needed), what_it_has(access, role)))
+}
+
 fn plural(role: Role) -> &'static str {
     match role {
         Role::Viewer => "a viewer, operator, or admin",
@@ -423,6 +429,9 @@ fn need(app: &App, endpoint: &str, kind: RequestType, args: &Args) -> Need {
         // An agent's own calls. What they reach is the agent's own, or checked again: history
         // fields against the agent's table.
         "/connection/register_remote_method" | "/connection/send_event" => Viewer,
+        // The action's own role is checked when it runs, and each of its calls as if the
+        // caller had sent it.
+        "/server/actions/run" => Viewer,
         e if e.starts_with("/orrery/agent/") => Viewer,
         "/server/extensions/request" => {
             let arg = |k| args.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();

@@ -15,7 +15,7 @@ use crate::config::{self, Entry, Kind};
 use crate::executable::{self, Fetched, Github, PREVIOUS, Saved};
 
 /// The programs a release holds, in the order they're replaced: orrery last.
-pub const PROGRAMS: [&str; 4] = ["orrery-spoolman", "orrery-updater", "orrery-import", "orrery"];
+pub const PROGRAMS: [&str; 5] = ["orrery-gpio", "orrery-spoolman", "orrery-updater", "orrery-import", "orrery"];
 /// The release's checksum file.
 pub const CHECKSUMS: &str = "SHA256SUMS";
 

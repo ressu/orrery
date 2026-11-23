@@ -170,7 +170,7 @@ async fn register_remote_method(app: Arc<App>, req: Request) -> ApiResult {
     require_agent(&app, &req, "register methods")?;
     {
         let mut inner = app.extensions.lock();
-        if crate::klippy::REMOTE_METHODS.contains(&method.as_str()) || inner.methods.contains_key(&method) {
+        if crate::actions::is_remote_method(&app, &method) || inner.methods.contains_key(&method) {
             return Err(ApiError::bad_request(format!("Remote method ({method}) already registered")));
         }
         inner.methods.insert(method.clone(), conn);

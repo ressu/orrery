@@ -11,6 +11,7 @@ use serde_json::{Map, Value, json};
 use tokio::sync::{broadcast, mpsc};
 
 use crate::api::{ApiError, ApiResult, Args, ConnId, Registry, Request, RequestType, Transport, Transports, handler};
+use crate::auth::Access;
 use crate::config::Config;
 use crate::data_store::DataStore;
 use crate::database::Database;
@@ -106,6 +107,8 @@ pub struct App {
     pub compat: crate::compat::MoonrakerCompat,
     pub extensions: crate::extensions::Extensions,
     pub agents: crate::agents::Agents,
+    pub actions: crate::actions::Actions,
+    pub buttons: Vec<crate::buttons::Button>,
     warnings: Mutex<Vec<String>>,
     /// Each connected agent's own warnings, from `orrery.agent.set_warnings`.
     agent_warnings: Mutex<std::collections::BTreeMap<String, Vec<String>>>,
@@ -156,6 +159,14 @@ impl App {
             tracing::warn!("{w}");
         }
         warnings.extend(agent_warnings);
+        let (buttons, converted, mut action_warnings) = crate::buttons::from_config(&config);
+        let (actions, more) = crate::actions::Actions::new(&config, &agents, converted);
+        action_warnings.extend(more);
+        action_warnings.extend(crate::buttons::check_names(&buttons, &actions));
+        for w in &action_warnings {
+            tracing::warn!("{w}");
+        }
+        warnings.extend(action_warnings);
         let compat = crate::compat::MoonrakerCompat::new(&config)?;
         compat.log_settings();
         let keys = crate::keys::Keys::new(&config, &agents, &compat, &database)?;
@@ -188,6 +199,8 @@ impl App {
             compat,
             extensions: crate::extensions::Extensions::default(),
             agents,
+            actions,
+            buttons,
             warnings: Mutex::new(warnings),
             agent_warnings: Mutex::default(),
             version_warnings: Mutex::default(),
@@ -206,8 +219,13 @@ impl App {
         crate::extensions::register_endpoints(&app);
         crate::agents::register_endpoints(&app);
         crate::history::register_endpoints(&app);
+        crate::actions::register_endpoints(&app);
         // Last, so it sees every built-in method when it checks the maps.
         crate::agents::start(&app);
+        let action_warnings = app.actions.check(&app.registry.read().expect("registry lock"));
+        for w in action_warnings {
+            app.add_warning(w);
+        }
         Ok(app)
     }
 
@@ -411,6 +429,36 @@ impl App {
         }
     }
 
+    /// Calls a method for `access`, as a client with that access would: the method's own role
+    /// check, its handler, and the audit line. Actions run their calls this way, so an action
+    /// never does more than its caller could.
+    pub async fn call_method(self: &Arc<Self>, access: &Access, method: &str, args: Map<String, Value>) -> ApiResult {
+        let found = self.registry.read().expect("registry lock").by_method(method);
+        let Some((endpoint, kind)) = found else {
+            return Err(ApiError::not_found(format!("Method {method} not found")));
+        };
+        let args = Args(args);
+        if let Err(e) = crate::auth::authorize(self, access, &endpoint.endpoint, kind, &args) {
+            self.auth.log_refusal(access, method, &e);
+            return Err(e);
+        }
+        let audit_args = (kind != RequestType::Get).then(|| args.clone());
+        let req = Request {
+            endpoint: endpoint.endpoint.clone(),
+            kind,
+            args,
+            transport: Transport::Websocket,
+            conn: None,
+            access: access.clone(),
+        };
+        let result = (endpoint.handler)(self.clone(), req).await;
+        if let Some(args) = audit_args {
+            let outcome = result.as_ref().map(|_| ()).map_err(|e| e.message.as_str());
+            crate::auth::audit(self, access, &endpoint.endpoint, kind, &args, outcome);
+        }
+        result
+    }
+
     async fn process_rpc(self: &Arc<Self>, obj: Value, conn: Option<ConnId>) -> Option<Value> {
         let id = obj.get("id").cloned().unwrap_or(Value::Null);
         if obj.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
@@ -547,6 +595,10 @@ async fn server_info(app: Arc<App>, req: Request) -> ApiResult {
     let mut warnings: Vec<String> = app.warnings.lock().expect("warnings lock").clone();
     warnings.extend(app.agent_warnings.lock().expect("agent warnings lock").values().flatten().cloned());
     warnings.extend(app.version_warnings.lock().expect("version warnings lock").values().cloned());
+    warnings
+        .extend(app.actions.agent_warnings(&app.registry.read().expect("registry lock"), |a| {
+            crate::extensions::is_connected(&app, a)
+        }));
     let warnings: Vec<String> = warnings.into_iter().map(|w| if raw { w } else { w.replace('\n', "<br/>") }).collect();
     let state = app.klippy.state();
     Ok(json!({
