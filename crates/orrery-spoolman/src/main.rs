@@ -19,8 +19,8 @@
 //!
 //! Its settings are the `[spoolman]` section, in `moonraker.conf` or `orrery.toml`: `server`
 //! (required) and `sync_rate` (seconds, default 5). It keeps the active spool in orrery's
-//! database, in the `spoolman` namespace. On its first run it takes the spool Moonraker had, from
-//! `moonraker` / `spoolman.spool_id`, which `orrery-import` brings over.
+//! database, in the `spoolman` namespace. It starts without one, and the first
+//! `SET_ACTIVE_SPOOL` sets it.
 
 mod server;
 
@@ -247,18 +247,12 @@ impl Spoolman {
         }
         let server = Server::new(url).map_err(setup_error)?;
 
-        // The active spool: orrery's own, or the one Moonraker had.
-        let mut spool_id = None;
-        for (namespace, key) in [(NAME, "spool_id"), ("moonraker", "spoolman.spool_id")] {
-            if let Ok(item) = agent.call("server.database.get_item", json!({"namespace": namespace, "key": key})).await
-            {
-                spool_id = item["value"].as_i64();
-                if namespace == "moonraker" {
-                    tracing::info!("Took the active spool from Moonraker's database: {}", show(spool_id));
-                }
-                break;
-            }
-        }
+        // The active spool, from orrery's database.
+        let spool_id = agent
+            .call("server.database.get_item", json!({"namespace": NAME, "key": "spool_id"}))
+            .await
+            .ok()
+            .and_then(|item| item["value"].as_i64());
         self.state().spool_id = spool_id;
         tracing::info!("Spoolman server {}, active spool {}, sync every {sync_rate} s", server.api, show(spool_id));
         let _ = self.server.set(server);

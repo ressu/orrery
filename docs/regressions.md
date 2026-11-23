@@ -216,7 +216,7 @@ change how safe or complete orrery is to run.
   starts it from its own folder when `[spoolman]` has a `server`; without the program, Spoolman
   stays offline and `server.info` has a warning. Other differences:
   - The agent keeps the active spool in the `spoolman` database namespace, not in `moonraker`.
-    On its first run, it takes the spool Moonraker had.
+    It starts without one: `orrery-import` doesn't bring Moonraker's over.
   - A job gets its `spool_ids` field only while the agent is connected. Moonraker adds the field
     to every job.
   - When Spoolman sends no reply at all, a `proxy` request with `use_v2_response` gets

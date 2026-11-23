@@ -26,8 +26,8 @@ Orrery's Spoolman support is a separate program, `orrery-spoolman`, in the same 
 Orrery. Orrery starts it when `[spoolman]` has a `server`. If the program isn't there, Orrery
 says so in a warning, which Fluidd and Mainsail show.
 
-On its first run, `orrery-spoolman` takes the active spool from Moonraker's data, if you
-imported it.
+`orrery-spoolman` starts without an active spool, even after an import. Choose the spool again
+in Fluidd or Mainsail, or with `SET_ACTIVE_SPOOL`.
 
 To change how it runs, add an `[agent.spoolman]` table. For example, to run the program from
 another place:
