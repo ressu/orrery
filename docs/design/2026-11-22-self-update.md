@@ -339,3 +339,35 @@ An install script, for `curl | sh`, comes later.
 6. orrery itself: `orrery preflight`, `self-update`, and `rollback`, and the agents' versions.
 7. Docs, then the first release, `v0.1.0`, installed on bluev2 with `orrery setup` run again.
    Then `v0.2.0`, for a real self-update and a rollback.
+
+## Backlog
+
+### The `orrery` entry's list of programs (user, 2026-11-23)
+
+**To revisit before a release adds, renames, or drops a program.** The `orrery` entry's
+`programs` are compiled in: `release::PROGRAMS` in `crates/orrery-updater/src/release.rs`, used
+by `config.rs`. The list belongs to the running `orrery-updater`, which is the old version
+during an update. So:
+
+- **A new program never arrives.** If a release ships a new agent, such as a WLED agent, the
+  old updater replaces only the four programs it knows, and the new agent is never installed.
+  The new orrery then starts without it, and warns that the program isn't there.
+- **A program can't be dropped or renamed.** The old updater refuses an archive without one
+  of its four programs ("has no orrery-import, so nothing was changed"), so the update never
+  happens.
+- **The same applies to `programs` in any executable entry:** a tool can't add a helper program
+  in a release without each user editing `orrery.toml` first.
+
+The idea behind the fixed list holds: the updater shouldn't replace whatever an archive
+happens to hold. That needs a design, not a quick fix. Questions for it:
+
+- **Where the list comes from.** A manifest in the archive, such as `release_info.json`
+  listing its programs, so the new release says what it holds. The old updater must trust it
+  only after the checksum check.
+- **Removed programs.** Whether an update deletes a program the new release no longer lists,
+  or keeps it, and how a rollback brings it back. `.previous/` has to hold the whole old set,
+  and a rollback has to remove programs that only the new set had.
+- **Preflight.** It runs the new set's `orrery`, which can also check that the new set is
+  complete.
+- **Older updaters.** v0.1.x updaters have the fixed list. The first release with a new
+  program needs a plan for them, such as a release that only changes the updater first.
