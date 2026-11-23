@@ -288,6 +288,7 @@ pub fn klipper_entry(
 pub enum Kind {
     Git(GitOptions),
     Executable(ExecOptions),
+    Archive(ArchiveOptions),
     /// Moonraker's `system` entry: the system's packages, through PackageKit.
     System,
 }
@@ -297,6 +298,7 @@ impl Kind {
         match self {
             Self::Git(_) => "git_repo",
             Self::Executable(_) => "executable",
+            Self::Archive(_) => "archive",
             Self::System => "system",
         }
     }
@@ -316,6 +318,11 @@ impl Kind {
             Self::Executable(e) => DepFiles {
                 path: e.path.clone(),
                 system_dependencies: e.system_dependencies.clone(),
+                ..DepFiles::default()
+            },
+            Self::Archive(a) => DepFiles {
+                path: a.path.clone(),
+                system_dependencies: a.system_dependencies.clone(),
                 ..DepFiles::default()
             },
             Self::System => DepFiles::default(),
@@ -341,6 +348,60 @@ pub struct ExecOptions {
     pub repo_pinned: bool,
     /// orrery's own entry: a development build doesn't update, and orrery restarts last.
     pub orrery: bool,
+}
+
+/// An `archive` entry, orrery's own type: the files of a release's archive, installed into
+/// `path` (docs/design/2026-11-23-archive-entries.md). Read only from `orrery.toml`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArchiveOptions {
+    /// The folder the archive's files go into.
+    pub path: PathBuf,
+    /// Where the release comes from.
+    pub source: Source,
+    /// What's in the download.
+    pub format: ArchiveFormat,
+    /// How many folders the archive wraps its files in. `None`: one, when the archive holds
+    /// only a folder at its top, and none otherwise.
+    pub wrapper_folders: Option<usize>,
+    pub system_dependencies: Option<String>,
+}
+
+/// Where an archive entry's releases come from.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Source {
+    /// A GitHub repository's releases: `repo` is `owner/name`, `asset` the release file, with
+    /// `{arch}` filled in, and `checksums` the release's file of SHA-256 sums.
+    Github { repo: String, asset: String, checksums: Option<String> },
+}
+
+impl Source {
+    /// The asset's name in a release.
+    pub fn asset(&self) -> &str {
+        match self {
+            Self::Github { asset, .. } => asset,
+        }
+    }
+}
+
+/// How an archive is packed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArchiveFormat {
+    TarGz,
+    TarXz,
+}
+
+impl ArchiveFormat {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::TarGz => "tar.gz",
+            Self::TarXz => "tar.xz",
+        }
+    }
+}
+
+/// The CPU as `uname -m` names it, such as `aarch64`, for `{arch}` in an asset's name.
+fn machine() -> String {
+    rustix::system::uname().machine().to_string_lossy().into_owned()
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -628,6 +689,13 @@ pub fn own_options(
     entry: &mut Entry,
     warnings: &mut Vec<String>,
 ) -> Result<(), String> {
+    // moonraker.conf holds what Moonraker accepts, and Moonraker has no archive type. So an
+    // archive entry there is left out, as Moonraker would leave it out.
+    if matches!(entry.kind, Kind::Archive(_)) && !from_orrery_toml.iter().any(|k| k == "type") {
+        return Err(format!(
+            "[{section}]: Moonraker has no type archive, so orrery leaves this entry in moonraker.conf out, as Moonraker would. To use the type, move the entry to orrery.toml."
+        ));
+    }
     entry.preflight = preflight(section, map, from_orrery_toml, warnings)?;
     let Kind::Executable(opts) = &mut entry.kind else { return Ok(()) };
     let from_toml = |key: &str| from_orrery_toml.iter().any(|k| k == key);
@@ -686,6 +754,31 @@ pub fn entry(name: &str, map: &Map<String, Value>, global: &Global) -> Result<En
             repo_pinned: false,
             orrery: false,
         }),
+        Some("archive") => Kind::Archive(ArchiveOptions {
+            path: expand_home(&o.required("path")?),
+            source: Source::Github {
+                repo: {
+                    o.required("github")?;
+                    o.repo("github")?.expect("required above")
+                },
+                asset: o.required("asset")?.replace("{arch}", &machine()),
+                checksums: o.text("checksums")?.filter(|c| !c.is_empty()),
+            },
+            format: match o.required("format")?.as_str() {
+                "tar.gz" => ArchiveFormat::TarGz,
+                "tar.xz" => ArchiveFormat::TarXz,
+                other => {
+                    return Err(format!("[{}] format: expected tar.gz or tar.xz, got {other:?}", o.section));
+                }
+            },
+            wrapper_folders: match map.get("wrapper_folders") {
+                None | Some(Value::Null) => None,
+                Some(v) => Some(v.as_u64().and_then(|n| usize::try_from(n).ok()).ok_or_else(|| {
+                    format!("[{}] wrapper_folders: expected a number, such as 1, got {v}", o.section)
+                })?),
+            },
+            system_dependencies: o.text("system_dependencies")?,
+        }),
         Some(t @ ("web" | "zip" | "python")) => {
             return Err(format!("[{}]: orrery doesn't update {t} entries yet, so this entry is left out", o.section));
         }
@@ -696,12 +789,13 @@ pub fn entry(name: &str, map: &Map<String, Value>, global: &Global) -> Result<En
         Kind::Git(_) | Kind::System => (o.channel()?.or(global.channel).unwrap_or(Channel::Dev), None),
         // Releases have no dev channel. Moonraker warns about one in the entry, and falls back
         // to stable.
-        Kind::Executable(_) => match o.channel()? {
+        Kind::Executable(_) | Kind::Archive(_) => match o.channel()? {
             Some(Channel::Dev) => (
                 Channel::Stable,
                 Some(format!(
-                    "[{}]: Invalid value 'dev' for option 'channel'. Type 'executable' supports the following channels: ['stable', 'beta'].  Falling back to channel 'stable'",
-                    o.section
+                    "[{}]: Invalid value 'dev' for option 'channel'. Type '{}' supports the following channels: ['stable', 'beta'].  Falling back to channel 'stable'",
+                    o.section,
+                    kind.configured_type()
                 )),
             ),
             Some(c) => (c, None),
@@ -730,6 +824,7 @@ impl Entry {
         match self.kind {
             Kind::Git(_) => format!("Git Repo {}: ", self.name),
             Kind::Executable(_) => format!("Executable {}: ", self.name),
+            Kind::Archive(_) => format!("Archive {}: ", self.name),
             Kind::System => "PackageKit: ".into(),
         }
     }
@@ -744,29 +839,32 @@ impl Entry {
 
     /// The services an update restarts, as Moonraker's `_configure_managed_services` picks
     /// them: by default the entry's own service, unless `is_system_service` is false. Only
-    /// the entry's name, `klipper`, and `moonraker` are allowed, in that order.
+    /// the entry's name, `klipper`, and `moonraker` are allowed, in that order. orrery also
+    /// allows `user/<name>`, the entry's unit of orrery's user, in the place of its name.
     pub fn services(&self) -> Vec<String> {
         let listed = match &self.managed_services {
             Some(l) => l.clone(),
             None if self.is_system_service => vec![self.name.clone()],
             None => Vec::new(),
         };
-        [self.name.as_str(), "klipper", "moonraker"]
-            .into_iter()
-            .filter(|c| listed.iter().any(|l| l == c))
-            .map(str::to_owned)
-            .collect()
+        self.service_choices().into_iter().filter(|c| listed.contains(c)).collect()
+    }
+
+    /// The values `managed_services` may have, in the order the restarts run.
+    fn service_choices(&self) -> [String; 4] {
+        [self.name.clone(), format!("user/{}", self.name), "klipper".into(), "moonraker".into()]
     }
 
     /// Moonraker's warning for a `managed_services` value it doesn't allow.
     pub fn services_warning(&self) -> Option<String> {
         let listed = self.managed_services.as_ref()?;
-        let bad = listed.iter().find(|l| ![self.name.as_str(), "klipper", "moonraker"].contains(&l.as_str()))?;
+        let choices = self.service_choices();
+        let bad = listed.iter().find(|l| !choices.contains(l))?;
         Some(format!(
-            "[update_manager {}]: Option 'managed_services: {}' contains an invalid value '{bad}'. All values must be one of the following choices: {}, klipper, moonraker",
+            "[update_manager {}]: Option 'managed_services: {}' contains an invalid value '{bad}'. All values must be one of the following choices: {}",
             self.name,
             listed.join(" "),
-            self.name
+            choices.join(", ")
         ))
     }
 }
@@ -845,7 +943,22 @@ mod tests {
             (e.is_system_service, e.services(), e.channel),
             (false, vec!["led_effect".to_owned()], Channel::Stable)
         );
-        assert!(e.services_warning().unwrap().contains("an invalid value 'crowsnest'"));
+        assert!(e.services_warning().unwrap().ends_with(
+            "an invalid value 'crowsnest'. All values must be one of the following choices: led_effect, user/led_effect, klipper, moonraker"
+        ));
+        // user/<name> is the entry's unit of orrery's user.
+        let user = entry(
+            "aldis",
+            &map(
+                json!({"type": "git_repo", "path": "/x", "origin": "o", "managed_services": ["klipper", "user/aldis"]}),
+            ),
+            &g,
+        )
+        .unwrap();
+        assert_eq!(
+            (user.services(), user.services_warning()),
+            (vec!["user/aldis".to_owned(), "klipper".to_owned()], None)
+        );
         // Without managed_services, an entry restarts its own service unless it says it has none.
         let own = entry("crowsnest", &map(json!({"type": "git_repo", "path": "/x", "origin": "o"})), &g).unwrap();
         assert_eq!((own.services(), own.services_warning()), (vec!["crowsnest".to_owned()], None));

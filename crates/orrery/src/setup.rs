@@ -697,7 +697,7 @@ pub fn strict_rule(user: &str, gid: u32, units: &AllowedUnits) -> String {
     format!(
         "{STRICT_MARK}. Written by sudo orrery setup; run it again instead of editing this file.\n\
          // orrery.service may reboot, shut down, update packages, and manage only the units orrery allows:\n\
-         // moonraker.asvc, units whose names start with {}, and agents' units.\n{}",
+         // moonraker.asvc, units whose names start with {}, agents' units, and the units update manager entries restart.\n{}",
         units.prefixes.join(", "),
         rule_body(user, gid, &condition)
     )
@@ -730,7 +730,8 @@ fn load_config(account: &Account, args: &[String]) -> Result<crate::config::Conf
 }
 
 /// The units orrery allows, read as orrery reads them: `moonraker.asvc` in the data folder,
-/// the names that are always allowed, and the system units of agents in the config.
+/// the names that are always allowed, and the system units of agents and of update manager
+/// entries in the config.
 fn allowed_units(account: &Account, args: &[String], config: &crate::config::Config) -> Result<AllowedUnits> {
     let asvc = data_folder(account, args).join("moonraker.asvc");
     // Read only: unlike orrery, setup runs as root, so it doesn't write the default list.
@@ -743,6 +744,12 @@ fn allowed_units(account: &Account, args: &[String], config: &crate::config::Con
             if !names.contains(&name) {
                 names.push(name);
             }
+        }
+    }
+    // The system units update manager entries restart. Their user units need no polkit rule.
+    for name in crate::services::update_manager_units(config).0 {
+        if !names.contains(&name) {
+            names.push(name);
         }
     }
     names.sort();

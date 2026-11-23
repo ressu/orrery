@@ -51,6 +51,8 @@ pub struct Services {
     /// `[machine] shutdown_action`: `poweroff` or `halt`.
     shutdown_action: String,
     allowed: Vec<String>,
+    /// The user units update manager entries restart, such as `aldis` for `user/aldis`.
+    managed_user: Vec<String>,
     /// The system bus, connected on first use. `None` when it isn't there.
     bus: tokio::sync::OnceCell<Option<Bus>>,
     /// orrery's user's session bus, for agents that run as user units.
@@ -77,11 +79,15 @@ struct Service {
 }
 
 impl Services {
-    pub fn new(provider: &str, shutdown_action: String, paths: &Paths) -> Self {
+    pub fn new(provider: &str, shutdown_action: String, paths: &Paths, config: &crate::config::Config) -> Self {
+        let mut allowed = read_allowed(&paths.data.join("moonraker.asvc"));
+        let (managed, managed_user) = update_manager_units(config);
+        allowed.extend(managed.into_iter().filter(|m| !allowed.contains(m)).collect::<Vec<_>>());
         Self {
             enabled: provider == "systemd_dbus",
             shutdown_action,
-            allowed: read_allowed(&paths.data.join("moonraker.asvc")),
+            allowed,
+            managed_user,
             bus: tokio::sync::OnceCell::new(),
             user_bus: tokio::sync::OnceCell::new(),
             list: Mutex::new(Vec::new()),
@@ -519,6 +525,42 @@ fn read_allowed(path: &Path) -> Vec<String> {
     parse_allowed(&text)
 }
 
+/// The units update manager entries restart, so orrery lists them without a line in
+/// `moonraker.asvc` (docs/design/2026-11-23-archive-entries.md, "The service list"). An entry
+/// restarts what `managed_services` names, or its own service unless `is_system_service` is
+/// false, as Moonraker picks them. Only the entry's own name counts, as in Moonraker, and
+/// `user/<name>` names a unit of orrery's user; `klipper` and `moonraker` are always allowed.
+/// Returns the system units' names and the user units' names, without `.service`.
+pub(crate) fn update_manager_units(config: &crate::config::Config) -> (Vec<String>, Vec<String>) {
+    const PREFIX: &str = "update_manager ";
+    let (mut system, mut user) = (Vec::new(), Vec::new());
+    for section in config.section_names(PREFIX) {
+        let name = &section[PREFIX.len()..];
+        let options = config.section_json(&section).unwrap_or_default();
+        let listed: Vec<String> = match options.get("managed_services") {
+            Some(Json::String(s)) => s.split([' ', ',', '\n']).filter(|w| !w.is_empty()).map(str::to_owned).collect(),
+            Some(Json::Array(items)) => items.iter().filter_map(|i| i.as_str().map(str::to_owned)).collect(),
+            Some(_) => Vec::new(),
+            None => {
+                let system_service = match options.get("is_system_service") {
+                    Some(Json::Bool(b)) => *b,
+                    Some(Json::String(s)) => !["false", "no", "off", "0"].contains(&s.trim().to_lowercase().as_str()),
+                    _ => true,
+                };
+                if system_service { vec![name.to_owned()] } else { Vec::new() }
+            }
+        };
+        for service in listed {
+            if service == name && !system.contains(&service) {
+                system.push(service);
+            } else if service == format!("user/{name}") && !user.iter().any(|u| u == name) {
+                user.push(name.to_owned());
+            }
+        }
+    }
+    (system, user)
+}
+
 /// The services in a `moonraker.asvc` text, without `.service` and without repeats.
 pub(crate) fn parse_allowed(text: &str) -> Vec<String> {
     let mut allowed: Vec<String> = Vec::new();
@@ -571,11 +613,19 @@ async fn follow_units(bus: &Bus) -> dbus::Result<tokio::sync::broadcast::Receive
     bus.subscribe(&rule).await
 }
 
-/// The agents' user units, as `user/<name>`, and the signals of the user's systemd. `None`
-/// when no agent runs as a user unit.
+/// The user units of agents and of update manager entries, as `user/<name>`, and the signals of
+/// the user's systemd. `None` when there are none. An update manager entry's unit is listed
+/// only when systemd has it, since nothing else says it exists.
 async fn user_units(app: &App) -> Option<(Vec<Service>, tokio::sync::broadcast::Receiver<Arc<Message>>)> {
-    let units: Vec<String> =
+    let mut units: Vec<String> =
         app.agents.units().filter(|(_, u)| u.scope == Scope::User).map(|(_, u)| u.name.clone()).collect();
+    let agents = units.len();
+    for name in &app.machine.services.managed_user {
+        let unit = format!("{name}.service");
+        if !units.contains(&unit) {
+            units.push(unit);
+        }
+    }
     if units.is_empty() {
         return None;
     }
@@ -583,12 +633,15 @@ async fn user_units(app: &App) -> Option<(Vec<Service>, tokio::sync::broadcast::
         let bus = app.machine.services.bus_for(Scope::User).await?;
         let signals = follow_units(bus).await.map_err(|e| e.to_string())?;
         let mut list = Vec::new();
-        for unit in units {
+        for (i, unit) in units.into_iter().enumerate() {
             let reply = bus.call(manager("LoadUnit", vec![Value::str(&unit)])).await.map_err(|e| e.to_string())?;
             let path = reply.first().and_then(Value::as_str).unwrap_or_default().to_owned();
             let get = |prop| bus.property(SYSTEMD, &path, UNIT, prop);
-            let (active, sub) = (get("ActiveState").await, get("SubState").await);
             let text = |v: dbus::Result<Value>| v.ok().and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default();
+            if i >= agents && text(get("LoadState").await) != "loaded" {
+                continue;
+            }
+            let (active, sub) = (get("ActiveState").await, get("SubState").await);
             let short = unit.strip_suffix(".service").unwrap_or(&unit);
             list.push(Service {
                 name: format!("user/{short}"),
@@ -605,7 +658,7 @@ async fn user_units(app: &App) -> Option<(Vec<Service>, tokio::sync::broadcast::
     match result {
         Ok(found) => Some(found),
         Err(e) => {
-            app.add_warning(format!("[machine]: orrery can't list the agents' user units: {e}"));
+            app.add_warning(format!("[machine]: orrery can't list the user units: {e}"));
             None
         }
     }
@@ -722,6 +775,29 @@ fn notify(app: &App, svc: &Service) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn update_manager_entries_name_their_units() {
+        let mut config = crate::config::Config::parse(
+            "[update_manager crowsnest]\ntype: git_repo\nmanaged_services: crowsnest\n\
+             [update_manager led_effect]\ntype: git_repo\nis_system_service: False\n\
+             [update_manager mobileraker]\ntype: git_repo\n\
+             [update_manager autotune]\ntype: git_repo\nmanaged_services: klipper moonraker\n\
+             [update_manager sneaky]\ntype: git_repo\nmanaged_services: ssh\n",
+        )
+        .unwrap();
+        config
+            .parse_toml(
+                "[update_manager.aldis]\ntype = \"archive\"\nmanaged_services = [\"user/aldis\"]\n",
+                Path::new("orrery.toml"),
+            )
+            .unwrap();
+        let (system, user) = update_manager_units(&config);
+        // An entry's own name, or its user unit; klipper and moonraker are always allowed, and
+        // another unit's name isn't the entry's to restart.
+        assert_eq!(system, ["crowsnest", "mobileraker"]);
+        assert_eq!(user, ["aldis"]);
+    }
 
     fn unit(name: &str, active: &str, sub: &str) -> Value {
         let path = format!("/org/freedesktop/systemd1/unit/{}", name.replace('.', "_2e"));

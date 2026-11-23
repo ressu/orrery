@@ -12,7 +12,7 @@ orrery-build.workspace = true
 orrery-agent.workspace = true
 orrery-dbus.workspace = true
 reqwest = { workspace = true, features = ["rustls-no-provider"] }
-rustix = { workspace = true, features = ["fs"] }
+rustix = { workspace = true, features = ["fs", "system"] }
 rustls.workspace = true
 rustls-platform-verifier.workspace = true
 rustls-rustcrypto.workspace = true

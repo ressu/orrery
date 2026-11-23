@@ -127,6 +127,11 @@ impl Installed {
 
 /// Moonraker's `_validate_release_info`.
 pub async fn installed(opts: &ExecOptions) -> Installed {
+    installed_with(opts, own_asset(orrery_build::TARGET)).await
+}
+
+/// [`installed`], with `own_asset`, the release archive of orrery's own entry for this build.
+async fn installed_with(opts: &ExecOptions, own_asset: Option<String>) -> Installed {
     let mut i = Installed {
         valid: false,
         version: "?".into(),
@@ -157,6 +162,13 @@ pub async fn installed(opts: &ExecOptions) -> Installed {
             .as_ref()
             .and_then(|v| Some((v["project_name"].as_str()?, v["project_owner"].as_str()?, v["version"].as_str()?)));
         match fields {
+            // orrery's own entry knows its asset, and its archive brings a release_info.json,
+            // so without one its version is unknown, and the newest release is offered.
+            None if opts.orrery && own_asset.is_some() => {
+                tracing::info!("{} has no release_info.json, so orrery's version there is unknown", path.display());
+                i.valid = true;
+                i.asset_name = own_asset;
+            }
             None => tracing::info!("Failed to load {}", path.join("release_info.json").display()),
             Some((project, owner, version)) => {
                 i.valid = true;
@@ -200,11 +212,18 @@ pub async fn installed(opts: &ExecOptions) -> Installed {
     i
 }
 
+/// orrery's release archive for a Rust target, such as `orrery-aarch64.tar.gz`, as
+/// `scripts/dist.sh` names it. `None` for a target orrery doesn't release.
+fn own_asset(target: &str) -> Option<String> {
+    orrery_build::archive_target(target).map(|arch| format!("orrery-{arch}.tar.gz"))
+}
+
 /// The entry's object in `version_info`.
 pub fn status(entry: &Entry, i: &Installed, saved: &Saved) -> Value {
     // What .previous/ holds wins: an update from a shell changes it without the database.
     let previous = match &entry.kind {
         crate::config::Kind::Executable(opts) => previous_version(&opts.path, &files(opts, i)),
+        crate::config::Kind::Archive(opts) => crate::archive::previous_version(&opts.path),
         _ => None,
     };
     let rollback = match &previous {
@@ -214,7 +233,7 @@ pub fn status(entry: &Entry, i: &Installed, saved: &Saved) -> Value {
     };
     json!({
         "name": entry.name,
-        "configured_type": "executable",
+        "configured_type": entry.kind.configured_type(),
         "channel": entry.channel.as_str(),
         "debug_enabled": false,
         "channel_invalid": entry.channel_warning.is_some(),
@@ -448,8 +467,14 @@ pub async fn refresh(gh: &Github, entry: &Entry, i: &Installed, saved: &mut Save
 
 /// The release's checksum file, when the entry names one.
 pub fn checksums_of(entry: &Entry, release: &Value) -> Option<Asset> {
-    let crate::config::Kind::Executable(opts) = &entry.kind else { return None };
-    asset_named(release, opts.checksums.as_deref()?)
+    let name = match &entry.kind {
+        crate::config::Kind::Executable(opts) => opts.checksums.as_deref(),
+        crate::config::Kind::Archive(opts) => match &opts.source {
+            crate::config::Source::Github { checksums, .. } => checksums.as_deref(),
+        },
+        _ => None,
+    };
+    asset_named(release, name?)
 }
 
 fn release_resource(repo: &str, channel: Channel) -> String {
@@ -570,14 +595,14 @@ async fn check(entry: &Entry, files: &[String], dir: &Path, out: &Messages) -> R
 }
 
 /// The checksum a `SHA256SUMS` file gives for `name`, in lowercase hex.
-fn expected_sum(sums: &str, name: &str) -> Option<String> {
+pub(crate) fn expected_sum(sums: &str, name: &str) -> Option<String> {
     sums.lines().find_map(|line| {
         let (sum, file) = line.split_once(char::is_whitespace)?;
         (file.trim_start().trim_start_matches('*') == name).then(|| sum.to_ascii_lowercase())
     })
 }
 
-async fn sha256(path: &Path) -> Result<String, String> {
+pub(crate) async fn sha256(path: &Path) -> Result<String, String> {
     use sha2::{Digest, Sha256};
     use tokio::io::AsyncReadExt;
     let mut file = tokio::fs::File::open(path).await.map_err(|e| format!("Can't read {}: {e}", path.display()))?;
@@ -1114,6 +1139,23 @@ pub(crate) mod tests {
         config::own_options("update_manager tool", map, &from_toml, &mut e, &mut Vec::new()).unwrap();
         let i = installed(opts(&e)).await;
         assert_eq!((i.repo.as_str(), i.anomalies.len()), ("example/tool", 0));
+    }
+
+    #[tokio::test]
+    async fn own_entry_without_release_info_offers_the_newest_release() {
+        let dir = tempfile::tempdir().unwrap();
+        let g = config::global(&Map::new(), &mut Vec::new());
+        let e = config::orrery_entry(dir.path().into(), &Map::new(), &[], &[], &g, &mut Vec::new()).unwrap().unwrap();
+        let asset = own_asset("aarch64-unknown-linux-musl");
+        assert_eq!(asset.as_deref(), Some("orrery-aarch64.tar.gz"));
+        let i = installed_with(opts(&e), asset).await;
+        assert!(i.valid, "{:?}", i.warnings);
+        assert_eq!((i.version.as_str(), i.asset_name.as_deref()), ("?", Some("orrery-aarch64.tar.gz")));
+        // A build for a target without releases has nothing to offer.
+        assert!(!installed_with(opts(&e), own_asset("x86_64-unknown-linux-gnu")).await.valid);
+        // Another executable without release_info.json is invalid, as in Moonraker.
+        let other = entry(dir.path(), json!({}));
+        assert!(!installed_with(opts(&other), Some("x".into())).await.valid);
     }
 
     #[test]

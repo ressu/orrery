@@ -5,7 +5,7 @@ An agent is a program that adds features to Orrery. It connects to Orrery's unix
 Spoolman support and its update manager are agents.
 
 Each agent has a table in `orrery.toml`, `[agent.<name>]`. `<name>` may use letters, digits,
-`_`, and `-`. A configured agent can connect only over the unix socket.
+`_`, and `-`. A configured agent connects over the unix socket, or from anywhere with its API key.
 
 To write an agent, see [the plugin interface](../design/2026-11-15-plugin-interface.md). For an
 agent in Rust, use the `orrery-agent` crate.

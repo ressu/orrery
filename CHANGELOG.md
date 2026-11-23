@@ -6,8 +6,20 @@ Fluidd and Mainsail link to the release page on GitHub, which shows the same not
 
 ## Unreleased
 
+### New
+
+- The update manager has a new entry type, `archive`, for programs released as an archive of
+  files, such as aldis. It installs every file of the release, removes the files a new release
+  drops, and keeps the old ones for a rollback. Set it up in `orrery.toml`; see
+  [the update manager](https://github.com/ressu/orrery/blob/main/docs/configuration/update-manager.md#archive-entries).
+- The Services page lists the service of each update manager entry, so it doesn't need a line
+  in `moonraker.asvc`. `managed_services` can name a service that runs with
+  `systemctl --user`, as `user/<name>`.
+
 ### Fixed
 
+- The `orrery` update entry offers the newest release when `~/orrery` has no
+  `release_info.json`, instead of marking the install invalid.
 - The `orrery` update entry no longer warns "orrery put v0.1.1 in place, but runs v0.1.2"
   after orrery is installed again over an older install's database. The warning now compares
   the programs in `~/orrery` with the orrery that runs.

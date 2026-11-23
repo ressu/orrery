@@ -50,7 +50,7 @@ impl Machine {
         if !["halt", "poweroff"].contains(&shutdown_action.as_str()) {
             bail!("[machine] shutdown_action: {shutdown_action} isn't a valid choice. It must be halt or poweroff.");
         }
-        let services = Services::new(&provider, shutdown_action, paths);
+        let services = Services::new(&provider, shutdown_action, paths, config);
         Ok(Self { provider, inside_container, system_info: Mutex::new(info), services })
     }
 

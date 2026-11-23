@@ -7,6 +7,7 @@
 //! `notify_update_response`. It keeps each entry's state in orrery's database, in the
 //! `update_manager` namespace.
 
+mod archive;
 mod config;
 mod deps;
 mod executable;

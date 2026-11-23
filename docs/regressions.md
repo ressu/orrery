@@ -332,6 +332,16 @@ change how safe or complete orrery is to run.
   - It updates `git_repo` and `executable` entries, their Python packages and
     `system_dependencies`, and the `system` entry. A `web`, `zip`, or `python` entry is left
     out, with a warning in `server.info`.
+  - An `archive` entry, orrery's own type in `orrery.toml`, installs every file
+    of a release's archive and keeps a record of them in `.orrery-install.json`. Its status
+    has `configured_type: "archive"`. See docs/design/2026-11-23-archive-entries.md.
+  - **Services from entries:** the service list has each update manager entry's own service,
+    from `managed_services` or by default, without a line in `moonraker.asvc`. Moonraker
+    lists only `moonraker.asvc`'s. `managed_services` also takes `user/<name>`, the entry's
+    unit of orrery's user, which Moonraker refuses with a warning.
+  - orrery's own entry without a `release_info.json` has the version `?` and offers the newest
+    release. Moonraker marks an executable entry without one invalid, as orrery does for every
+    other executable entry.
   - Klipper's entry is named after the project Klippy runs: `klipper` or `kalico`. Moonraker
     always calls it `klipper`. `machine.update.klipper` updates it under either name. Its
     section takes Moonraker's `channel`, `pinned_commit`, `refresh_interval`, and

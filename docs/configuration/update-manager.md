@@ -67,18 +67,18 @@ path = "~/printerkeep"
 is_system_service = false
 ```
 
-Orrery updates `git_repo` and `executable` entries. It doesn't update `web` and `zip` entries
-yet, and lists a warning for each one it leaves out.
+Orrery updates `git_repo` and `executable` entries, and `archive` entries, a type of its own.
+It doesn't update `web` and `zip` entries yet, and lists a warning for each one it leaves out.
 
 ### Options for every entry
 
 | Option | Default | What it does |
 |---|---|---|
-| `type` | required | `git_repo` or `executable` |
+| `type` | required | `git_repo`, `executable`, or `archive` |
 | `path` | required | Where the program is |
-| `channel` | `dev` for `git_repo`, `stable` for `executable` | `stable` and `beta` follow releases; `dev` follows the branch |
+| `channel` | `dev` for `git_repo`, `stable` otherwise | `stable` and `beta` follow releases; `dev` follows the branch |
 | `refresh_interval` | the global one | Hours between checks for this entry |
-| `managed_services` | none | The services to restart after an update |
+| `managed_services` | none | The services to restart after an update; see [Restarts](#restarts) |
 | `is_system_service` | `true` | Whether the program runs as a service |
 | `info_tags` | none | Notes that clients show with the entry |
 | `report_anomalies` | `true` | Whether the entry warns about problems, such as an unexpected remote |
@@ -120,6 +120,54 @@ programs = ["tool-helper", "tool"]
 preflight = ["tool", "--check"]
 ```
 
+### `archive` entries
+
+An `archive` entry installs every file of a release's archive into `path`. It suits programs
+that ship as an archive without a `release_info.json`, such as aldis. Write it in
+`orrery.toml`. Moonraker has no `archive` type, and Orrery reads `moonraker.conf` as Moonraker
+does, so it leaves an `archive` entry there out, with a warning.
+
+```toml
+[update_manager.aldis]
+type = "archive"
+github = "mjonuschat/aldis"
+asset = "aldis-{arch}-linux.tar.xz"
+format = "tar.xz"
+wrapper_folders = 1
+path = "~/aldis"
+preflight = ["aldis", "--version"]
+managed_services = ["user/aldis"]
+```
+
+Where the release comes from:
+
+| Option | Default | What it does |
+|---|---|---|
+| `github` | required | The GitHub repository with the releases, as `owner/name` |
+| `asset` | required | The release's file to download. `{arch}` is the printer's CPU, as `uname -m` prints it, such as `aarch64` |
+| `checksums` | none | A file in the release with SHA-256 sums, such as `SHA256SUMS`, that the download must match |
+
+What's in the download:
+
+| Option | Default | What it does |
+|---|---|---|
+| `format` | required | `tar.gz` or `tar.xz` |
+| `wrapper_folders` | see below | How many folders the archive wraps its files in, one inside the other |
+
+When `wrapper_folders` isn't set, an archive that holds only one folder has one wrapper
+folder, and any other archive has none. When it's set, including to `0`, the archive must
+match it, or the update stops and says what the archive holds.
+
+Orrery keeps a list of the files it installed, in `.orrery-install.json` in `path`. An update
+removes the files that the new release no longer has, and leaves alone any file Orrery didn't
+install, such as a config file. The old files stay in `.previous/`, so a rollback needs no
+download.
+
+The version on the update page is the release Orrery installed. Before Orrery's first update,
+such as for a program you installed by hand, the version is `?`, and the entry offers the
+newest release. If the program updates itself, the page shows the older version until Orrery
+installs the next release.
+
 ## Klipper's entry
 
 Klipper's entry expects the project's own repository and branch. Other ones are reported as a
@@ -142,7 +190,8 @@ Klipper. Klipper's update stops before it overwrites a plugin's file, and says w
 
 The `orrery` entry installs Orrery's releases from GitHub, then restarts Orrery. The old
 programs stay in `~/orrery/.previous/`, and a rollback puts them back. A build of your own
-doesn't update itself.
+doesn't update itself. If `~/orrery` has no `release_info.json`, the version is `?`, and the
+entry offers the newest release.
 
 To take releases from a fork, name it in `orrery.toml`:
 
@@ -161,6 +210,7 @@ takes effect:
 - For an `executable`, `preflight` is the arguments to the new program, such as
   `["--version"]`. With `programs`, the first word names the program to run.
 - For a `git_repo`, it's a file in the repository and its arguments.
+- For an `archive`, it's a file of the archive and its arguments.
 
 ```toml
 [update_manager.printerkeep]
@@ -174,6 +224,17 @@ Orrery's own entry always runs `orrery preflight`.
 
 After an update, Orrery restarts each service in `managed_services` once. If a print is
 running, the restarts wait until it ends.
+
+As in Moonraker, `managed_services` can name the entry's own service, `klipper`, and
+`moonraker`. Without the option, an entry restarts its own service, unless
+`is_system_service = false`. Orrery adds `user/<name>`, for a service of Orrery's user that
+runs with `systemctl --user`, such as `user/aldis` for the `aldis` entry.
+
+Orrery lists each entry's own service on the Services page, so you can restart it from there
+too. You don't need to add it to `moonraker.asvc`. If you set up Orrery with `--strict`, run
+setup again after you add an entry, so polkit allows its service.
+
+`moonraker` in `managed_services` restarts nothing, since Orrery isn't Moonraker.
 
 For how the update manager differs from Moonraker's, see `update-agent` and `update-safety` in
 [Known differences from Moonraker](../regressions.md).

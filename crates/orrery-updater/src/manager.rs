@@ -10,6 +10,7 @@ use orrery_agent::{Agent, MethodError};
 use serde_json::{Map, Value, json};
 use tokio::sync::{Notify, watch};
 
+use crate::archive;
 use crate::config::{self, Entry, Global, Kind, Klippy, Project, SECTION};
 use crate::deps::{self, Deps};
 use crate::executable::{self, Github, Installed, Saved};
@@ -646,9 +647,9 @@ impl Manager {
                 self.save(s).await;
                 return;
             }
-            Kind::Executable(opts) => {
-                let installed = executable::installed(opts).await;
-                if opts.orrery {
+            Kind::Executable(_) | Kind::Archive(_) => {
+                let installed = installed_release(&s.entry.kind).await;
+                if release::is_own(&s.entry) {
                     release::restarted(&mut s.stored.release, valid_version(Some(&installed)));
                 }
                 if fetch {
@@ -854,7 +855,7 @@ impl Manager {
     async fn update_entry(&self, s: &mut EntryState, p: &Progress) -> Result<bool, Failure> {
         match s.entry.kind {
             Kind::Executable(_) if release::is_own(&s.entry) => return self.update_own(s, p, false).await,
-            Kind::Executable(_) => return self.update_executable(s, p, None).await,
+            Kind::Executable(_) | Kind::Archive(_) => return self.update_executable(s, p, None).await,
             Kind::System => return self.update_system(s, p).await,
             Kind::Git(_) => {}
         }
@@ -947,7 +948,7 @@ impl Manager {
     async fn rollback_entry(&self, s: &mut EntryState, p: &Progress) -> Result<bool, Failure> {
         match s.entry.kind {
             Kind::Executable(_) if release::is_own(&s.entry) => return self.update_own(s, p, true).await,
-            Kind::Executable(_) => return self.rollback_executable(s, p).await,
+            Kind::Executable(_) | Kind::Archive(_) => return self.rollback_executable(s, p).await,
             Kind::System => return Err(Failure::new(400, "Rollback not available for system")),
             Kind::Git(_) => {}
         }
@@ -1052,7 +1053,10 @@ impl Manager {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
         let work = async move {
             let sums = checksums.as_ref();
-            executable::install(gh, entry, &installed, &asset, sums, &version, &p.application, &tx).await
+            match &entry.kind {
+                Kind::Archive(_) => archive::install(gh, entry, &asset, sums, &version, &p.application, &tx).await,
+                _ => executable::install(gh, entry, &installed, &asset, sums, &version, &p.application, &tx).await,
+            }
         };
         let forward = async {
             while let Some(line) = rx.recv().await {
@@ -1107,9 +1111,15 @@ impl Manager {
         // The files the last update replaced, kept in .previous/, need no download. They win
         // over the database's rollback version, since an update from a shell changes them
         // without it.
-        let Kind::Executable(opts) = &s.entry.kind else { unreachable!("an executable entry") };
-        let files = executable::files(opts, &installed);
-        if let Some(previous) = executable::previous_version(&opts.path, &files)
+        let (previous, files) = match &s.entry.kind {
+            Kind::Executable(opts) => {
+                let files = executable::files(opts, &installed);
+                (executable::previous_version(&opts.path, &files), files)
+            }
+            Kind::Archive(opts) => (archive::previous_version(&opts.path), Vec::new()),
+            Kind::Git(_) | Kind::System => unreachable!("a release entry"),
+        };
+        if let Some(previous) = previous
             && previous != installed.version
         {
             let prefix = s.entry.prefix();
@@ -1118,7 +1128,12 @@ impl Manager {
             let before = Deps::read(&s.entry.kind.deps()).await;
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
             let entry = &s.entry;
-            let work = async move { executable::restore_previous(entry, &files, &tx).await };
+            let work = async move {
+                match &entry.kind {
+                    Kind::Archive(_) => archive::restore_previous(entry, &tx).await,
+                    _ => executable::restore_previous(entry, &files, &tx).await,
+                }
+            };
             let forward = async {
                 while let Some(line) = rx.recv().await {
                     p.output(&line).await;
@@ -1356,9 +1371,19 @@ fn own_status(s: &EntryState) -> Value {
     status
 }
 
-/// The version of an executable entry's install, when its `release_info.json` is valid.
+/// What a release entry, an executable or an archive, has installed.
+async fn installed_release(kind: &Kind) -> Installed {
+    match kind {
+        Kind::Executable(opts) => executable::installed(opts).await,
+        Kind::Archive(opts) => archive::installed(opts).await,
+        Kind::Git(_) | Kind::System => unreachable!("a release entry"),
+    }
+}
+
+/// The version of an executable entry's install, when its `release_info.json` is valid and
+/// names one.
 fn valid_version(installed: Option<&executable::Installed>) -> Option<&str> {
-    installed.filter(|i| i.valid).map(|i| i.version.as_str())
+    installed.filter(|i| i.valid && i.version != "?").map(|i| i.version.as_str())
 }
 
 /// An entry's object in `version_info` before its first check since the agent started: the
