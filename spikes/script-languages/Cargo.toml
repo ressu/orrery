@@ -1,0 +1,57 @@
+# Script language spike: the same three Moonraker button examples in each candidate language,
+# to compare binary size, build time, dependencies, and how the scripts read.
+# Standalone (its own workspace) so its dependencies stay out of the main build.
+# See docs/design/2026-11-23-buttons-and-actions.md.
+[package]
+name = "script-languages-spike"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[profile.release]
+strip = true
+lto = "thin"
+
+[dependencies]
+serde_json = "1"
+rhai = { version = "1.27", optional = true, default-features = false, features = ["std", "only_i64", "no_module", "no_custom_syntax", "no_time", "serde"] }
+koto = { version = "0.16", optional = true }
+evalexpr = { version = "14", optional = true }
+rune = { version = "0.14", optional = true, default-features = false, features = ["std"] }
+minijinja = { version = "3", optional = true, default-features = false, features = ["builtins", "serde"] }
+
+[[bin]]
+name = "baseline"
+path = "src/bin/baseline.rs"
+
+[[bin]]
+name = "rhai"
+path = "src/bin/rhai.rs"
+required-features = ["rhai"]
+
+[[bin]]
+name = "koto"
+path = "src/bin/koto.rs"
+required-features = ["koto"]
+
+[[bin]]
+name = "evalexpr"
+path = "src/bin/evalexpr.rs"
+required-features = ["evalexpr"]
+
+[[bin]]
+name = "rune"
+path = "src/bin/rune.rs"
+required-features = ["rune"]
+
+[[bin]]
+name = "minijinja"
+path = "src/bin/minijinja.rs"
+required-features = ["minijinja"]
+
+[[bin]]
+name = "rhai_raw"
+path = "src/bin/rhai_raw.rs"
+required-features = ["rhai"]
