@@ -333,15 +333,19 @@ change how safe or complete orrery is to run.
     `system_dependencies`, and the `system` entry. A `web`, `zip`, or `python` entry is left
     out, with a warning in `server.info`.
   - An `archive` entry, orrery's own type in `orrery.toml`, installs every file
-    of a release's archive and keeps a record of them in `.orrery-install.json`. Its status
+    of a release's archive and keeps a record of them in `.release-info.json`. Its status
     has `configured_type: "archive"`. See docs/design/2026-11-23-archive-entries.md.
   - **Services from entries:** the service list has each update manager entry's own service,
     from `managed_services` or by default, without a line in `moonraker.asvc`. Moonraker
     lists only `moonraker.asvc`'s. `managed_services` also takes `user/<name>`, the entry's
     unit of orrery's user, which Moonraker refuses with a warning.
-  - orrery's own entry without a `release_info.json` has the version `?` and offers the newest
-    release. Moonraker marks an executable entry without one invalid, as orrery does for every
-    other executable entry.
+  - orrery's own entry is an `archive` entry. Without the update manager's record of the
+    install, `.release-info.json`, its version is unknown and it offers the newest release.
+  - An `archive` or `executable` entry's unknown version shows as `v0.0.0-missing` when its
+    folder isn't there, and `v0.0.0-invalid` when the folder has no record of the install
+    (`release_info.json` for an executable), where Moonraker shows `?`. Clients compare
+    versions as semver, so they offer an update from these but not from `?`. Git entries show
+    `?`, as in Moonraker.
   - Klipper's entry is named after the project Klippy runs: `klipper` or `kalico`. Moonraker
     always calls it `klipper`. `machine.update.klipper` updates it under either name. Its
     section takes Moonraker's `channel`, `pinned_commit`, `refresh_interval`, and
@@ -349,7 +353,7 @@ change how safe or complete orrery is to run.
     `primary_branch`, and `moved_origin`, which Moonraker fixes; in `moonraker.conf` they're
     ignored, with a warning. Setting both `[update_manager klipper]` and `[update_manager
     kalico]` leaves the entry out. See docs/design/2026-11-22-klipper-updates.md.
-  - No `moonraker` entry. orrery's own entry, `orrery`, is an executable entry for its
+  - No `moonraker` entry. orrery's own entry, `orrery`, is an archive entry for its
     releases instead: the archive for the CPU, checked against `SHA256SUMS`, then
     `orrery preflight`, and the old set kept in `.previous/`. A development build doesn't
     update itself. Its section `[update_manager.orrery]` takes `enabled`, and `repo` from

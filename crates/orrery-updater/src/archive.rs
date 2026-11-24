@@ -15,10 +15,11 @@ use crate::executable::{Asset, Github, Installed, PREVIOUS, expected_sum, sha256
 use crate::packagekit::Messages;
 
 /// The record of what orrery installed, in the entry's folder and in `.previous/`.
-pub const RECORD: &str = ".orrery-install.json";
+pub const RECORD: &str = ".release-info.json";
 
 /// What orrery installed: the release's tag, where it came from, and its files, as paths
-/// relative to the entry's folder.
+/// relative to the entry's folder. It's stored as Moonraker's `release_info.json`, with
+/// `files` added; its own name keeps it apart from a `release_info.json` the package ships.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Record {
     pub repo: String,
@@ -33,9 +34,9 @@ impl Record {
         let v: Value = serde_json::from_str(&text).ok()?;
         let files = v["files"].as_array()?.iter().map(|f| f.as_str().map(str::to_owned)).collect::<Option<_>>()?;
         Some(Self {
-            repo: v["repo"].as_str()?.to_owned(),
+            repo: format!("{}/{}", v["project_owner"].as_str()?, v["project_name"].as_str()?),
             version: v["version"].as_str()?.to_owned(),
-            asset: v["asset"].as_str()?.to_owned(),
+            asset: v["asset_name"].as_str()?.to_owned(),
             files,
         })
     }
@@ -44,7 +45,14 @@ impl Record {
     fn write(&self, dir: &Path) -> Result<(), String> {
         let path = dir.join(RECORD);
         let partial = dir.join(format!("{RECORD}.new"));
-        let text = json!({"repo": self.repo, "version": self.version, "asset": self.asset, "files": self.files});
+        let (owner, name) = self.repo.split_once('/').unwrap_or(("", &self.repo));
+        let text = json!({
+            "project_owner": owner,
+            "project_name": name,
+            "version": self.version,
+            "asset_name": self.asset,
+            "files": self.files,
+        });
         std::fs::write(&partial, text.to_string()).map_err(|e| format!("Can't write {}: {e}", partial.display()))?;
         std::fs::rename(&partial, &path).map_err(|e| format!("Can't write {}: {e}", path.display()))
     }
@@ -52,6 +60,10 @@ impl Record {
 
 /// What's installed, from the record. Without one, such as before orrery's first update of a
 /// program installed by hand, the version is `?`, and the entry offers the newest release.
+///
+/// For orrery's own entry, the repository is the one the install came from, unless
+/// `orrery.toml` names one: the record's, or else the one `release_info.json` names, so a
+/// fork's install keeps taking the fork's releases.
 pub async fn installed(opts: &ArchiveOptions) -> Installed {
     let Source::Github { repo, .. } = &opts.source;
     let mut i = Installed {
@@ -71,8 +83,27 @@ pub async fn installed(opts: &ArchiveOptions) -> Installed {
         i.valid = false;
     } else if let Some(record) = Record::read(path) {
         i.version = record.version;
+        if opts.orrery && !opts.repo_pinned {
+            i.repo = record.repo;
+        }
+    } else if opts.orrery
+        && !opts.repo_pinned
+        && let Some(repo) = release_info_repo(path)
+    {
+        i.repo = repo;
+    }
+    if opts.orrery && opts.source.asset().is_empty() {
+        i.warnings.push(format!("orrery has no releases for this computer's CPU, {}", orrery_build::TARGET));
+        i.valid = false;
     }
     i
+}
+
+/// `owner/name`, from the `release_info.json` that orrery's releases bring.
+fn release_info_repo(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path.join("release_info.json")).ok()?;
+    let v: Value = serde_json::from_str(&text).ok()?;
+    Some(format!("{}/{}", v["project_owner"].as_str()?, v["project_name"].as_str()?))
 }
 
 /// The version `.previous/` holds, for a rollback without a download.
@@ -80,7 +111,7 @@ pub fn previous_version(path: &Path) -> Option<String> {
     Record::read(&path.join(PREVIOUS)).map(|r| r.version)
 }
 
-/// Installs the archive `asset` as release `version`.
+/// Installs the archive `asset` as release `version`, from `repo`, which the record keeps.
 ///
 /// The download goes to a hidden folder beside the files, `.<entry>.update`. There it's
 /// checked against `checksums` when the entry names a checksum file, unpacked, and its
@@ -91,6 +122,7 @@ pub fn previous_version(path: &Path) -> Option<String> {
 pub async fn install(
     gh: &Github,
     entry: &Entry,
+    repo: &str,
     asset: &Asset,
     checksums: Option<&Asset>,
     version: &str,
@@ -98,7 +130,7 @@ pub async fn install(
     out: &Messages,
 ) -> Result<(), String> {
     let Kind::Archive(opts) = &entry.kind else { return Err("Not an archive entry".into()) };
-    let Source::Github { repo, asset: name, checksums: sums_name } = &opts.source;
+    let Source::Github { asset: name, checksums: sums_name, .. } = &opts.source;
     let prefix = entry.prefix();
     let path = &opts.path;
     tokio::fs::create_dir_all(path).await.map_err(|e| format!("Can't make {}: {e}", path.display()))?;
@@ -130,12 +162,18 @@ pub async fn install(
         tokio::fs::create_dir(&unpacked).await.map_err(|e| format!("Can't make {}: {e}", unpacked.display()))?;
         unpack(&download, opts.format, &unpacked).await?;
         let (wrapper, asset_name) = (opts.wrapper_folders, name.clone());
-        let (root, files) = tokio::task::spawn_blocking(move || new_set(&unpacked, wrapper, &asset_name))
+        let (root, mut files) = tokio::task::spawn_blocking(move || new_set(&unpacked, wrapper, &asset_name))
             .await
             .map_err(|e| format!("Can't read the archive: {e}"))??;
+        // orrery's own programs are replaced before it, so a failure partway leaves the old
+        // orrery, which runs with either set.
+        if let Some(at) = files.iter().position(|f| opts.orrery && f == "orrery") {
+            let orrery = files.remove(at);
+            files.push(orrery);
+        }
         check(entry, &files, &root, path, out).await?;
         let old = Record::read(path);
-        let record = Record { repo: repo.clone(), version: version.to_owned(), asset: name.clone(), files };
+        let record = Record { repo: repo.to_owned(), version: version.to_owned(), asset: name.clone(), files };
         let path = path.clone();
         tokio::task::spawn_blocking(move || put_in_place(&path, &root, old.as_ref(), &record))
             .await
@@ -432,8 +470,10 @@ mod tests {
         let at = |p: &str| Asset { url: format!("{base}dl/{p}"), content_type: "?".into(), size: 0 };
 
         // Nothing installed yet: the version is unknown, and the newest release is offered.
+        // Clients see the folder is missing, with a version older than any release.
         let i = installed(opts(&e)).await;
         assert!(i.valid && i.version == "?", "{i:?}");
+        assert_eq!(status(&e, &i, &Saved::default())["version"], "v0.0.0-missing");
         let mut saved = Saved::default();
         refresh(&gh, &e, &i, &mut saved).await;
         assert_eq!(saved.remote_version, "v0.3.2");
@@ -441,7 +481,7 @@ mod tests {
         assert_eq!(status(&e, &i, &saved)["configured_type"], "archive");
 
         // The first install makes the folder, and records the set.
-        install(&gh, &e, &at("v1"), None, "v0.3.1", "aldis", &tx).await.unwrap();
+        install(&gh, &e, "mjonuschat/aldis", &at("v1"), None, "v0.3.1", "aldis", &tx).await.unwrap();
         assert_eq!(read(&path.join("aldis")), "#!/bin/sh\necho aldis v0.3.1\n");
         assert_eq!(read(&path.join("share/old")), "#!/bin/sh\necho share/old v0.3.1\n");
         assert_eq!(installed(opts(&e)).await.version, "v0.3.1");
@@ -450,7 +490,9 @@ mod tests {
 
         // An update adds the new file, removes the dropped one and its empty folder, and
         // keeps the old set in .previous/. A file orrery didn't install stays.
-        install(&gh, &e, saved.asset.as_ref().unwrap(), None, "v0.3.2", "aldis", &tx).await.unwrap();
+        install(&gh, &e, "mjonuschat/aldis", saved.asset.as_ref().unwrap(), None, "v0.3.2", "aldis", &tx)
+            .await
+            .unwrap();
         assert_eq!(read(&path.join("aldis")), "#!/bin/sh\necho aldis v0.3.2\n");
         assert!(path.join("aldis-helper").is_file());
         assert!(!path.join("share").exists());
@@ -467,6 +509,86 @@ mod tests {
         assert_eq!(installed(opts(&e)).await.version, "v0.3.1");
         assert_eq!(previous_version(&path), None);
         assert_eq!(read(&path.join("config.toml")), "mine");
+    }
+
+    /// orrery's own entry: whatever its release's archive holds, with `orrery` replaced last,
+    /// and the repository the install came from.
+    #[tokio::test]
+    async fn own_entry() {
+        let programs = ["orrery-import", "orrery-spoolman", "orrery", "LICENSE"];
+        let v2 = archive(
+            "v0.2.0",
+            "",
+            &["orrery-gpio", "orrery-spoolman", "orrery", "LICENSE", "release_info.json"],
+            "tar.gz",
+        );
+        let sums = {
+            use sha2::{Digest, Sha256};
+            let sum: String = Sha256::digest(&v2).iter().map(|b| format!("{b:02x}")).collect();
+            format!("{sum}  orrery-aarch64.tar.gz\n")
+        };
+        let base = server(|_| {
+            HashMap::from([("/dl/v2".to_owned(), v2.clone()), ("/dl/sums".to_owned(), sums.clone().into_bytes())])
+        })
+        .await;
+        let gh = Github::with_api(&base).unwrap();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path();
+        // A v0.1.x install: the installer's files, and release_info.json, without a record.
+        for file in programs {
+            std::fs::write(path.join(file), format!("{file} v0.1.2")).unwrap();
+        }
+        let info = r#"{"project_name":"orrery","project_owner":"someone","version":"v0.1.2","asset_name":"orrery-aarch64.tar.gz"}"#;
+        std::fs::write(path.join("release_info.json"), info).unwrap();
+        let g = config::global(&Map::new(), &mut Vec::new());
+        let own = |map: serde_json::Value, from: &[&str]| {
+            let from: Vec<String> = from.iter().map(|k| (*k).to_owned()).collect();
+            let mut e = config::orrery_entry(path.into(), map.as_object().unwrap(), &from, &[], &g, &mut Vec::new())
+                .unwrap()
+                .unwrap();
+            // This test's build may be for a CPU orrery doesn't release for.
+            if let Kind::Archive(o) = &mut e.kind {
+                let Source::Github { asset, .. } = &mut o.source;
+                *asset = "orrery-aarch64.tar.gz".into();
+            }
+            e
+        };
+        let e = own(json!({}), &[]);
+
+        // Without a record, the version is unknown, so the newest release is offered, from the
+        // repository the install came from.
+        let i = installed(opts(&e)).await;
+        assert!(i.valid, "{:?}", i.warnings);
+        assert_eq!((i.version.as_str(), i.repo.as_str()), ("?", "someone/orrery"));
+        // orrery.toml's repo wins.
+        let pinned = own(json!({"repo": "other/orrery"}), &["repo"]);
+        assert_eq!(installed(opts(&pinned)).await.repo, "other/orrery");
+
+        // The update installs every file of the archive, orrery last, and records them, with
+        // the repository. It runs the preflight from the new set.
+        let at = |p: &str| Asset { url: format!("{base}dl/{p}"), content_type: "?".into(), size: 0 };
+        install(&gh, &e, &i.repo, &at("v2"), Some(&at("sums")), "v0.2.0", "orrery", &tx).await.unwrap();
+        let record = Record::read(path).unwrap();
+        assert_eq!(record.files.last().map(String::as_str), Some("orrery"));
+        assert!(record.files.contains(&"orrery-gpio".to_owned()));
+        // In Moonraker's format, with the files added.
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(path.join(RECORD)).unwrap()).unwrap();
+        assert_eq!(
+            (saved["project_owner"].as_str(), saved["asset_name"].as_str()),
+            (Some("someone"), Some(record.asset.as_str()))
+        );
+        assert_eq!(record.repo, "someone/orrery");
+        assert!(path.join("orrery-gpio").is_file());
+        let now = installed(opts(&e)).await;
+        assert_eq!((now.version.as_str(), now.repo.as_str()), ("v0.2.0", "someone/orrery"));
+        // Without a record before it, the update doesn't know what to remove, nor what to keep.
+        assert!(path.join("orrery-import").is_file());
+        assert_eq!(previous_version(path), None);
+
+        assert_eq!(status(&e, &now, &Saved::default())["configured_type"], "archive");
+        // Without a record, clients see a version older than any release, so they offer one.
+        assert_eq!(status(&e, &i, &Saved::default())["version"], "v0.0.0-invalid");
     }
 
     #[tokio::test]
@@ -490,33 +612,55 @@ mod tests {
         };
 
         // Explicit wrapper folders are strict.
-        let err = install(&gh, &with(json!({"wrapper_folders": 1})), &at("flat"), None, "v1", "aldis", &tx)
-            .await
-            .unwrap_err();
+        let err = install(
+            &gh,
+            &with(json!({"wrapper_folders": 1})),
+            "mjonuschat/aldis",
+            &at("flat"),
+            None,
+            "v1",
+            "aldis",
+            &tx,
+        )
+        .await
+        .unwrap_err();
         assert_eq!(
             err,
             "aldis.tar.gz doesn't have 1 wrapper folder: it has 2 files at its top, so nothing was changed."
         );
         assert!(!path.join("aldis").exists());
         // 0 keeps a lone folder as it is.
-        install(&gh, &with(json!({"wrapper_folders": 0})), &at("wrapped"), None, "v1", "aldis", &tx).await.unwrap();
+        install(
+            &gh,
+            &with(json!({"wrapper_folders": 0})),
+            "mjonuschat/aldis",
+            &at("wrapped"),
+            None,
+            "v1",
+            "aldis",
+            &tx,
+        )
+        .await
+        .unwrap();
         assert!(path.join("aldis-x/aldis").is_file());
         // Unset, a lone folder is a wrapper folder, and a flat archive has none.
-        install(&gh, &with(json!({})), &at("wrapped"), None, "v2", "aldis", &tx).await.unwrap();
+        install(&gh, &with(json!({})), "mjonuschat/aldis", &at("wrapped"), None, "v2", "aldis", &tx).await.unwrap();
         assert!(path.join("aldis").is_file() && !path.join("aldis-x").exists());
-        install(&gh, &with(json!({})), &at("flat"), None, "v3", "aldis", &tx).await.unwrap();
+        install(&gh, &with(json!({})), "mjonuschat/aldis", &at("flat"), None, "v3", "aldis", &tx).await.unwrap();
         assert!(path.join("LICENSE").is_file());
 
         // The preflight names a file of the set, and a failing one changes nothing.
         let mut e = with(json!({}));
         e.preflight = vec!["missing".into()];
-        let err = install(&gh, &e, &at("flat"), None, "v4", "aldis", &tx).await.unwrap_err();
+        let err = install(&gh, &e, "mjonuschat/aldis", &at("flat"), None, "v4", "aldis", &tx).await.unwrap_err();
         assert_eq!(err, "The preflight's first word, missing, isn't a file of the archive, so nothing was changed.");
         assert_eq!(installed(opts(&e)).await.version, "v3");
 
         // The wrong format is an error from tar.
         let err =
-            install(&gh, &with(json!({"format": "tar.xz"})), &at("flat"), None, "v5", "aldis", &tx).await.unwrap_err();
+            install(&gh, &with(json!({"format": "tar.xz"})), "mjonuschat/aldis", &at("flat"), None, "v5", "aldis", &tx)
+                .await
+                .unwrap_err();
         assert!(err.starts_with("Can't unpack the download as tar.xz:"), "{err}");
         assert_eq!(installed(opts(&e)).await.version, "v3");
     }

@@ -158,14 +158,15 @@ When `wrapper_folders` isn't set, an archive that holds only one folder has one 
 folder, and any other archive has none. When it's set, including to `0`, the archive must
 match it, or the update stops and says what the archive holds.
 
-Orrery keeps a list of the files it installed, in `.orrery-install.json` in `path`. An update
+Orrery keeps a list of the files it installed, in `.release-info.json` in `path`. An update
 removes the files that the new release no longer has, and leaves alone any file Orrery didn't
 install, such as a config file. The old files stay in `.previous/`, so a rollback needs no
 download.
 
 The version on the update page is the release Orrery installed. Before Orrery's first update,
-such as for a program you installed by hand, the version is `?`, and the entry offers the
-newest release. If the program updates itself, the page shows the older version until Orrery
+such as for a program you installed by hand, the version is unknown. The page shows it as
+`v0.0.0-invalid`, or `v0.0.0-missing` when `path` doesn't exist yet, so Fluidd and Mainsail
+offer the newest release. Updating then installs the program, making `path`. If the program updates itself, the page shows the older version until Orrery
 installs the next release.
 
 ## Klipper's entry
@@ -188,10 +189,12 @@ Klipper. Klipper's update stops before it overwrites a plugin's file, and says w
 
 ## Orrery's own entry
 
-The `orrery` entry installs Orrery's releases from GitHub, then restarts Orrery. The old
-programs stay in `~/orrery/.previous/`, and a rollback puts them back. A build of your own
-doesn't update itself. If `~/orrery` has no `release_info.json`, the version is `?`, and the
-entry offers the newest release.
+The `orrery` entry installs Orrery's releases from GitHub, then restarts Orrery. It works as
+an [`archive` entry](#archive-entries) does: it installs every file of the release, so a
+release can bring a new program, and removes the files a new release drops. The old files
+stay in `~/orrery/.previous/`, and a rollback puts them back. A build of your own doesn't
+update itself. If `~/orrery` has no `.release-info.json`, as after an install from v0.1.2
+or older, the version shows as `v0.0.0-invalid`, and the entry offers the newest release.
 
 To take releases from a fork, name it in `orrery.toml`:
 

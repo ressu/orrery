@@ -114,19 +114,27 @@ program with a slow start makes each check slow.
 
 ## What's installed
 
-Orrery keeps a record of the install in the entry's folder, `.orrery-install.json`: the
-source, the release's tag, the asset, and the list of files. A file in the folder, not the
+Orrery keeps a record of the install in the entry's folder, `.release-info.json`: the
+source, the release's tag, the asset, and the list of files. Its format is Moonraker's
+`release_info.json` (`project_owner`, `project_name`, `version`, `asset_name`) with `files`
+added. A file in the folder, not the
 database, so `.previous/` can hold the record too, and a rollback brings it back with the
 files. It has its own name, so it can't collide with a file in the archive, such as Orrery's
 own `release_info.json`.
 
 The version the update page shows is the tag in the record. Without a record, such as before
-Orrery's first update of a program installed by hand, the version is `?`, and the entry offers
-the newest release. A program that updates itself leaves the record behind, so the page shows
-the older version until Orrery installs the next release.
+Orrery's first update of a program installed by hand, the version is unknown, and the entry
+offers the newest release. Moonraker shows an unknown version as `?`, but clients compare
+versions as semver and see no update from `?`. So the status shows `v0.0.0-missing` when the
+folder isn't there, and `v0.0.0-invalid` when it is but has no record (user, 2026-11-24).
+Every release is newer than both, so clients offer it, and the update manager can install a
+program from nothing. Executable entries show the same, `v0.0.0-invalid` meaning no
+`release_info.json`. Git entries keep `?`: they need a repository, and often a virtualenv,
+set up first. A program that updates itself leaves the
+record behind, so the page shows the older version until Orrery installs the next release.
 
-The same goes for Orrery's own entry: without a `release_info.json` in `~/orrery`, its version
-is `?`, and it offers the newest release. Today the entry is marked invalid instead.
+Orrery's own entry is an archive entry too (since 2026-11-24): without a record in `~/orrery`,
+its version is unknown in the same way.
 
 ## An update
 

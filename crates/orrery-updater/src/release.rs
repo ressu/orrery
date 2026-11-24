@@ -1,7 +1,7 @@
 //! What's particular to orrery's own entry (docs/design/2026-11-22-self-update.md). The
-//! entry itself is an executable entry, built by [`crate::config::orrery_entry`]: its asset
-//! is an archive of [`PROGRAMS`], checked against [`CHECKSUMS`], and its preflight is
-//! `orrery <options> preflight`. This module adds:
+//! entry itself is an archive entry, built by [`crate::config::orrery_entry`]: its asset is
+//! the release's archive for this CPU ([`own_asset`]), checked against [`CHECKSUMS`], and its
+//! preflight is `orrery <options> preflight`. This module adds:
 //! - the refusal of a development build;
 //! - the check after the restart, that orrery runs the version the update put in place;
 //! - the options orrery runs with, and its folder;
@@ -11,11 +11,15 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
 
+use crate::archive;
 use crate::config::{self, Entry, Kind};
 use crate::executable::{self, Fetched, Github, PREVIOUS, Saved};
 
-/// The programs a release holds, in the order they're replaced: orrery last.
-pub const PROGRAMS: [&str; 5] = ["orrery-gpio", "orrery-spoolman", "orrery-updater", "orrery-import", "orrery"];
+/// orrery's release archive for a Rust target, such as `orrery-aarch64.tar.gz`, as
+/// `scripts/dist.sh` names it. `None` for a target orrery doesn't release.
+pub fn own_asset(target: &str) -> Option<String> {
+    orrery_build::archive_target(target).map(|arch| format!("orrery-{arch}.tar.gz"))
+}
 /// The release's checksum file.
 pub const CHECKSUMS: &str = "SHA256SUMS";
 
@@ -26,7 +30,7 @@ pub fn problem() -> Option<String> {
 
 /// Whether `entry` is orrery's own.
 pub fn is_own(entry: &Entry) -> bool {
-    matches!(&entry.kind, Kind::Executable(o) if o.orrery)
+    matches!(&entry.kind, Kind::Archive(o) if o.orrery)
 }
 
 /// The warning for programs that haven't taken effect: `installed`, the version in orrery's
@@ -164,8 +168,8 @@ pub async fn self_update(repo: Option<String>, tag: Option<String>, args: &[Stri
         return Err(problem);
     }
     let entry = shell_entry(repo, args)?;
-    let Kind::Executable(opts) = &entry.kind else { unreachable!("an executable entry") };
-    let installed = executable::installed(opts).await;
+    let Kind::Archive(opts) = &entry.kind else { unreachable!("an archive entry") };
+    let installed = archive::installed(opts).await;
     if !installed.valid {
         return Err(format!(
             "orrery can't update the programs in {}: {}",
@@ -191,7 +195,7 @@ pub async fn self_update(repo: Option<String>, tag: Option<String>, args: &[Stri
     let checksums = executable::checksums_of(&entry, &release);
     println!("Installing orrery {version} in {}...", opts.path.display());
     printing(async |out| {
-        executable::install(&gh, &entry, &installed, &asset, checksums.as_ref(), &version, "orrery", out).await
+        archive::install(&gh, &entry, &installed.repo, &asset, checksums.as_ref(), &version, "orrery", out).await
     })
     .await?;
     println!("Installed orrery {version}. {RESTART}");
@@ -201,16 +205,14 @@ pub async fn self_update(repo: Option<String>, tag: Option<String>, args: &[Stri
 /// `orrery-updater rollback`: puts `.previous/` back, without orrery.
 pub async fn rollback(args: &[String]) -> Result<(), String> {
     let entry = shell_entry(None, args)?;
-    let Kind::Executable(opts) = &entry.kind else { unreachable!("an executable entry") };
-    let installed = executable::installed(opts).await;
-    let files = executable::files(opts, &installed);
-    let Some(version) = executable::previous_version(&opts.path, &files) else {
+    let Kind::Archive(opts) = &entry.kind else { unreachable!("an archive entry") };
+    let Some(version) = archive::previous_version(&opts.path) else {
         return Err(format!(
-            "{} holds no complete set of orrery's programs, so there's nothing to roll back to.\nTo install a given release instead, run:\n  orrery self-update --version <version>",
+            "{} holds no earlier release of orrery, so there's nothing to roll back to.\nTo install a given release instead, run:\n  orrery self-update --version <version>",
             opts.path.join(PREVIOUS).display()
         ));
     };
-    printing(async |out| executable::restore_previous(&entry, &files, out).await).await?;
+    printing(async |out| archive::restore_previous(&entry, out).await).await?;
     println!("Restored orrery {version}. {RESTART}");
     Ok(())
 }

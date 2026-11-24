@@ -97,6 +97,8 @@ jobs:
           printf '[server]\n' > "$home/printer_data/config/moonraker.conf"
           HOME=$home ORRERY_DOWNLOAD_URL="file://$PWD/dist" sh scripts/install.sh --no-setup --no-import < /dev/null
           "$home/orrery/orrery" --version
+          # The update manager's record of the install, with every file of the archive.
+          jq -e '.files | index("orrery") and index("orrery-gpio")' "$home/orrery/.release-info.json"
 
       - uses: actions/upload-artifact@v7
         with:

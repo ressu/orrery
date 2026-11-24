@@ -127,11 +127,6 @@ impl Installed {
 
 /// Moonraker's `_validate_release_info`.
 pub async fn installed(opts: &ExecOptions) -> Installed {
-    installed_with(opts, own_asset(orrery_build::TARGET)).await
-}
-
-/// [`installed`], with `own_asset`, the release archive of orrery's own entry for this build.
-async fn installed_with(opts: &ExecOptions, own_asset: Option<String>) -> Installed {
     let mut i = Installed {
         valid: false,
         version: "?".into(),
@@ -162,13 +157,6 @@ async fn installed_with(opts: &ExecOptions, own_asset: Option<String>) -> Instal
             .as_ref()
             .and_then(|v| Some((v["project_name"].as_str()?, v["project_owner"].as_str()?, v["version"].as_str()?)));
         match fields {
-            // orrery's own entry knows its asset, and its archive brings a release_info.json,
-            // so without one its version is unknown, and the newest release is offered.
-            None if opts.orrery && own_asset.is_some() => {
-                tracing::info!("{} has no release_info.json, so orrery's version there is unknown", path.display());
-                i.valid = true;
-                i.asset_name = own_asset;
-            }
             None => tracing::info!("Failed to load {}", path.join("release_info.json").display()),
             Some((project, owner, version)) => {
                 i.valid = true;
@@ -212,11 +200,13 @@ async fn installed_with(opts: &ExecOptions, own_asset: Option<String>) -> Instal
     i
 }
 
-/// orrery's release archive for a Rust target, such as `orrery-aarch64.tar.gz`, as
-/// `scripts/dist.sh` names it. `None` for a target orrery doesn't release.
-fn own_asset(target: &str) -> Option<String> {
-    orrery_build::archive_target(target).map(|arch| format!("orrery-{arch}.tar.gz"))
-}
+/// The versions a release entry's status shows when the version is unknown: its folder is
+/// missing, or it has no record of the install (`release_info.json` for an executable).
+/// Moonraker shows `?`, but clients compare versions as semver and see no update from `?`.
+/// Any release is newer than these, so clients offer it. Git entries keep `?`: they need a
+/// repository, and often a virtualenv, set up first.
+pub const MISSING_VERSION: &str = "v0.0.0-missing";
+pub const UNKNOWN_VERSION: &str = "v0.0.0-invalid";
 
 /// The entry's object in `version_info`.
 pub fn status(entry: &Entry, i: &Installed, saved: &Saved) -> Value {
@@ -241,7 +231,14 @@ pub fn status(entry: &Entry, i: &Installed, saved: &Saved) -> Value {
         "info_tags": entry.info_tags,
         "repo_name": i.project(),
         "owner": i.owner(),
-        "version": i.version,
+        "version": match &entry.kind {
+            crate::config::Kind::Archive(o) if i.version == "?" && !o.path.exists() => MISSING_VERSION,
+            crate::config::Kind::Executable(o) if i.version == "?" && !o.path.exists() => MISSING_VERSION,
+            crate::config::Kind::Archive(_) | crate::config::Kind::Executable(_) if i.version == "?" => {
+                UNKNOWN_VERSION
+            }
+            _ => i.version.as_str(),
+        },
         "remote_version": saved.remote_version,
         "rollback_version": rollback,
         "last_error": saved.last_error,
@@ -1139,23 +1136,6 @@ pub(crate) mod tests {
         config::own_options("update_manager tool", map, &from_toml, &mut e, &mut Vec::new()).unwrap();
         let i = installed(opts(&e)).await;
         assert_eq!((i.repo.as_str(), i.anomalies.len()), ("example/tool", 0));
-    }
-
-    #[tokio::test]
-    async fn own_entry_without_release_info_offers_the_newest_release() {
-        let dir = tempfile::tempdir().unwrap();
-        let g = config::global(&Map::new(), &mut Vec::new());
-        let e = config::orrery_entry(dir.path().into(), &Map::new(), &[], &[], &g, &mut Vec::new()).unwrap().unwrap();
-        let asset = own_asset("aarch64-unknown-linux-musl");
-        assert_eq!(asset.as_deref(), Some("orrery-aarch64.tar.gz"));
-        let i = installed_with(opts(&e), asset).await;
-        assert!(i.valid, "{:?}", i.warnings);
-        assert_eq!((i.version.as_str(), i.asset_name.as_deref()), ("?", Some("orrery-aarch64.tar.gz")));
-        // A build for a target without releases has nothing to offer.
-        assert!(!installed_with(opts(&e), own_asset("x86_64-unknown-linux-gnu")).await.valid);
-        // Another executable without release_info.json is invalid, as in Moonraker.
-        let other = entry(dir.path(), json!({}));
-        assert!(!installed_with(opts(&other), Some("x".into())).await.valid);
     }
 
     #[test]

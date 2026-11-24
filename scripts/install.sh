@@ -177,9 +177,18 @@ grep "  $archive\$" "$work/SHA256SUMS" >"$work/expected" || fail "SHA256SUMS has
   fail "$archive doesn't match its checksum, so the installer stopped. Nothing is installed."
 mkdir "$work/unpacked"
 tar -xzf "$work/$archive" --no-same-owner -C "$work/unpacked"
+installed=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$work/unpacked/release_info.json" 2>/dev/null || true)
+files=""
 for file in "$work"/unpacked/*; do
+  files="$files${files:+, }\"${file##*/}\""
   mv -f "$file" "$dir/"
 done
+# The update manager's record of what it installed, so it shows this version, and its first
+# update knows which files to replace and keep for a rollback.
+if [ -n "$installed" ]; then
+  printf '{"project_owner": "%s", "project_name": "%s", "version": "%s", "asset_name": "%s", "files": [%s]}\n' \
+    "${default_repo%%/*}" "${default_repo#*/}" "$installed" "$archive" "$files" >"$dir/.release-info.json"
+fi
 say "Installed $("$dir/orrery" --version) in $dir."
 
 # 3. Preflight: orrery runs on this CPU, and reads the printer's config.

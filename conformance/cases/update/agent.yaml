@@ -54,11 +54,12 @@ steps:
         # doesn't update itself, and the build folder has no release_info.json.
         orrery:
           name: orrery
-          configured_type: executable
+          configured_type: archive
           channel: stable
           is_valid: false
           remote_version: "?"
-          warnings: {$contains: ["Failed to validate installation", "This is a development build, so orrery doesn't update itself."]}
+          # The test build is for this machine's target, which orrery doesn't release for.
+          warnings: {$contains: ["$regex:^orrery has no releases for this computer's CPU, ", "This is a development build, so orrery doesn't update itself."]}
         tool:
           name: tool
           configured_type: executable
@@ -67,7 +68,8 @@ steps:
           is_valid: false
           owner: example
           repo_name: tool
-          version: "?"
+          # Its folder is missing.
+          version: v0.0.0-missing
           remote_version: "?"
           warnings: ["Location at option 'path: /nonexistent/orrery-updater-tool' is not a directory.", Failed to validate installation]
   # An entry it can't use is a warning, and the others keep working.

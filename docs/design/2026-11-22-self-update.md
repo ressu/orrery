@@ -100,20 +100,22 @@ with a release archive and a local stand-in for GitHub. No printer has run them 
 
 ## The `orrery` entry
 
-- **It's an executable entry** for orrery's folder, with built-in settings: the archive of
-  orrery's programs, `SHA256SUMS`, and a preflight of `orrery <options> preflight`. It uses
-  the building blocks any executable entry has (see "Archives and checksums for every
-  executable entry"); nothing in the update itself is special to orrery (user, 2026-11-22).
-  What is: a development build doesn't update, the check after the restart, and orrery's
-  restart coming last.
+- **It's an `archive` entry** for orrery's folder (since 2026-11-24; it was an executable
+  entry before), with built-in settings: the release's `.tar.gz` for this CPU with no wrapper
+  folder, `SHA256SUMS`, and a preflight of `orrery <options> preflight`. It uses the building
+  blocks any entry has; nothing in the update itself is special to orrery (user,
+  2026-11-22). What is: a development build doesn't update, `orrery` is replaced after the
+  other files, the check after the restart, and orrery's restart coming last. Its status
+  still says `configured_type: "executable"`, as clients knew it.
 - **It's built in,** like `system`, and listed after it in `machine.update.status`.
 - **One channel:** the entry follows GitHub's latest release. With no prereleases, there's
   nothing for `beta` to follow, and `dev` would need a build for each commit. A `channel`
   option for this entry is ignored, with a warning.
 - **Options:** `[update_manager.orrery]` in `orrery.toml` can set `enabled` and `repo`.
-  `repo` overrides the repository `release_info.json` names, for anyone who wants to follow
+  `repo` overrides the repository the install came from, for anyone who wants to follow
   their own fork (user, 2026-11-22). It's read only from `orrery.toml`, as Klipper's `origin`
-  is. A fork's own releases name the fork in their `release_info.json`, so installing one with
+  is. Without it, the repository is the one in the update manager's record of the install, or
+  else the one the install's `release_info.json` names, so installing a fork's release with
   `self-update --repo` switches to it, with no option.
 - **Clients:** Fluidd's Update button calls `machine.update.client` for any entry other than
   `klipper` and `moonraker`, and `client` updates any entry, so Fluidd works as it is.
@@ -147,11 +149,12 @@ with a release archive and a local stand-in for GitHub. No printer has run them 
 
    A failed preflight deletes the hidden files and stops the update, with preflight's
    message. Nothing has changed then, not even `.previous/`.
-5. **Keep the old set.** The current binaries and `release_info.json` are hard-linked into
+5. **Keep the old set.** The files the record lists, and the record, are hard-linked into
    `~/orrery/.previous/`, replacing any older copy there. The entry's `rollback_version`
-   comes from that `release_info.json`, so it's right after a shell command too.
-6. **Rename.** Each new binary is renamed over the old one: the agents first, `orrery` last.
-   Running processes keep their old files, so nothing changes until the restart.
+   comes from that record, so it's right after a shell command too.
+6. **Rename.** Each file of the new release is renamed into place, `orrery` last, and the
+   files only the old set had are removed. Then the new record is written. Running processes
+   keep their old files, so nothing changes until the restart.
 7. **Restart.** The agent stores the version it expects under `update_manager.orrery` in the
    database, and sends its last progress message. Then it calls `server.restart`, after every
    other restart, since that restart stops the agent. orrery starts its program again by name,
@@ -342,32 +345,29 @@ An install script, for `curl | sh`, comes later.
 
 ## Backlog
 
-### The `orrery` entry's list of programs (user, 2026-11-23)
+### The `orrery` entry's list of programs (user, 2026-11-23, done 2026-11-24)
 
-**To revisit before a release adds, renames, or drops a program.** The `orrery` entry's
-`programs` are compiled in: `release::PROGRAMS` in `crates/orrery-updater/src/release.rs`, used
-by `config.rs`. The list belongs to the running `orrery-updater`, which is the old version
-during an update. So:
+The `orrery` entry's programs were compiled into the running `orrery-updater`, which is the
+old version during an update, so a release couldn't add, drop, or rename a program.
 
-- **A new program never arrives.** If a release ships a new agent, such as a WLED agent, the
-  old updater replaces only the four programs it knows, and the new agent is never installed.
-  The new orrery then starts without it, and warns that the program isn't there.
-- **A program can't be dropped or renamed.** The old updater refuses an archive without one
-  of its four programs ("has no orrery-import, so nothing was changed"), so the update never
-  happens.
-- **The same applies to `programs` in any executable entry:** a tool can't add a helper program
-  in a release without each user editing `orrery.toml` first.
+**The fix: the updater keeps its own record of what it installed** (user, 2026-11-24). The
+entry became an `archive` entry: an update installs every file of the release's archive, and
+writes the files, the version, and the repository to `.release-info.json`. The next update
+replaces those, and removes the ones the new release doesn't have; `.previous/` keeps the old
+set with its record, and a rollback removes what only the newer set had.
 
-The idea behind the fixed list holds: the updater shouldn't replace whatever an archive
-happens to hold. That needs a design, not a quick fix. Questions for it:
+A list of programs in the release, such as in its `release_info.json`, was the first idea and
+was rejected: it makes each package describe what the updater installs, and the update
+manager should be able to install any archive, such as static files or a tool that has
+nothing to do with printing, without a file of a special format. Data a package brings may be
+used, as the repository in `release_info.json` is, but nothing may depend on it.
 
-- **Where the list comes from.** A manifest in the archive, such as `release_info.json`
-  listing its programs, so the new release says what it holds. The old updater must trust it
-  only after the checksum check.
-- **Removed programs.** Whether an update deletes a program the new release no longer lists,
-  or keeps it, and how a rollback brings it back. `.previous/` has to hold the whole old set,
-  and a rollback has to remove programs that only the new set had.
-- **Preflight.** It runs the new set's `orrery`, which can also check that the new set is
-  complete.
-- **Older updaters.** v0.1.x updaters have the fixed list. The first release with a new
-  program needs a plan for them, such as a release that only changes the updater first.
+- **The installer writes the record,** so a fresh install shows its version.
+- **An install without a record,** such as one from a v0.1.x installer, has an unknown
+  version, which the status shows as `v0.0.0-invalid`, so clients offer the newest release.
+  The first update installs every file of the archive. Without a record it can't know what to remove or keep in `.previous/`, so files
+  only the old release had stay, and that first update has no rollback from `.previous/`.
+- **Older updaters:** a v0.1.x updater installs only the four programs it knows, and writes
+  no record. The new updater then has an unknown version, and offers the same release again,
+  which installs the rest. So it's one extra update, once, from v0.1.x.
+

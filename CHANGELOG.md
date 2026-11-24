@@ -24,6 +24,18 @@ Fluidd and Mainsail link to the release page on GitHub, which shows the same not
 - The Services page lists the service of each update manager entry, so it doesn't need a line
   in `moonraker.asvc`. `managed_services` can name a service that runs with
   `systemctl --user`, as `user/<name>`.
+- Updating Orrery installs every file of the release, so a release can bring a new program,
+  such as `orrery-gpio`, and removes the files a release drops. A rollback removes the files
+  the older version doesn't have.
+
+  An install from v0.1.2 or older shows Orrery's version as `v0.0.0-invalid` until its first
+  update. Updating from v0.1.2 or older installs only the programs the old updater knows, so
+  the update manager then offers the same release again: update once more to install the
+  rest.
+- An `archive` or `executable` entry whose version Orrery doesn't know shows as
+  `v0.0.0-invalid`, or `v0.0.0-missing` when its folder isn't there yet, instead of `?`, so
+  Fluidd and Mainsail offer the newest release. Updating a missing `archive` entry installs
+  it.
 
 ### Fixed
 

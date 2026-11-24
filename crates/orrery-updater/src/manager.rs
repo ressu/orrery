@@ -430,11 +430,9 @@ impl Manager {
         // orrery's programs may have changed since the stored status, by an update and the
         // restart after it, or from a shell.
         for s in states.iter_mut().filter(|s| release::is_own(&s.entry)) {
-            if let Kind::Executable(opts) = &s.entry.kind {
-                s.installed = Some(executable::installed(opts).await);
-                release::restarted(&mut s.stored.release, valid_version(s.installed.as_ref()));
-                s.stored.status = own_status(s);
-            }
+            s.installed = Some(installed_release(&s.entry.kind).await);
+            release::restarted(&mut s.stored.release, valid_version(s.installed.as_ref()));
+            s.stored.status = own_status(s);
         }
         tracing::info!(
             "{} update manager entries, checked every {} hours{}",
@@ -854,7 +852,7 @@ impl Manager {
     /// date.
     async fn update_entry(&self, s: &mut EntryState, p: &Progress) -> Result<bool, Failure> {
         match s.entry.kind {
-            Kind::Executable(_) if release::is_own(&s.entry) => return self.update_own(s, p, false).await,
+            Kind::Archive(_) if release::is_own(&s.entry) => return self.update_own(s, p, false).await,
             Kind::Executable(_) | Kind::Archive(_) => return self.update_executable(s, p, None).await,
             Kind::System => return self.update_system(s, p).await,
             Kind::Git(_) => {}
@@ -947,7 +945,7 @@ impl Manager {
 
     async fn rollback_entry(&self, s: &mut EntryState, p: &Progress) -> Result<bool, Failure> {
         match s.entry.kind {
-            Kind::Executable(_) if release::is_own(&s.entry) => return self.update_own(s, p, true).await,
+            Kind::Archive(_) if release::is_own(&s.entry) => return self.update_own(s, p, true).await,
             Kind::Executable(_) | Kind::Archive(_) => return self.rollback_executable(s, p).await,
             Kind::System => return Err(Failure::new(400, "Rollback not available for system")),
             Kind::Git(_) => {}
@@ -1054,7 +1052,9 @@ impl Manager {
         let work = async move {
             let sums = checksums.as_ref();
             match &entry.kind {
-                Kind::Archive(_) => archive::install(gh, entry, &asset, sums, &version, &p.application, &tx).await,
+                Kind::Archive(_) => {
+                    archive::install(gh, entry, &installed.repo, &asset, sums, &version, &p.application, &tx).await
+                }
                 _ => executable::install(gh, entry, &installed, &asset, sums, &version, &p.application, &tx).await,
             }
         };

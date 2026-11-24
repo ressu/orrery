@@ -346,8 +346,6 @@ pub struct ExecOptions {
     pub checksums: Option<String>,
     /// `repo` came from `orrery.toml`, and wins over `release_info.json`.
     pub repo_pinned: bool,
-    /// orrery's own entry: a development build doesn't update, and orrery restarts last.
-    pub orrery: bool,
 }
 
 /// An `archive` entry, orrery's own type: the files of a release's archive, installed into
@@ -364,6 +362,12 @@ pub struct ArchiveOptions {
     /// only a folder at its top, and none otherwise.
     pub wrapper_folders: Option<usize>,
     pub system_dependencies: Option<String>,
+    /// orrery's own entry: a development build doesn't update, `orrery` is replaced last, and
+    /// orrery restarts last.
+    pub orrery: bool,
+    /// For orrery's own entry: the repository came from `orrery.toml`. Otherwise the one the
+    /// install came from wins, so a fork's install keeps taking the fork's releases.
+    pub repo_pinned: bool,
 }
 
 /// Where an archive entry's releases come from.
@@ -611,8 +615,10 @@ pub fn system_entry(global: &Global) -> Entry {
 /// The options orrery's own entry takes, from `[update_manager.orrery]`.
 const ORRERY_OPTIONS: &[&str] = &["enabled", "repo"];
 
-/// orrery's own entry: an executable entry for the programs in `dir`, which its releases
-/// hold in an archive with `SHA256SUMS` (docs/design/2026-11-22-self-update.md).
+/// orrery's own entry: an archive entry for the files in `dir`, from its releases' archive for
+/// this CPU, checked against `SHA256SUMS` (docs/design/2026-11-22-self-update.md). An update
+/// installs whatever the archive holds, and the record of what it installed says what to
+/// replace and remove next time.
 /// `[update_manager.orrery]` can set `enabled`, and `repo` from `orrery.toml` only. Its
 /// preflight is `orrery <orrery_args> preflight`, with the options orrery runs with. `None`
 /// when the section sets `enabled = false`.
@@ -640,21 +646,26 @@ pub fn orrery_entry(
     } else {
         o.repo("repo")?
     };
-    let opts = ExecOptions {
+    let opts = ArchiveOptions {
         path: dir,
-        // Without one, the repository release_info.json names.
-        repo: repo.clone().unwrap_or_else(|| orrery_build::REPO.to_owned()),
+        source: Source::Github {
+            // Without one, the repository the install came from.
+            repo: repo.clone().unwrap_or_else(|| orrery_build::REPO.to_owned()),
+            // Empty for a CPU orrery doesn't release for, which the status says.
+            asset: crate::release::own_asset(orrery_build::TARGET).unwrap_or_default(),
+            checksums: Some(crate::release::CHECKSUMS.into()),
+        },
+        format: ArchiveFormat::TarGz,
+        wrapper_folders: Some(0),
         system_dependencies: None,
-        programs: crate::release::PROGRAMS.map(str::to_owned).into(),
-        checksums: Some(crate::release::CHECKSUMS.into()),
-        repo_pinned: repo.is_some(),
         orrery: true,
+        repo_pinned: repo.is_some(),
     };
     let mut preflight = vec!["orrery".to_owned()];
     preflight.extend(orrery_args.iter().cloned());
     preflight.push("preflight".into());
     let mut hashed = map.clone();
-    hashed.insert("orrery".into(), serde_json::json!([opts.path, opts.repo]));
+    hashed.insert("orrery".into(), serde_json::json!([opts.path, repo]));
     Ok(Some(Entry {
         name: "orrery".into(),
         channel: Channel::Stable,
@@ -666,7 +677,7 @@ pub fn orrery_entry(
         info_tags: Vec::new(),
         report_anomalies: true,
         hash: hash(&hashed),
-        kind: Kind::Executable(opts),
+        kind: Kind::Archive(opts),
         klippy: None,
         preflight,
     }))
@@ -752,7 +763,6 @@ pub fn entry(name: &str, map: &Map<String, Value>, global: &Global) -> Result<En
             programs: Vec::new(),
             checksums: None,
             repo_pinned: false,
-            orrery: false,
         }),
         Some("archive") => Kind::Archive(ArchiveOptions {
             path: expand_home(&o.required("path")?),
@@ -778,6 +788,8 @@ pub fn entry(name: &str, map: &Map<String, Value>, global: &Global) -> Result<En
                 })?),
             },
             system_dependencies: o.text("system_dependencies")?,
+            orrery: false,
+            repo_pinned: true,
         }),
         Some(t @ ("web" | "zip" | "python")) => {
             return Err(format!("[{}]: orrery doesn't update {t} entries yet, so this entry is left out", o.section));
@@ -1152,24 +1164,31 @@ mod tests {
             orrery_entry("/o".into(), &map(m), &toml(from), &args, &g, w)
         };
         let opts = |e: &Entry| match &e.kind {
-            Kind::Executable(o) => o.clone(),
-            _ => panic!("an executable entry"),
+            Kind::Archive(o) => o.clone(),
+            _ => panic!("an archive entry"),
+        };
+        let repo = |e: &Entry| match &opts(e).source {
+            Source::Github { repo, .. } => repo.clone(),
         };
         let mut w = Vec::new();
-        // An executable entry with an archive of orrery's programs and SHA256SUMS, and orrery's
-        // preflight, with the options orrery runs with before the subcommand.
+        // An archive entry: every file of the release's archive, checked against SHA256SUMS, and
+        // orrery's preflight, with the options orrery runs with before the subcommand.
         let e = orrery(json!({}), &[], &mut w).unwrap().unwrap();
         assert_eq!((e.name.as_str(), e.services()), ("orrery", vec!["orrery".to_owned()]));
+        assert_eq!(e.kind.configured_type(), "archive");
         let o = opts(&e);
-        assert_eq!(o.programs, crate::release::PROGRAMS);
-        assert_eq!(o.checksums.as_deref(), Some("SHA256SUMS"));
+        let Source::Github { checksums, .. } = &o.source;
+        assert_eq!(
+            (checksums.as_deref(), o.format, o.wrapper_folders),
+            (Some("SHA256SUMS"), ArchiveFormat::TarGz, Some(0))
+        );
         assert!(o.orrery && !o.repo_pinned);
-        assert_eq!(o.repo, orrery_build::REPO);
+        assert_eq!(repo(&e), orrery_build::REPO);
         assert_eq!(e.preflight, ["orrery", "-c", "/x/moonraker.conf", "preflight"]);
         assert!(w.is_empty());
         // A fork, from orrery.toml, wins over release_info.json.
         let e = orrery(json!({"repo": "someone/orrery/"}), &["repo"], &mut w).unwrap().unwrap();
-        assert_eq!((opts(&e).repo.as_str(), opts(&e).repo_pinned), ("someone/orrery", true));
+        assert_eq!((repo(&e).as_str(), opts(&e).repo_pinned), ("someone/orrery", true));
         assert!(w.is_empty());
         // From moonraker.conf, repo is ignored; other options are of no use.
         let e = orrery(json!({"repo": "someone/orrery", "channel": "beta"}), &[], &mut w).unwrap().unwrap();
