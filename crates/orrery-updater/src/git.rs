@@ -94,6 +94,8 @@ pub struct RepoState {
     pub pinned_valid: bool,
     pub warnings: Vec<String>,
     pub anomalies: Vec<String>,
+    /// The entry's folder isn't there, and its `install` lets the update clone it.
+    pub missing: bool,
 }
 
 impl RepoState {
@@ -120,19 +122,26 @@ impl RepoState {
             pinned_valid: true,
             warnings: Vec::new(),
             anomalies: Vec::new(),
+            missing: false,
         }
     }
 
     /// Moonraker's `GitRepo.is_valid`: a repo on a known branch and remote, with nothing a
     /// recover would have to fix.
     pub fn is_valid(&self) -> bool {
-        self.repo_detected
+        (self.repo_detected || self.missing)
             && self.branch != "?"
             && self.remote != "?"
             && self.upstream_commit != "?"
             && !self.diverged
             && !self.current.dirty
             && !self.detached
+    }
+
+    /// The version to update to: for a repo that isn't cloned yet and has no tag on the
+    /// remote's commit, the commit.
+    pub fn remote_version(&self) -> String {
+        if self.missing && !self.upstream.valid { self.upstream.full.clone() } else { self.upstream.short() }
     }
 
     /// The entry's object in `version_info`, with Moonraker's fields.
@@ -154,8 +163,8 @@ impl RepoState {
             "repo_name": self.repo_name,
             "remote_url": self.url,
             "recovery_url": self.recovery_url,
-            "version": current,
-            "remote_version": self.upstream.short(),
+            "version": if self.missing { crate::executable::MISSING_VERSION } else { current.as_str() },
+            "remote_version": self.remote_version(),
             "rollback_version": rollback_version.unwrap_or(&current),
             "current_hash": self.current_commit,
             "remote_hash": self.upstream_commit,
@@ -208,6 +217,9 @@ pub async fn refresh(entry: &Entry, opts: &GitOptions, tracking: &Tracking, fetc
             git(path, &args, COMMAND_TIMEOUT).await
         }
     };
+    if !path.exists() && entry.install.is_some() {
+        return missing(opts, fetch).await;
+    }
     if !path.join(".git").exists() || run(vec!["rev-parse", "--git-dir"]).await.is_err() {
         s.warnings.push("No git repo detected at configured path".into());
         return s;
@@ -562,6 +574,58 @@ pub async fn fast_forward(opts: &GitOptions, s: &RepoState) -> Result<(), String
     step(&opts.path, &["merge", "--ff-only", "-q", &s.upstream_commit]).await.map(drop)
 }
 
+/// A repo the update will clone, for an entry whose `install` allows it: the primary branch of
+/// `origin`, with the remote branch's commit from `git ls-remote`.
+async fn missing(opts: &GitOptions, fetch: bool) -> RepoState {
+    let mut s = RepoState::unknown();
+    s.missing = true;
+    s.branch.clone_from(&opts.primary_branch);
+    s.remote = "origin".into();
+    s.url.clone_from(&opts.origin);
+    s.recovery_url.clone_from(&opts.origin);
+    (s.owner, s.repo_name) = owner_and_name(&s.url);
+    if !fetch {
+        return s;
+    }
+    // The folder isn't there, so git runs from the nearest one that is.
+    let cwd = opts.path.ancestors().find(|p| p.is_dir()).unwrap_or(Path::new("/"));
+    let head = format!("refs/heads/{}", opts.primary_branch);
+    match git(cwd, &["ls-remote", &opts.origin, &head, "refs/tags/*"], FETCH_TIMEOUT).await {
+        Ok(out) => match remote_tip(&out, &head) {
+            Some((commit, version)) => (s.upstream_commit, s.upstream) = (commit, version),
+            None => s.warnings.push(format!("{} has no branch {}", opts.origin, opts.primary_branch)),
+        },
+        Err(e) => s.warnings.push(format!("Can't read {}: {}", opts.origin, e.message)),
+    }
+    s
+}
+
+/// The branch's commit in `git ls-remote` output, and its version. Without the history, the
+/// version is known only when a tag points at the commit, as `<tag>-0`; otherwise it's the
+/// commit, which clients show as it is.
+fn remote_tip(out: &str, head: &str) -> Option<(String, GitVersion)> {
+    let refs: Vec<(&str, &str)> = out.lines().filter_map(|l| l.split_once('\t')).collect();
+    let commit = refs.iter().find(|(_, r)| *r == head)?.0;
+    // An annotated tag's commit is on its `^{}` line, which follows the tag's own.
+    let tag = refs.iter().filter_map(|(c, r)| {
+        let name = r.strip_prefix("refs/tags/")?;
+        let peeled = name.strip_suffix("^{}");
+        let peeled_too = refs.iter().any(|(_, o)| *o == format!("{r}^{{}}"));
+        (*c == commit && (peeled.is_some() || !peeled_too)).then(|| peeled.unwrap_or(name).to_owned())
+    });
+    let versions: Vec<GitVersion> = tag.map(|t| GitVersion::parse(&format!("{t}-0"))).filter(|v| v.valid).collect();
+    let version = versions.into_iter().max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    Some((commit.to_owned(), version.unwrap_or_else(|| GitVersion::parse(&commit[..commit.len().min(8)]))))
+}
+
+/// Clones the entry's repository into its folder, which isn't there yet.
+pub async fn clone_fresh(opts: &GitOptions, s: &RepoState) -> Result<(), String> {
+    if let Some(parent) = opts.path.parent() {
+        tokio::fs::create_dir_all(parent).await.map_err(|e| format!("Can't make {}: {e}", parent.display()))?;
+    }
+    hard_recover(opts, s).await
+}
+
 /// The commit a soft recover resets to: the pinned commit or the current one, if the remote
 /// branch has it, and the remote branch otherwise (Moonraker's `get_recovery_ref`).
 async fn recovery_ref(path: &Path, upstream: &str, pinned: Option<&str>, current: &str) -> String {
@@ -666,6 +730,9 @@ pub async fn rollback(opts: &GitOptions, s: &RepoState, rb: &Rollback) -> Result
 
 /// For tests and logs: the state's main facts in one line.
 pub fn summary(s: &RepoState) -> String {
+    if s.missing {
+        return format!("not installed, {} available", s.remote_version());
+    }
     if !s.repo_detected {
         return "no git repo".into();
     }
@@ -713,6 +780,20 @@ pub(crate) mod tests {
     /// A bare remote with commits and tags, and a clone of it on `main`.
     pub(crate) struct Repos {
         dir: tempfile::TempDir,
+    }
+
+    #[test]
+    fn reads_the_remote_tip() {
+        let head = "refs/heads/main";
+        let out = "aaaa1111bbbb\trefs/heads/main\n\
+                   cccc\trefs/tags/v1.1.0\naaaa1111bbbb\trefs/tags/v1.1.0^{}\n\
+                   aaaa1111bbbb\trefs/tags/v1.0.0\naaaa1111bbbb\trefs/tags/notes\n";
+        let (commit, v) = remote_tip(out, head).unwrap();
+        assert_eq!((commit.as_str(), v.short()), ("aaaa1111bbbb", "v1.1.0-0".to_owned()));
+        // Untagged: the commit, shortened.
+        let (_, v) = remote_tip("aaaa1111bbbb\trefs/heads/main\ncccc\trefs/tags/v1.1.0\n", head).unwrap();
+        assert_eq!((v.valid, v.full.as_str()), (false, "aaaa1111"));
+        assert!(remote_tip("cccc\trefs/tags/v1.1.0\n", head).is_none());
     }
 
     impl Repos {

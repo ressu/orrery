@@ -295,11 +295,13 @@ checks is described there only.
     unit of orrery's user, which Moonraker refuses with a warning.
   - orrery's own entry is an `archive` entry. Without the update manager's record of the
     install, `.release-info.json`, its version is unknown and it offers the newest release.
-  - An `archive` or `executable` entry's unknown version shows as `v0.0.0-missing` when its
-    folder isn't there, and `v0.0.0-invalid` when the folder has no record of the install
-    (`release_info.json` for an executable), where Moonraker shows `?`. Clients compare
-    versions as semver, so they offer an update from these but not from `?`. Git entries show
-    `?`, as in Moonraker.
+  - An entry with `install`, orrery's own option, shows an unknown version as
+    `v0.0.0-missing` when its folder isn't there, and `v0.0.0-invalid` when the folder has no
+    record of the install, so clients, which compare versions as semver, offer the update that
+    installs it. Without `install`, the version is `?`, as in Moonraker. See
+    docs/design/2026-11-24-update-installs.md.
+  - An executable's `release_info.json` without `asset_name` is valid: the asset is
+    `<entry>-{arch}`. Moonraker calls the entry invalid.
   - Klipper's entry is named after the project Klippy runs: `klipper` or `kalico`. Moonraker
     always calls it `klipper`. `machine.update.klipper` updates it under either name. Its
     section takes Moonraker's `channel`, `pinned_commit`, `refresh_interval`, and
@@ -361,9 +363,10 @@ checks is described there only.
     to its old commit and restarts nothing. In `moonraker.conf`, it's ignored, with a warning.
   - **An executable keeps the program an update replaced,** in `<path>/.previous/`, so a
     rollback needs no download. Moonraker downloads the old release again.
-  - **`checksums`, `programs`, and a `repo` that wins,** orrery's own options for an
+  - **`checksums`, `programs`, `asset`, and a `repo` that wins,** orrery's own options for an
     executable, read only from `orrery.toml`: a SHA-256 check of the download, an asset that's
-    a `.tar.gz` of several programs, and a repository that wins over `release_info.json`.
+    a `.tar.gz` of several programs, the asset's name, which wins over `release_info.json`'s,
+    and a repository that wins over `release_info.json`.
     From `moonraker.conf`, the first two are ignored, with a warning, and `repo` is Moonraker's.
     See docs/design/2026-11-22-self-update.md, "Archives and checksums for every executable
     entry".

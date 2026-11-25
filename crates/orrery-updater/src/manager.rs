@@ -11,13 +11,13 @@ use serde_json::{Map, Value, json};
 use tokio::sync::{Notify, watch};
 
 use crate::archive;
+use crate::command::{self, Command};
 use crate::config::{self, Entry, Global, Kind, Klippy, Project, SECTION};
 use crate::deps::{self, Deps};
 use crate::executable::{self, Github, Installed, Saved};
 use crate::git::{self, RepoState, Rollback, Tracking};
 use crate::packagekit::PackageKit;
 use crate::plugins;
-use crate::preflight;
 use crate::release;
 
 /// Moonraker skips a refresh of everything within this long of the last one.
@@ -48,6 +48,78 @@ pub struct Stored {
     pub release: Saved,
     /// For the `system` entry: the packages with updates.
     pub packages: Vec<String>,
+    /// An `install` or `upgrade` that failed after its update put the files in place.
+    pub failed: Option<Failed>,
+}
+
+/// The command an update runs after the new version is in place
+/// (docs/design/2026-11-24-update-installs.md).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Event {
+    /// After an install from nothing: the entry's `install`.
+    Install,
+    /// After any other update: the entry's `upgrade`.
+    Upgrade,
+}
+
+impl Event {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Install => "install",
+            Self::Upgrade => "upgrade",
+        }
+    }
+}
+
+/// A command that failed. The files stay, and the next update runs it again.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Failed {
+    pub event: Event,
+    /// What was installed when it failed: a release's tag, or a repo's commit. An update that
+    /// finds the same runs only the command again.
+    pub at: String,
+    /// The version, and the one before it, for the command's environment.
+    pub version: String,
+    pub previous: String,
+    pub error: String,
+}
+
+impl Failed {
+    fn from_json(v: &Value) -> Option<Self> {
+        let text = |k: &str| v[k].as_str().map(str::to_owned);
+        Some(Self {
+            event: match v["event"].as_str()? {
+                "install" => Event::Install,
+                _ => Event::Upgrade,
+            },
+            at: text("at")?,
+            version: text("version").unwrap_or_default(),
+            previous: text("previous").unwrap_or_default(),
+            error: text("error").unwrap_or_default(),
+        })
+    }
+
+    fn to_json(&self) -> Value {
+        json!({"event": self.event.as_str(), "at": self.at, "version": self.version, "previous": self.previous, "error": self.error})
+    }
+
+    /// The warning the entry shows until the command passes.
+    fn warning(&self) -> String {
+        let first = self.error.lines().next().unwrap_or_default().trim_end_matches([':', '.']);
+        format!("{first}. Update again to run it again.")
+    }
+}
+
+/// Shows a failed command in the entry's status: still valid, so clients keep the update
+/// button, with a version older than any, and a warning that says what failed.
+fn mark_failed(status: &mut Value, failed: &Failed) {
+    status["version"] = json!(executable::UNKNOWN_VERSION);
+    status["is_valid"] = json!(true);
+    let warning = failed.warning();
+    match status["warnings"].as_array_mut() {
+        Some(w) => w.push(json!(warning)),
+        None => status["warnings"] = json!([warning]),
+    }
 }
 
 impl Stored {
@@ -68,6 +140,7 @@ impl Stored {
                 .as_array()
                 .map(|l| l.iter().filter_map(Value::as_str).map(str::to_owned).collect())
                 .unwrap_or_default(),
+            failed: Failed::from_json(&v["failed"]),
         }
     }
 
@@ -83,6 +156,7 @@ impl Stored {
             "rollback_version": self.rollback.as_ref().map(|r| &r.version),
             "release": self.release.to_json(),
             "packages": self.packages,
+            "failed": self.failed.as_ref().map(Failed::to_json),
         })
     }
 }
@@ -228,6 +302,10 @@ fn busy_error() -> MethodError {
 
 impl Manager {
     pub fn new() -> Arc<Self> {
+        Self::with_github(Github::new())
+    }
+
+    fn with_github(github: Result<Github, String>) -> Arc<Self> {
         Arc::new(Self {
             agent: Mutex::new(None),
             global: Mutex::new(None),
@@ -247,7 +325,7 @@ impl Manager {
             restart_after_print: AtomicBool::new(false),
             restart_orrery: AtomicBool::new(false),
             next_proc_id: AtomicU64::new(now() as u64),
-            github: Github::new(),
+            github,
         })
     }
 
@@ -430,7 +508,7 @@ impl Manager {
         // orrery's programs may have changed since the stored status, by an update and the
         // restart after it, or from a shell.
         for s in states.iter_mut().filter(|s| release::is_own(&s.entry)) {
-            s.installed = Some(installed_release(&s.entry.kind).await);
+            s.installed = Some(executable::installed_release(&s.entry).await);
             release::restarted(&mut s.stored.release, valid_version(s.installed.as_ref()));
             s.stored.status = own_status(s);
         }
@@ -646,7 +724,7 @@ impl Manager {
                 return;
             }
             Kind::Executable(_) | Kind::Archive(_) => {
-                let installed = installed_release(&s.entry.kind).await;
+                let installed = executable::installed_release(&s.entry).await;
                 if release::is_own(&s.entry) {
                     release::restarted(&mut s.stored.release, valid_version(Some(&installed)));
                 }
@@ -691,6 +769,9 @@ impl Manager {
         }
         if let Kind::System = s.entry.kind {
             s.stored.status = system_status(&s.stored.packages);
+        }
+        if let Some(failed) = &s.stored.failed {
+            mark_failed(&mut s.stored.status, failed);
         }
         s.stored.last_refresh_time = now();
         s.stored.config_hash = s.entry.hash.clone();
@@ -863,6 +944,14 @@ impl Manager {
         if !repo.is_valid() {
             return Err(Failure::new(400, format!("Update aborted, repo not valid{}", invalid_reason(repo))));
         }
+        // A command that failed on this commit runs again, without a pull.
+        let failed = s.stored.failed.clone();
+        if let Some(f) = failed.as_ref().filter(|f| f.at == repo.current_commit) {
+            return self.retry(s, f.clone(), p).await;
+        }
+        if repo.missing {
+            return self.install_repo(s, p).await;
+        }
         if repo.current_commit == repo.upstream_commit {
             return Ok(false);
         }
@@ -884,12 +973,14 @@ impl Manager {
         let before = Deps::read(&s.entry.kind.deps()).await;
         git::fast_forward(opts, repo).await.map_err(|e| Failure::new(500, e))?;
         self.update_deps(s, &before, false, p).await;
-        if !s.entry.preflight.is_empty() {
+        if let Some(preflight) = &s.entry.preflight {
             p.send(&format!("Git Repo {name}: Running the preflight check..."), false).await;
-            let program = opts.path.join(&s.entry.preflight[0]);
-            let checked =
-                preflight::run(&s.entry.preflight[0], &program, &s.entry.preflight[1..], &opts.path, preflight::LIMIT)
-                    .await;
+            let checked = match preflight {
+                Command::Shell(line) => command::preflight_shell(line, &opts.path, None).await,
+                Command::Words(words) => {
+                    command::preflight(&words[0], &opts.path.join(&words[0]), &words[1..], &opts.path).await
+                }
+            };
             if let Err(e) = checked {
                 // The update doesn't take effect: the repo goes back, and nothing restarts.
                 let reset = git::reset_to(opts, &rollback.commit).await;
@@ -904,8 +995,14 @@ impl Manager {
                 ));
             }
         }
-        s.stored.rollback = Some(rollback);
+        s.stored.rollback = Some(rollback.clone());
         self.read_repo(s, false).await;
+        let repo = s.repo.as_ref().expect("just read");
+        let (at, version) = (repo.current_commit.clone(), repo.current.short());
+        // An install that failed stays an install.
+        let event = if failed.is_some_and(|f| f.event == Event::Install) { Event::Install } else { Event::Upgrade };
+        self.run_command(s, event, (&at, &version, &rollback.version), p).await?;
+        self.save(s).await;
         self.add_pending(&s.entry);
         Ok(true)
     }
@@ -937,6 +1034,10 @@ impl Manager {
         let repo = s.repo.as_ref().expect("just read");
         if repo.current.dirty || !repo.is_valid() {
             return Err(Failure::new(500, "Recovery attempt failed, repo state not pristine"));
+        }
+        // A new clone is a fresh install of the repo, so it runs the entry's install.
+        if hard && s.entry.install.is_some() {
+            return self.after_clone(s, p).await;
         }
         self.update_deps(s, &before, all_deps, p).await;
         self.add_pending(&s.entry);
@@ -973,10 +1074,145 @@ impl Manager {
     /// Installs what the entry's dependency files list now and didn't list `before`, or all
     /// of it with `all`. A failure is reported, and the update goes on, as in Moonraker.
     async fn update_deps(&self, s: &EntryState, before: &Deps, all: bool, p: &Progress) {
+        self.update_some_deps(s, before, all, (true, true), p).await;
+    }
+
+    /// Runs the entry's `install` or `upgrade`, in its folder, as orrery's user, with its output
+    /// in the update dialog. `at` is what's installed now, `version` and `previous` the versions
+    /// for its environment. A failure is kept, and shown, until a later update runs it again.
+    async fn run_command(
+        &self,
+        s: &mut EntryState,
+        event: Event,
+        (at, version, previous): (&str, &str, &str),
+        p: &Progress,
+    ) -> Result<(), Failure> {
+        let cmd = match event {
+            Event::Install => s.entry.install.as_ref().and_then(command::Install::command),
+            Event::Upgrade => s.entry.upgrade.as_ref(),
+        };
+        let Some(cmd) = cmd.cloned() else {
+            s.stored.failed = None;
+            return Ok(());
+        };
+        let path = s.entry.kind.path().expect("an entry with a folder").to_path_buf();
+        let what = format!("{} command", event.as_str());
+        p.send(&format!("{}Running the {what}...", s.entry.prefix()), false).await;
+        let env = [
+            ("ORRERY_ENTRY".to_owned(), s.entry.name.clone()),
+            ("ORRERY_PATH".to_owned(), path.display().to_string()),
+            ("ORRERY_VERSION".to_owned(), version.to_owned()),
+            ("ORRERY_PREVIOUS_VERSION".to_owned(), previous.to_owned()),
+        ];
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let spec = cmd.spec(&path);
+        let work = async move {
+            let run = command::Run {
+                what: &what,
+                dir: &path,
+                bin: None,
+                env: &env,
+                limit: command::COMMAND_LIMIT,
+                out: Some(&tx),
+            };
+            command::run(&spec, &run).await
+        };
+        let forward = async {
+            while let Some(line) = rx.recv().await {
+                p.output(&line).await;
+            }
+        };
+        let (ran, ()) = tokio::join!(work, forward);
+        match ran {
+            Ok(()) => {
+                s.stored.failed = None;
+                Ok(())
+            }
+            Err(e) => {
+                let failed = Failed {
+                    event,
+                    at: at.to_owned(),
+                    version: version.to_owned(),
+                    previous: previous.to_owned(),
+                    error: e.clone(),
+                };
+                s.stored.failed = Some(failed);
+                self.save(s).await;
+                Err(Failure::new(
+                    500,
+                    format!(
+                        "{e}
+The new files stay in place. Update again to run it again."
+                    ),
+                ))
+            }
+        }
+    }
+
+    /// Clones a git entry's repository into its folder, which isn't there, for an entry whose
+    /// `install` allows it: the clone, its system packages, `install`, which may make the
+    /// virtualenv, and its Python packages.
+    async fn install_repo(&self, s: &mut EntryState, p: &Progress) -> Result<bool, Failure> {
+        let name = s.entry.name.clone();
+        let Kind::Git(opts) = &s.entry.kind else { unreachable!("a git entry") };
+        p.send(&format!("Installing Application {name}..."), false).await;
+        p.send(&format!("Git Repo {name}: Cloning {}...", opts.origin), false).await;
+        let repo = s.repo.as_ref().expect("just read");
+        git::clone_fresh(opts, repo).await.map_err(|e| Failure::new(500, e))?;
+        p.send(&format!("Git Repo {name}: Git Clone Complete"), false).await;
+        self.after_clone(s, p).await?;
+        Ok(true)
+    }
+
+    /// What follows a new clone: the system packages, `install`, the Python packages, and the
+    /// restart.
+    async fn after_clone(&self, s: &mut EntryState, p: &Progress) -> Result<(), Failure> {
+        s.stored.tracking = Tracking::default();
+        self.read_repo(s, false).await;
+        let repo = s.repo.as_ref().expect("just read");
+        s.stored.rollback = Some(Rollback::of(repo));
+        let (at, version) = (repo.current_commit.clone(), repo.current.short());
+        let none = Deps::default();
+        self.update_some_deps(s, &none, true, (true, false), p).await;
+        self.run_command(s, Event::Install, (&at, &version, ""), p).await?;
+        self.update_some_deps(s, &none, true, (false, true), p).await;
+        self.save(s).await;
+        self.add_pending(&s.entry);
+        Ok(())
+    }
+
+    /// Runs a failed command again, when the update finds what it failed on.
+    async fn retry(&self, s: &mut EntryState, failed: Failed, p: &Progress) -> Result<bool, Failure> {
+        p.send(&format!("{}Updating...", s.entry.prefix()), false).await;
+        self.run_command(s, failed.event, (&failed.at, &failed.version, &failed.previous), p).await?;
+        // A git install that failed stopped before its Python packages.
+        if failed.event == Event::Install && matches!(s.entry.kind, Kind::Git(_)) {
+            self.update_some_deps(s, &Deps::default(), true, (false, true), p).await;
+        }
+        self.save(s).await;
+        self.add_pending(&s.entry);
+        Ok(true)
+    }
+
+    /// [`Self::update_deps`], for the system packages, the Python packages, or both.
+    async fn update_some_deps(
+        &self,
+        s: &EntryState,
+        before: &Deps,
+        all: bool,
+        (system, python): (bool, bool),
+        p: &Progress,
+    ) {
         let files = s.entry.kind.deps();
         let opts = &files;
         let prefix = s.entry.prefix();
-        let added = before.added(&Deps::read(opts).await, all);
+        let mut added = before.added(&Deps::read(opts).await, all);
+        if !system {
+            added.packages.clear();
+        }
+        if !python {
+            added.modules.clear();
+        }
         if added.packages.is_empty() && added.modules.is_empty() {
             return;
         }
@@ -1028,6 +1264,17 @@ impl Manager {
         if !installed.valid {
             return Err(Failure::new(400, format!("{prefix}Invalid install detected, aborting update")));
         }
+        // A command that failed on this version runs again, without a new download.
+        let failed = s.stored.failed.clone();
+        if !rolling_back && let Some(f) = failed.as_ref().filter(|f| f.at == installed.version) {
+            return self.retry(s, f.clone(), p).await;
+        }
+        // An install that failed stays an install.
+        let event = if installed.fresh || failed.as_ref().is_some_and(|f| f.event == Event::Install) {
+            Event::Install
+        } else {
+            Event::Upgrade
+        };
         let (version, asset, checksums) = match to {
             Some(target) => target,
             None => {
@@ -1048,12 +1295,13 @@ impl Manager {
         p.send(&format!("{prefix}{}", if rolling_back { "Rolling Back..." } else { "Updating..." }), false).await;
         p.send(&format!("{prefix}Downloading Release..."), false).await;
         let before = Deps::read(&s.entry.kind.deps()).await;
+        let new_version = version.clone();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
         let work = async move {
             let sums = checksums.as_ref();
             match &entry.kind {
                 Kind::Archive(_) => {
-                    archive::install(gh, entry, &installed.repo, &asset, sums, &version, &p.application, &tx).await
+                    archive::install(gh, entry, &installed, &asset, sums, &version, &p.application, &tx).await
                 }
                 _ => executable::install(gh, entry, &installed, &asset, sums, &version, &p.application, &tx).await,
             }
@@ -1065,12 +1313,20 @@ impl Manager {
         };
         let (installed_ok, ()) = tokio::join!(work, forward);
         installed_ok.map_err(|e| Failure::new(500, e))?;
+        let previous = s.installed.as_ref().expect("just read").version.clone();
         if !rolling_back {
             let old = s.installed.as_ref().expect("just read");
             s.stored.release.rollback_version.clone_from(&old.version);
             s.stored.release.rollback_repo.clone_from(&old.repo);
         }
         self.update_deps(s, &before, false, p).await;
+        if rolling_back {
+            // A rollback runs neither command, and what failed belonged to the newer version.
+            s.stored.failed = None;
+        } else {
+            let previous = if previous == "?" { String::new() } else { previous };
+            self.run_command(s, event, (&new_version, &new_version, &previous), p).await?;
+        }
         self.read_repo(s, false).await;
         self.add_pending(&s.entry);
         Ok(true)
@@ -1371,15 +1627,6 @@ fn own_status(s: &EntryState) -> Value {
     status
 }
 
-/// What a release entry, an executable or an archive, has installed.
-async fn installed_release(kind: &Kind) -> Installed {
-    match kind {
-        Kind::Executable(opts) => executable::installed(opts).await,
-        Kind::Archive(opts) => archive::installed(opts).await,
-        Kind::Git(_) | Kind::System => unreachable!("a release entry"),
-    }
-}
-
 /// The version of an executable entry's install, when its `release_info.json` is valid and
 /// names one.
 fn valid_version(installed: Option<&executable::Installed>) -> Option<&str> {
@@ -1462,7 +1709,7 @@ mod tests {
     async fn a_failed_preflight_undoes_a_git_update() {
         let r = git::tests::Repos::new();
         let (mut entry, _) = r.entry("dev");
-        entry.preflight = vec!["check.sh".into()];
+        entry.preflight = command::words(&["check.sh"]);
         let head = || {
             let out =
                 std::process::Command::new("git").args(["rev-parse", "HEAD"]).current_dir(r.path("clone")).output();
@@ -1493,6 +1740,158 @@ mod tests {
         assert!(m.update_entry(&mut s, &p).await.unwrap());
         assert_ne!(head(), start);
         assert_eq!(s.stored.rollback.as_ref().unwrap().commit, start);
+        assert_eq!(*m.pending.lock().unwrap(), ["test"]);
+    }
+
+    #[tokio::test]
+    async fn installs_an_executable_and_runs_its_install_again() {
+        use std::collections::HashMap;
+        let base = executable::tests::server(|base| {
+            let release = json!({"tag_name": "v1.2.0", "assets": [
+                {"name": "tool-linux", "browser_download_url": format!("{base}dl/tool"), "content_type": "application/octet-stream", "size": 3}]});
+            HashMap::from([
+                ("/repos/example/tool/releases/latest".to_owned(), release.to_string().into_bytes()),
+                ("/dl/tool".to_owned(), b"new".to_vec()),
+            ])
+        })
+        .await;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tool");
+        let g = config::global(&Map::new(), &mut Vec::new());
+        let map = json!({"type": "executable", "path": path, "repo": "example/tool", "asset": "tool-linux",
+            "install": "test -f ../ready && echo \"$ORRERY_ENTRY $ORRERY_VERSION [$ORRERY_PREVIOUS_VERSION]\" > ran",
+            "managed_services": ["tool"]});
+        let map = map.as_object().unwrap();
+        let mut entry = config::entry("tool", map, &g).unwrap();
+        let keys: Vec<String> = map.keys().cloned().collect();
+        config::own_options("update_manager tool", map, &keys, &mut entry, &mut Vec::new()).unwrap();
+        let m = Manager::with_github(Github::with_api(&base));
+        let mut s = EntryState { entry, stored: Stored::default(), repo: None, installed: None };
+        let p = Progress { agent: None, application: "test".into(), proc_id: 1 };
+
+        // A missing folder shows v0.0.0-missing, and the update installs the release.
+        m.read_repo(&mut s, true).await;
+        assert_eq!(s.stored.status["version"], executable::MISSING_VERSION);
+        assert_eq!(s.stored.release.remote_version, "v1.2.0");
+        let err = m.update_entry(&mut s, &p).await.unwrap_err();
+        assert!(err.error.starts_with("The install command `test -f ../ready"), "{}", err.error);
+        assert_eq!(std::fs::read(path.join("tool-linux")).unwrap(), b"new");
+        assert!(path.join("release_info.json").is_file() && !path.join("ran").exists());
+        assert!(!path.join(executable::PREVIOUS).exists());
+        assert_eq!(s.stored.failed.as_ref().map(|f| f.event), Some(Event::Install));
+        assert_eq!(s.stored.status["version"], executable::UNKNOWN_VERSION);
+        assert!(m.pending.lock().unwrap().is_empty());
+
+        // The next update runs only the install command.
+        std::fs::write(dir.path().join("ready"), "").unwrap();
+        assert!(m.update_entry(&mut s, &p).await.unwrap());
+        assert_eq!(std::fs::read_to_string(path.join("ran")).unwrap(), "tool v1.2.0 []\n");
+        assert!(s.stored.failed.is_none());
+        assert_eq!(s.stored.status["version"], "v1.2.0");
+        assert_eq!(*m.pending.lock().unwrap(), ["tool"]);
+        // Up to date, nothing runs.
+        assert!(!m.update_entry(&mut s, &p).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn clones_a_missing_repo_with_install() {
+        let r = git::tests::Repos::new();
+        let (mut entry, _) = r.entry("dev");
+        let path = r.path("apps/tool");
+        if let Kind::Git(o) = &mut entry.kind {
+            o.path = path.clone();
+        }
+        entry.managed_services = Some(vec!["test".into()]);
+        let m = Manager::new();
+        let p = Progress { agent: None, application: "test".into(), proc_id: 1 };
+
+        // Without install, a missing repo is invalid, as in Moonraker.
+        let mut s = EntryState { entry: entry.clone(), stored: Stored::default(), repo: None, installed: None };
+        m.read_repo(&mut s, true).await;
+        assert_eq!(
+            (s.stored.status["is_valid"].as_bool(), s.stored.status["version"].as_str()),
+            (Some(false), Some("?"))
+        );
+
+        // With it, it's valid, shows v0.0.0-missing with the remote's commit, and the update
+        // clones it and runs install there.
+        entry.install = Some(command::Install::Run(Command::Words(vec![
+            "sh".into(),
+            "-c".into(),
+            "echo $ORRERY_VERSION > installed".into(),
+        ])));
+        let mut s = EntryState { entry, stored: Stored::default(), repo: None, installed: None };
+        m.read_repo(&mut s, true).await;
+        let status = &s.stored.status;
+        assert_eq!(
+            (status["is_valid"].as_bool(), status["version"].as_str()),
+            (Some(true), Some(executable::MISSING_VERSION))
+        );
+        assert_eq!(status["current_hash"], "?");
+        assert_eq!(status["remote_hash"].as_str().map(str::len), Some(40));
+        assert_eq!(status["remote_version"], "v1.0.0-0");
+        assert_eq!(git::summary(s.repo.as_ref().unwrap()), "not installed, v1.0.0-0 available");
+        assert!(m.update_entry(&mut s, &p).await.unwrap());
+        assert!(path.join(".git").is_dir());
+        assert_eq!(std::fs::read_to_string(path.join("installed")).unwrap(), "v1.0.0-0\n");
+        assert_eq!(s.stored.status["version"], "v1.0.0-0");
+        assert_eq!(*m.pending.lock().unwrap(), ["test"]);
+        // Then it's an ordinary repo, up to date.
+        assert!(!m.update_entry(&mut s, &p).await.unwrap());
+
+        // A hard recover clones it again, and runs install again.
+        std::fs::remove_file(path.join("installed")).unwrap();
+        m.recover_entry(&mut s, true, false, &p).await.unwrap();
+        assert!(path.join("installed").is_file());
+    }
+
+    #[tokio::test]
+    async fn a_failed_upgrade_keeps_the_update_and_runs_again() {
+        let r = git::tests::Repos::new();
+        let (mut entry, _) = r.entry("dev");
+        entry.upgrade = Some(Command::Shell("echo \"$ORRERY_PREVIOUS_VERSION\" > seen; test -f ready".into()));
+        entry.managed_services = Some(vec!["test".into()]);
+        let head = || {
+            let out =
+                std::process::Command::new("git").args(["rev-parse", "HEAD"]).current_dir(r.path("clone")).output();
+            String::from_utf8(out.unwrap().stdout).unwrap().trim().to_owned()
+        };
+        let start = head();
+        r.sh("cd work && echo new > new.txt && git add new.txt && git commit -q -m new && git push -q origin main");
+        let m = Manager::new();
+        let mut s = EntryState { entry, stored: Stored::default(), repo: None, installed: None };
+        let p = Progress { agent: None, application: "test".into(), proc_id: 1 };
+
+        // The upgrade fails: the pull stays, nothing restarts, and the status says what failed.
+        let err = m.update_entry(&mut s, &p).await.unwrap_err();
+        assert_eq!(
+            err.error,
+            "The upgrade command `echo \"$ORRERY_PREVIOUS_VERSION\" > seen; test -f ready` failed with exit status 1.\nThe new files stay in place. Update again to run it again."
+        );
+        assert_ne!(head(), start);
+        assert_eq!(std::fs::read_to_string(r.path("clone").join("seen")).unwrap(), "v1.0.0-0\n");
+        assert!(m.pending.lock().unwrap().is_empty());
+        let failed = s.stored.failed.clone().unwrap();
+        assert_eq!((failed.event, failed.at.as_str()), (Event::Upgrade, head().as_str()));
+        assert_eq!(s.stored.status["version"], executable::UNKNOWN_VERSION);
+        assert_eq!(s.stored.status["is_valid"], true);
+        let warnings = s.stored.status["warnings"].as_array().unwrap();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.as_str().unwrap().ends_with("failed with exit status 1. Update again to run it again.")),
+            "{warnings:?}"
+        );
+        // The database keeps it.
+        assert_eq!(Stored::from_json(&s.stored.to_json()).failed, Some(failed));
+
+        // Fixed, the next update runs only the command, and then the restart.
+        std::fs::write(r.path("clone").join("ready"), "").unwrap();
+        let moved = head();
+        assert!(m.update_entry(&mut s, &p).await.unwrap());
+        assert_eq!(head(), moved);
+        assert!(s.stored.failed.is_none());
+        assert_ne!(s.stored.status["version"], executable::UNKNOWN_VERSION);
         assert_eq!(*m.pending.lock().unwrap(), ["test"]);
     }
 
@@ -1548,6 +1947,13 @@ mod tests {
                 expected_version: Some("v0.2.0".into()),
             },
             packages: vec!["libc6".into()],
+            failed: Some(Failed {
+                event: Event::Install,
+                at: "v1.2.0".into(),
+                version: "v1.2.0".into(),
+                previous: String::new(),
+                error: "The install command `./install.sh` failed with exit status 1.".into(),
+            }),
         };
         assert_eq!(Stored::from_json(&s.to_json()), s);
     }

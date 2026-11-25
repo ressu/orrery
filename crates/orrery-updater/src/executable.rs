@@ -9,6 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Map, Value, json};
 
+use crate::command::Command;
 use crate::config::{Channel, Entry, ExecOptions};
 use crate::packagekit::Messages;
 
@@ -113,6 +114,9 @@ pub struct Installed {
     pub repo: String,
     pub warnings: Vec<String>,
     pub anomalies: Vec<String>,
+    /// Nothing that orrery installed is there: no folder, or no record of the install. An
+    /// update is then an install from nothing, which the entry's `install` allows.
+    pub fresh: bool,
 }
 
 impl Installed {
@@ -126,20 +130,27 @@ impl Installed {
 }
 
 /// Moonraker's `_validate_release_info`.
+///
+/// The asset to download is `asset` from `orrery.toml`, or else `release_info.json`'s
+/// `asset_name`, or else `<entry>-{arch}`. Without `release_info.json`, the install is
+/// [`Installed::fresh`], and invalid, unless [`installed_release`] finds the entry may install
+/// it.
 pub async fn installed(opts: &ExecOptions) -> Installed {
     let mut i = Installed {
         valid: false,
         version: "?".into(),
-        asset_name: None,
+        asset_name: Some(opts.asset.clone().unwrap_or_else(|| opts.default_asset.clone())),
         repo: opts.repo.clone(),
         warnings: Vec::new(),
         anomalies: Vec::new(),
+        fresh: false,
     };
     let path = &opts.path;
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let repo_parent = path.ancestors().find(|p| p.join(".git").exists());
     if !path.is_dir() {
         i.warnings.push(format!("Location at option 'path: {}' is not a directory.", path.display()));
+        i.fresh = !path.exists();
     } else if rustix::fs::access(path.as_path(), rustix::fs::Access::WRITE_OK).is_err() {
         i.warnings.push(format!("Location at option 'path: {}' is not writable.", path.display()));
     } else if let Some(parent) = repo_parent.filter(|p| Some(p.to_path_buf()) != home) {
@@ -157,11 +168,17 @@ pub async fn installed(opts: &ExecOptions) -> Installed {
             .as_ref()
             .and_then(|v| Some((v["project_name"].as_str()?, v["project_owner"].as_str()?, v["version"].as_str()?)));
         match fields {
-            None => tracing::info!("Failed to load {}", path.join("release_info.json").display()),
+            None => {
+                tracing::info!("Failed to load {}", path.join("release_info.json").display());
+                i.fresh = !path.join("release_info.json").exists();
+            }
             Some((project, owner, version)) => {
                 i.valid = true;
                 i.version = version.to_owned();
-                i.asset_name = info.as_ref().and_then(|v| v["asset_name"].as_str()).map(str::to_owned);
+                // The program that's there; Moonraker requires release_info.json to name it.
+                let recorded = info.as_ref().and_then(|v| v["asset_name"].as_str()).map(str::to_owned);
+                let there = recorded.clone().unwrap_or_else(|| opts.default_asset.clone());
+                i.asset_name = Some(opts.asset.clone().or(recorded).unwrap_or_else(|| opts.default_asset.clone()));
                 let detected = format!("{owner}/{project}");
                 if opts.repo_pinned {
                     // orrery.toml's repo wins, so a fork's releases can take over.
@@ -174,22 +191,16 @@ pub async fn installed(opts: &ExecOptions) -> Installed {
                     ));
                     i.repo = detected;
                 }
-                match &i.asset_name {
-                    None => {
-                        i.warnings.push("Executable types require the 'asset_name' field in release_info.json".into());
+                if opts.programs.is_empty() {
+                    if !path.join(&there).exists() {
+                        i.warnings.push(format!("File {there} not found in configured path for executable type"));
                         i.valid = false;
                     }
-                    Some(name) if opts.programs.is_empty() && !path.join(name).exists() => {
-                        i.warnings.push(format!("File {name} not found in configured path for executable type"));
+                } else {
+                    for program in opts.programs.iter().filter(|p| !path.join(p).is_file()) {
+                        i.warnings.push(format!("File {program} not found in configured path for executable type"));
                         i.valid = false;
                     }
-                    Some(_) if !opts.programs.is_empty() => {
-                        for program in opts.programs.iter().filter(|p| !path.join(p).is_file()) {
-                            i.warnings.push(format!("File {program} not found in configured path for executable type"));
-                            i.valid = false;
-                        }
-                    }
-                    Some(_) => {}
                 }
             }
         }
@@ -200,13 +211,40 @@ pub async fn installed(opts: &ExecOptions) -> Installed {
     i
 }
 
-/// The versions a release entry's status shows when the version is unknown: its folder is
-/// missing, or it has no record of the install (`release_info.json` for an executable).
-/// Moonraker shows `?`, but clients compare versions as semver and see no update from `?`.
-/// Any release is newer than these, so clients offer it. Git entries keep `?`: they need a
-/// repository, and often a virtualenv, set up first.
+/// The versions an entry's status shows when the updater may install it and the version is
+/// unknown: its folder is missing, or it has no record of the install. Moonraker shows `?`,
+/// but clients compare versions as semver and see no update from `?`. Any release is newer
+/// than these, so clients offer it. Without `install`, the version stays `?`: the updater can't
+/// fix the entry (docs/design/2026-11-24-update-installs.md).
 pub const MISSING_VERSION: &str = "v0.0.0-missing";
 pub const UNKNOWN_VERSION: &str = "v0.0.0-invalid";
+
+/// The version the status shows.
+fn shown_version<'a>(entry: &Entry, i: &'a Installed) -> &'a str {
+    if i.version != "?" || entry.install.is_none() {
+        return i.version.as_str();
+    }
+    match entry.kind.path() {
+        Some(path) if !path.exists() => MISSING_VERSION,
+        _ => UNKNOWN_VERSION,
+    }
+}
+
+/// What a release entry, an executable or an archive, has installed. A [`Installed::fresh`]
+/// install is valid when the entry's `install` lets the updater install it from nothing.
+pub async fn installed_release(entry: &Entry) -> Installed {
+    use crate::config::Kind;
+    let mut i = match &entry.kind {
+        Kind::Executable(opts) => installed(opts).await,
+        Kind::Archive(opts) => crate::archive::installed(opts).await,
+        Kind::Git(_) | Kind::System => unreachable!("a release entry"),
+    };
+    if i.fresh && entry.install.is_some() {
+        i.valid = true;
+        i.warnings.clear();
+    }
+    i
+}
 
 /// The entry's object in `version_info`.
 pub fn status(entry: &Entry, i: &Installed, saved: &Saved) -> Value {
@@ -231,14 +269,7 @@ pub fn status(entry: &Entry, i: &Installed, saved: &Saved) -> Value {
         "info_tags": entry.info_tags,
         "repo_name": i.project(),
         "owner": i.owner(),
-        "version": match &entry.kind {
-            crate::config::Kind::Archive(o) if i.version == "?" && !o.path.exists() => MISSING_VERSION,
-            crate::config::Kind::Executable(o) if i.version == "?" && !o.path.exists() => MISSING_VERSION,
-            crate::config::Kind::Archive(_) | crate::config::Kind::Executable(_) if i.version == "?" => {
-                UNKNOWN_VERSION
-            }
-            _ => i.version.as_str(),
-        },
+        "version": shown_version(entry, i),
         "remote_version": saved.remote_version,
         "rollback_version": rollback,
         "last_error": saved.last_error,
@@ -508,6 +539,10 @@ pub async fn install(
     let crate::config::Kind::Executable(opts) = &entry.kind else { return Err("Not an executable entry".into()) };
     let prefix = entry.prefix();
     let name = i.asset_name.as_deref().ok_or("The installation has no asset_name")?;
+    // Into a folder that isn't there yet, there's no preflight: nothing runs yet that it
+    // would protect.
+    let new_folder = !opts.path.exists();
+    tokio::fs::create_dir_all(&opts.path).await.map_err(|e| format!("Can't make {}: {e}", opts.path.display()))?;
     let staging = opts.path.join(format!(".{}.update", entry.name));
     let _ = tokio::fs::remove_dir_all(&staging).await;
     tokio::fs::create_dir(&staging).await.map_err(|e| format!("Can't make {}: {e}", staging.display()))?;
@@ -543,8 +578,13 @@ pub async fn install(
             }
             set_mode(&opts.path.join(file), &new).await.map_err(|e| format!("Can't put the new {file} in place: {e}"))?;
         }
-        check(entry, &files, &staging, out).await?;
-        keep_previous(&opts.path, &files).await?;
+        if !new_folder {
+            check(entry, &files, &staging, out).await?;
+        }
+        // A new folder has nothing to keep for a rollback.
+        if !new_folder {
+            keep_previous(&opts.path, &files).await?;
+        }
         for file in &files {
             tokio::fs::rename(staging.join(file), opts.path.join(file))
                 .await
@@ -557,7 +597,7 @@ pub async fn install(
                 .await
                 .map_err(|e| format!("Can't write {}: {e}", opts.path.join("release_info.json").display()))?;
         }
-        set_version(&opts.path.join("release_info.json"), version).await
+        record(&opts.path.join("release_info.json"), &i.repo, version, name).await
     }
     .await;
     let _ = tokio::fs::remove_dir_all(&staging).await;
@@ -581,14 +621,19 @@ async fn set_mode(old: &Path, new: &Path) -> std::io::Result<()> {
 /// own path.
 async fn check(entry: &Entry, files: &[String], dir: &Path, out: &Messages) -> Result<(), String> {
     let crate::config::Kind::Executable(opts) = &entry.kind else { return Ok(()) };
-    let Some(first) = entry.preflight.first() else { return Ok(()) };
+    let Some(preflight) = &entry.preflight else { return Ok(()) };
     let _ = out.send(format!("{}Running the preflight check...", entry.prefix()));
-    let (program, args) = if opts.programs.is_empty() {
-        (files.first().map(String::as_str).unwrap_or_default(), &entry.preflight[..])
-    } else {
-        (first.as_str(), &entry.preflight[1..])
+    let cwd = if opts.path.is_dir() { opts.path.as_path() } else { dir };
+    let words = match preflight {
+        Command::Shell(line) => return crate::command::preflight_shell(line, cwd, Some(dir)).await,
+        Command::Words(words) => words,
     };
-    crate::preflight::run(program, &dir.join(program), args, &opts.path, crate::preflight::LIMIT).await
+    let (program, args) = if opts.programs.is_empty() {
+        (files.first().map(String::as_str).unwrap_or_default(), &words[..])
+    } else {
+        (words[0].as_str(), &words[1..])
+    };
+    crate::command::preflight(program, &dir.join(program), args, cwd).await
 }
 
 /// The checksum a `SHA256SUMS` file gives for `name`, in lowercase hex.
@@ -686,14 +731,27 @@ pub async fn restore_previous(entry: &Entry, files: &[String], out: &Messages) -
 
 /// Writes `version` into `release_info.json`, when it says another one. The file is written
 /// beside the old one and renamed over it.
-async fn set_version(info: &Path, version: &str) -> Result<(), String> {
-    let Ok(text) = tokio::fs::read_to_string(info).await else { return Ok(()) };
-    let mut data: Map<String, Value> =
-        serde_json::from_str(&text).map_err(|e| format!("Can't read {}: {e}", info.display()))?;
-    if data.get("version").and_then(Value::as_str) == Some(version) {
+/// Records `version` and `asset` in `release_info.json`. A fresh install has none, so it's
+/// written from `repo`, as Moonraker's `[analysis]` writes Klipper Estimator's: the folder is
+/// then an ordinary Moonraker install.
+async fn record(info: &Path, repo: &str, version: &str, asset: &str) -> Result<(), String> {
+    let mut data: Map<String, Value> = match tokio::fs::read_to_string(info).await {
+        Ok(text) => serde_json::from_str(&text).map_err(|e| format!("Can't read {}: {e}", info.display()))?,
+        Err(_) => {
+            let (owner, project) = repo.split_once('/').unwrap_or(("", repo));
+            let mut m = Map::new();
+            m.insert("project_name".into(), json!(project));
+            m.insert("project_owner".into(), json!(owner));
+            m
+        }
+    };
+    if data.get("version").and_then(Value::as_str) == Some(version)
+        && data.get("asset_name").and_then(Value::as_str) == Some(asset)
+    {
         return Ok(());
     }
     data.insert("version".into(), json!(version));
+    data.insert("asset_name".into(), json!(asset));
     let partial = info.with_extension("json.new");
     let text = serde_json::to_string(&data).expect("JSON serializes");
     tokio::fs::write(&partial, text).await.map_err(|e| format!("Can't write {}: {e}", partial.display()))?;
@@ -938,6 +996,94 @@ pub(crate) mod tests {
         assert!(saved.last_error.starts_with("GitHub answered 404"), "{}", saved.last_error);
     }
 
+    /// An entry with options from orrery.toml.
+    fn own(dir: &Path, extra: Value) -> Entry {
+        let g = config::global(&Map::new(), &mut Vec::new());
+        let mut map =
+            json!({"type": "executable", "path": dir, "repo": "ressu/printerkeep", "is_system_service": false});
+        map.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        let map = map.as_object().unwrap();
+        let mut e = config::entry("printerkeep", map, &g).unwrap();
+        let keys: Vec<String> = map.keys().cloned().collect();
+        config::own_options("update_manager printerkeep", map, &keys, &mut e, &mut Vec::new()).unwrap();
+        e
+    }
+
+    #[tokio::test]
+    async fn installs_from_nothing() {
+        let base = server(|base| {
+            HashMap::from([
+                ("/repos/ressu/printerkeep/releases/latest".to_owned(), release("v1.2.0", base)),
+                ("/dl/v1.2.0".to_owned(), b"new120".to_vec()),
+            ])
+        })
+        .await;
+        let gh = Github::with_api(&base).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("printerkeep");
+
+        // Without install, a missing folder is invalid, and shows ?: the updater can't fix it.
+        let e = entry(&path, json!({}));
+        let i = installed_release(&e).await;
+        assert!(!i.valid && i.fresh, "{i:?}");
+        assert_eq!(status(&e, &i, &Saved::default())["version"], "?");
+        // The asset defaults to <entry>-{arch}.
+        let machine = rustix::system::uname().machine().to_string_lossy().into_owned();
+        assert_eq!(i.asset_name, Some(format!("printerkeep-{machine}")));
+
+        // With install, it's valid, shows v0.0.0-missing, and the update installs it.
+        let e = own(&path, json!({"install": true, "asset": "printerkeep-linux-aarch64"}));
+        let i = installed_release(&e).await;
+        assert!(i.valid && i.warnings.is_empty(), "{i:?}");
+        assert_eq!(status(&e, &i, &Saved::default())["version"], MISSING_VERSION);
+        let mut saved = Saved::default();
+        refresh(&gh, &e, &i, &mut saved).await;
+        assert_eq!(saved.remote_version, "v1.2.0");
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        install(&gh, &e, &i, saved.asset.as_ref().unwrap(), None, "v1.2.0", "printerkeep", &tx).await.unwrap();
+        assert_eq!(std::fs::read(path.join("printerkeep-linux-aarch64")).unwrap(), b"new120");
+        // release_info.json is written from the release, as Moonraker reads it.
+        let info: Value =
+            serde_json::from_str(&std::fs::read_to_string(path.join("release_info.json")).unwrap()).unwrap();
+        assert_eq!(
+            info,
+            json!({"project_name": "printerkeep", "project_owner": "ressu", "version": "v1.2.0",
+                "asset_name": "printerkeep-linux-aarch64"})
+        );
+        let i = installed_release(&e).await;
+        assert!(i.valid && !i.fresh && i.version == "v1.2.0", "{i:?}");
+
+        // A folder there without release_info.json shows v0.0.0-invalid.
+        std::fs::remove_file(path.join("release_info.json")).unwrap();
+        let i = installed_release(&e).await;
+        assert!(i.valid && i.fresh, "{i:?}");
+        assert_eq!(status(&e, &i, &Saved::default())["version"], UNKNOWN_VERSION);
+    }
+
+    #[tokio::test]
+    async fn picks_the_asset() {
+        let dir = tempfile::tempdir().unwrap();
+        install_v1(dir.path());
+        // release_info.json's asset_name, as in Moonraker.
+        let i = installed(opts(&entry(dir.path(), json!({})))).await;
+        assert_eq!(i.asset_name.as_deref(), Some("printerkeep-linux-aarch64"));
+        // The asset option wins, for a project that renames its files.
+        let renamed = own(dir.path(), json!({"asset": "pk-{arch}"}));
+        let machine = rustix::system::uname().machine().to_string_lossy().into_owned();
+        assert_eq!(installed(opts(&renamed)).await.asset_name, Some(format!("pk-{machine}")));
+        // Without asset_name, the default: Moonraker calls this invalid.
+        let program = format!("printerkeep-{machine}");
+        std::fs::write(dir.path().join(&program), b"x").unwrap();
+        std::fs::write(
+            dir.path().join("release_info.json"),
+            r#"{"project_name":"printerkeep","project_owner":"ressu","version":"v1.1.0"}"#,
+        )
+        .unwrap();
+        let i = installed(opts(&entry(dir.path(), json!({})))).await;
+        assert!(i.valid, "{i:?}");
+        assert_eq!(i.asset_name, Some(program));
+    }
+
     #[tokio::test]
     async fn keeps_the_old_program_and_checks_the_new_one() {
         const GOOD: &[u8] = b"#!/bin/sh\ntest \"$1\" = --check\n";
@@ -954,7 +1100,7 @@ pub(crate) mod tests {
         let dir = tempfile::tempdir().unwrap();
         install_v1(dir.path());
         let mut e = entry(dir.path(), json!({}));
-        e.preflight = vec!["--check".into()];
+        e.preflight = crate::command::words(&["--check"]);
         let i = installed(opts(&e)).await;
         let program = dir.path().join("printerkeep-linux-aarch64");
         let previous = dir.path().join(PREVIOUS);
@@ -984,7 +1130,7 @@ pub(crate) mod tests {
         let err = restore_previous(&e, &files, &tx).await.unwrap_err();
         assert!(err.starts_with("The preflight check `printerkeep-linux-aarch64 --check` can't start"), "{err}");
         assert_eq!(std::fs::read(&program).unwrap(), GOOD);
-        e.preflight.clear();
+        e.preflight = None;
         restore_previous(&e, &files, &tx).await.unwrap();
         assert_eq!(std::fs::read(&program).unwrap(), b"old");
         assert_eq!(installed(opts(&e)).await.version, "v1.1.0");

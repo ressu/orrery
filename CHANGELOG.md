@@ -32,10 +32,15 @@ Fluidd and Mainsail link to the release page on GitHub, which shows the same not
   update. Updating from v0.1.2 or older installs only the programs the old updater knows, so
   the update manager then offers the same release again: update once more to install the
   rest.
-- An `archive` or `executable` entry whose version Orrery doesn't know shows as
-  `v0.0.0-invalid`, or `v0.0.0-missing` when its folder isn't there yet, instead of `?`, so
-  Fluidd and Mainsail offer the newest release. Updating a missing `archive` entry installs
-  it.
+- An update manager entry can install what it describes: with `install = true`, or a command
+  to run after the release is in place, the first update installs it, so adding the entry and
+  pressing update is the whole install. `upgrade` names a command each later update runs. A
+  command that fails leaves the files in place, and the next update runs it again. See
+  [installing with the update manager](https://github.com/ressu/orrery/blob/main/docs/configuration/update-manager.md#installing-with-the-update-manager).
+- `preflight` can be a shell line, such as `"tool --check"`, which runs the new version's
+  programs.
+- An `executable` or `archive` entry's release file defaults to `<entry>-{arch}`, with the
+  archive's `format` after it, and `asset` names another one.
 
 ### Fixed
 

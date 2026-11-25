@@ -51,6 +51,9 @@ difference the conformance cases check. What's missing here is also the list to 
 - **More update entries.** `archive` entries install every file of a release's archive.
   An entry's `managed_services` adds its service to the service list, including a user unit
   such as `user/aldis`.
+- **Installs from the update manager.** An entry with `install` installs what it describes on
+  its first update, and can run a command then, and after each upgrade. No separate installer
+  or `curl | sudo sh`, unless a step needs root.
 - **Buttons with more events.** `on_click` and `on_long_press` as well as press and release,
   each running named actions that Klipper's macros and clients can run too.
 - **A quieter file watcher.** It announces the outcome, not every step, and doesn't wake for

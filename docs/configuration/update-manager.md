@@ -83,6 +83,8 @@ It doesn't update `web` and `zip` entries yet, and lists a warning for each one 
 | `info_tags` | none | Notes that clients show with the entry |
 | `report_anomalies` | `true` | Whether the entry warns about problems, such as an unexpected remote |
 | `preflight` | none | A check the new version must pass first; see [Checks before an update](#checks-before-an-update) |
+| `install` | none | Lets the update install the entry from nothing, and what it runs then; see [Installing with the update manager](#installing-with-the-update-manager) |
+| `upgrade` | none | A command each update runs after the new version is in place |
 
 ### `git_repo` entries
 
@@ -95,7 +97,7 @@ It doesn't update `web` and `zip` entries yet, and lists a warning for each one 
 | `virtualenv` | none | The Python environment to install `requirements` into |
 | `requirements` | none | A Python requirements file in the repository |
 | `system_dependencies` | none | A file in the repository that lists Debian packages |
-| `install_script` | none | A script in the repository that installs what the program needs |
+| `install_script` | none | A script in the repository whose `PKGLIST="…"` lines list Debian packages. As in Moonraker, it isn't run; to run a command, use `install` |
 
 A remote that starts with `http://` or `git://` is reported as a problem, since the connection
 isn't encrypted.
@@ -108,9 +110,14 @@ isn't encrypted.
 | `system_dependencies` | none | A file that lists Debian packages |
 | `checksums` | none | A file in the release with SHA-256 sums, such as `SHA256SUMS`, that the download must match |
 | `programs` | none | The programs in the release's `.tar.gz`. Without it, the release has one program |
+| `asset` | see below | The release's file to download. `{arch}` is the printer's CPU, as `uname -m` prints it |
 
-`checksums` and `programs` work only in `orrery.toml`. `repo` in `orrery.toml` wins over the
-one the program's `release_info.json` names. An update keeps the program it replaced in
+`checksums`, `programs`, and `asset` work only in `orrery.toml`. `repo` in `orrery.toml` wins
+over the one the program's `release_info.json` names.
+
+The file to download is `asset`, or else the `asset_name` in `release_info.json`, as in
+Moonraker, or else `<entry>-{arch}`, such as `tool-aarch64`. `asset` is for a project that
+renames its files: it wins, and the update writes the new name into `release_info.json`. An update keeps the program it replaced in
 `.previous/` beside it, so a rollback needs no download.
 
 ```toml
@@ -144,7 +151,7 @@ Where the release comes from:
 | Option | Default | What it does |
 |---|---|---|
 | `github` | required | The GitHub repository with the releases, as `owner/name` |
-| `asset` | required | The release's file to download. `{arch}` is the printer's CPU, as `uname -m` prints it, such as `aarch64` |
+| `asset` | `<entry>-{arch}.<format>` | The release's file to download. `{arch}` is the printer's CPU, as `uname -m` prints it, such as `aarch64`. Without it, the file the last install took, or the default |
 | `checksums` | none | A file in the release with SHA-256 sums, such as `SHA256SUMS`, that the download must match |
 
 What's in the download:
@@ -164,10 +171,9 @@ install, such as a config file. The old files stay in `.previous/`, so a rollbac
 download.
 
 The version on the update page is the release Orrery installed. Before Orrery's first update,
-such as for a program you installed by hand, the version is unknown. The page shows it as
-`v0.0.0-invalid`, or `v0.0.0-missing` when `path` doesn't exist yet, so Fluidd and Mainsail
-offer the newest release. Updating then installs the program, making `path`. If the program updates itself, the page shows the older version until Orrery
-installs the next release.
+such as for a program you installed by hand, the version is unknown: the entry needs
+`install` before Orrery installs anything there. If the program updates itself, the page shows
+the older version until Orrery installs the next release.
 
 ## Klipper's entry
 
@@ -215,13 +221,75 @@ takes effect:
 - For a `git_repo`, it's a file in the repository and its arguments.
 - For an `archive`, it's a file of the archive and its arguments.
 
+`preflight` can also be a shell line, run with `sh -c` in the entry's folder. The new
+version's programs come first on `PATH`, so the line runs them, not the ones in place:
+
 ```toml
 [update_manager.printerkeep]
 preflight = ["--version"]
+
+[update_manager.aldis]
+preflight = "aldis --version | grep -q aldis"
 ```
 
 If the check fails, the old version stays, and the update dialog shows the check's output.
-Orrery's own entry always runs `orrery preflight`.
+Orrery's own entry always runs `orrery preflight`. A first install has no check, since nothing
+runs yet that it would protect.
+
+## Installing with the update manager
+
+With `install`, the update manager installs an entry that isn't there yet, so adding the
+entry and pressing update is the whole install. The entry's author knows whether the program
+works as placed, or needs a step after it:
+
+| `install` | What the first update does |
+|---|---|
+| absent or `false` | Nothing: the entry must be installed some other way |
+| `true` | Puts the release in place, and that's all the program needs |
+| a command | Puts the release in place, then runs the command |
+
+`upgrade` is a command each later update runs. Each runs only on its own event: a rollback
+runs neither, and a program that needs the same step both times names it twice.
+
+```toml
+[update_manager.tool]
+type = "git_repo"
+path = "~/tool"
+origin = "https://github.com/example/tool.git"
+primary_branch = "main"
+install = "./install.sh --unattended"
+upgrade = ["./scripts/migrate.sh"]
+
+[update_manager.monitor]
+type = "archive"
+github = "example/monitor"
+path = "~/monitor"
+format = "tar.gz"
+install = true
+```
+
+A command is a shell line, run with `sh -c`, or a list of words, run without a shell. It runs
+in the entry's folder, as Orrery's user, for at most 30 minutes, and its output shows in the
+update dialog. It gets `ORRERY_ENTRY`, `ORRERY_PATH`, `ORRERY_VERSION`, and
+`ORRERY_PREVIOUS_VERSION`, which is empty for an install.
+
+Commands don't run as root. Orrery doesn't support `sudo` in them; a step that needs root is
+yours to run by hand. The Debian packages in `system_dependencies` are installed before the
+command, through PackageKit, and the Python packages after it, since `install` may make the
+virtualenv.
+
+An entry with `install` and nothing installed shows on the update page as `v0.0.0-missing`
+when `path` isn't there, or `v0.0.0-invalid` when it is, but Orrery has no record of an
+install: `release_info.json` for an `executable`, `.release-info.json` for an `archive`. Any
+release is newer, so Fluidd and Mainsail offer it. Without `install`, the version shows as `?`,
+and nothing installs. A `git_repo` entry installs only into a `path` that isn't there; a
+folder without a repository is an error to fix by hand. A fresh `executable` gets a
+`release_info.json`, so it's an ordinary Moonraker install afterwards.
+
+If a command fails, the files stay in place, and nothing restarts. The entry shows
+`v0.0.0-invalid` and a warning that names the command. The next update runs only that
+command again, without a download. A hard recover of a `git_repo` entry clones the repository
+again, and with `install`, runs it again too.
 
 ## Restarts
 

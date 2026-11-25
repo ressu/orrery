@@ -169,7 +169,7 @@ pub async fn self_update(repo: Option<String>, tag: Option<String>, args: &[Stri
     }
     let entry = shell_entry(repo, args)?;
     let Kind::Archive(opts) = &entry.kind else { unreachable!("an archive entry") };
-    let installed = archive::installed(opts).await;
+    let installed = crate::executable::installed_release(&entry).await;
     if !installed.valid {
         return Err(format!(
             "orrery can't update the programs in {}: {}",
@@ -195,7 +195,7 @@ pub async fn self_update(repo: Option<String>, tag: Option<String>, args: &[Stri
     let checksums = executable::checksums_of(&entry, &release);
     println!("Installing orrery {version} in {}...", opts.path.display());
     printing(async |out| {
-        archive::install(&gh, &entry, &installed.repo, &asset, checksums.as_ref(), &version, "orrery", out).await
+        archive::install(&gh, &entry, &installed, &asset, checksums.as_ref(), &version, "orrery", out).await
     })
     .await?;
     println!("Installed orrery {version}. {RESTART}");

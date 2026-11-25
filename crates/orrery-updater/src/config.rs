@@ -5,6 +5,7 @@
 //! An entry that can't be used is left out, with a warning for `server.info`. The other
 //! entries keep working.
 
+use crate::command::{self, Command, Install};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -86,8 +87,13 @@ pub struct Entry {
     pub kind: Kind,
     /// For Klipper's own entry: the project it runs.
     pub klippy: Option<Project>,
-    /// The check that the new version can run, as words; empty for none ([`preflight`]).
-    pub preflight: Vec<String>,
+    /// The check that the new version can run ([`preflight`]).
+    pub preflight: Option<Command>,
+    /// Whether the updater installs the entry from nothing, and what it runs then
+    /// (docs/design/2026-11-24-update-installs.md). `None`: it doesn't.
+    pub install: Option<Install>,
+    /// What each upgrade runs, after the new version is in place.
+    pub upgrade: Option<Command>,
 }
 
 /// The projects Klipper's entry knows (docs/design/2026-11-22-klipper-updates.md).
@@ -165,22 +171,23 @@ pub struct KlipperSection {
     pub from_orrery_toml: Vec<String>,
 }
 
-/// An entry's `preflight`: a command as a list of words. It's orrery's own option, and runs a
-/// command, so it's taken only from `orrery.toml`; in `moonraker.conf` it's ignored, with a
-/// warning. For an executable, the words are arguments to the new program; for a `git_repo`,
-/// the first word is a file in the repo.
+/// An entry's `preflight`: a shell line or a list of words. Moonraker has no such option, so
+/// it's taken only from `orrery.toml`; in `moonraker.conf` it's ignored, with a warning. As
+/// words, for an executable, they're arguments to the new program; for a `git_repo`, the first
+/// word is a file in the repo. A shell line runs in the entry's folder, with the new version's
+/// programs first on `PATH`.
 pub fn preflight(
     section: &str,
     map: &Map<String, Value>,
     from_orrery_toml: &[String],
     warnings: &mut Vec<String>,
-) -> Result<Vec<String>, String> {
-    let Some(value) = map.get("preflight") else { return Ok(Vec::new()) };
+) -> Result<Option<Command>, String> {
+    let Some(value) = map.get("preflight") else { return Ok(None) };
     if !from_orrery_toml.iter().any(|k| k == "preflight") {
         warnings.push(ignored_options(section, &["preflight"], "it takes it only from orrery.toml"));
-        return Ok(Vec::new());
+        return Ok(None);
     }
-    words(section, "preflight", value, r#"["--check"]"#)
+    command::parse(section, "preflight", Some(value))
 }
 
 /// A non-empty list of strings.
@@ -281,6 +288,8 @@ pub fn klipper_entry(
         }),
         klippy: Some(k.project),
         preflight,
+        install: None,
+        upgrade: None,
     }))
 }
 
@@ -300,6 +309,16 @@ impl Kind {
             Self::Executable(_) => "executable",
             Self::Archive(_) => "archive",
             Self::System => "system",
+        }
+    }
+
+    /// The entry's folder; the system entry has none.
+    pub fn path(&self) -> Option<&Path> {
+        match self {
+            Self::Git(o) => Some(&o.path),
+            Self::Executable(o) => Some(&o.path),
+            Self::Archive(o) => Some(&o.path),
+            Self::System => None,
         }
     }
 
@@ -346,6 +365,11 @@ pub struct ExecOptions {
     pub checksums: Option<String>,
     /// `repo` came from `orrery.toml`, and wins over `release_info.json`.
     pub repo_pinned: bool,
+    /// `asset`, from `orrery.toml`, with `{arch}` filled in: the release's file to download. It
+    /// wins over `release_info.json`'s `asset_name`.
+    pub asset: Option<String>,
+    /// The release's file when neither names one: `<entry>-{arch}`.
+    pub default_asset: String,
 }
 
 /// An `archive` entry, orrery's own type: the files of a release's archive, installed into
@@ -374,8 +398,10 @@ pub struct ArchiveOptions {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Source {
     /// A GitHub repository's releases: `repo` is `owner/name`, `asset` the release file, with
-    /// `{arch}` filled in, and `checksums` the release's file of SHA-256 sums.
-    Github { repo: String, asset: String, checksums: Option<String> },
+    /// `{arch}` filled in, and `checksums` the release's file of SHA-256 sums. Without the
+    /// `asset` option, the asset is the one the record names, or `<entry>-{arch}.<format>`;
+    /// `asset_pinned` says the option set it, so it wins over the record.
+    Github { repo: String, asset: String, asset_pinned: bool, checksums: Option<String> },
 }
 
 impl Source {
@@ -608,7 +634,9 @@ pub fn system_entry(global: &Global) -> Entry {
         hash: "system".into(),
         kind: Kind::System,
         klippy: None,
-        preflight: Vec::new(),
+        preflight: None,
+        install: None,
+        upgrade: None,
     }
 }
 
@@ -653,6 +681,7 @@ pub fn orrery_entry(
             repo: repo.clone().unwrap_or_else(|| orrery_build::REPO.to_owned()),
             // Empty for a CPU orrery doesn't release for, which the status says.
             asset: crate::release::own_asset(orrery_build::TARGET).unwrap_or_default(),
+            asset_pinned: true,
             checksums: Some(crate::release::CHECKSUMS.into()),
         },
         format: ArchiveFormat::TarGz,
@@ -679,7 +708,10 @@ pub fn orrery_entry(
         hash: hash(&hashed),
         kind: Kind::Archive(opts),
         klippy: None,
-        preflight,
+        preflight: Some(Command::Words(preflight)),
+        // An install from v0.1.2 or older has no record, so its first update installs it.
+        install: Some(Install::Bare),
+        upgrade: None,
     }))
 }
 
@@ -708,9 +740,28 @@ pub fn own_options(
         ));
     }
     entry.preflight = preflight(section, map, from_orrery_toml, warnings)?;
-    let Kind::Executable(opts) = &mut entry.kind else { return Ok(()) };
     let from_toml = |key: &str| from_orrery_toml.iter().any(|k| k == key);
-    for key in ["checksums", "programs"] {
+    // Moonraker has no install or upgrade, so in moonraker.conf they don't take effect.
+    let not_moonraker: Vec<&str> =
+        ["install", "upgrade"].into_iter().filter(|k| map.contains_key(*k) && !from_toml(k)).collect();
+    if !not_moonraker.is_empty() {
+        let set = if not_moonraker.len() == 1 { "Set it" } else { "Set them" };
+        warnings.push(ignored_options(
+            section,
+            &not_moonraker,
+            &format!("Moonraker has no such option. {set} in orrery.toml"),
+        ));
+    }
+    if matches!(entry.kind, Kind::Git(_) | Kind::Executable(_) | Kind::Archive(_)) {
+        if from_toml("install") {
+            entry.install = command::parse_install(section, map.get("install"))?;
+        }
+        if from_toml("upgrade") {
+            entry.upgrade = command::parse(section, "upgrade", map.get("upgrade"))?;
+        }
+    }
+    let Kind::Executable(opts) = &mut entry.kind else { return Ok(()) };
+    for key in ["checksums", "programs", "asset"] {
         if map.contains_key(key) && !from_toml(key) {
             warnings.push(ignored_options(section, &[key], "it takes it only from orrery.toml"));
         }
@@ -722,9 +773,12 @@ pub fn own_options(
     if from_toml("programs") {
         opts.programs = words(section, "programs", &map["programs"], r#"["tool", "tool-helper"]"#)?;
     }
+    if from_toml("asset") {
+        opts.asset = o.text("asset")?.filter(|a| !a.is_empty()).map(|a| a.replace("{arch}", &machine()));
+    }
     opts.repo_pinned = from_toml("repo");
-    if let (false, Some(first)) = (opts.programs.is_empty(), entry.preflight.first())
-        && !opts.programs.contains(first)
+    if let (false, Some(first)) = (opts.programs.is_empty(), entry.preflight.as_ref().and_then(Command::first_word))
+        && !opts.programs.iter().any(|p| p == first)
     {
         return Err(format!(
             "[{section}] preflight: the first word names the program to run, one of {}, got {first:?}",
@@ -763,34 +817,43 @@ pub fn entry(name: &str, map: &Map<String, Value>, global: &Global) -> Result<En
             programs: Vec::new(),
             checksums: None,
             repo_pinned: false,
+            asset: None,
+            default_asset: format!("{name}-{}", machine()),
         }),
-        Some("archive") => Kind::Archive(ArchiveOptions {
-            path: expand_home(&o.required("path")?),
-            source: Source::Github {
-                repo: {
-                    o.required("github")?;
-                    o.repo("github")?.expect("required above")
-                },
-                asset: o.required("asset")?.replace("{arch}", &machine()),
-                checksums: o.text("checksums")?.filter(|c| !c.is_empty()),
-            },
-            format: match o.required("format")?.as_str() {
+        Some("archive") => {
+            let format = match o.required("format")?.as_str() {
                 "tar.gz" => ArchiveFormat::TarGz,
                 "tar.xz" => ArchiveFormat::TarXz,
                 other => {
                     return Err(format!("[{}] format: expected tar.gz or tar.xz, got {other:?}", o.section));
                 }
-            },
-            wrapper_folders: match map.get("wrapper_folders") {
-                None | Some(Value::Null) => None,
-                Some(v) => Some(v.as_u64().and_then(|n| usize::try_from(n).ok()).ok_or_else(|| {
-                    format!("[{}] wrapper_folders: expected a number, such as 1, got {v}", o.section)
-                })?),
-            },
-            system_dependencies: o.text("system_dependencies")?,
-            orrery: false,
-            repo_pinned: true,
-        }),
+            };
+            let asset = o.text("asset")?.filter(|a| !a.is_empty());
+            Kind::Archive(ArchiveOptions {
+                path: expand_home(&o.required("path")?),
+                source: Source::Github {
+                    repo: {
+                        o.required("github")?;
+                        o.repo("github")?.expect("required above")
+                    },
+                    asset_pinned: asset.is_some(),
+                    asset: asset
+                        .unwrap_or_else(|| format!("{name}-{{arch}}.{}", format.as_str()))
+                        .replace("{arch}", &machine()),
+                    checksums: o.text("checksums")?.filter(|c| !c.is_empty()),
+                },
+                format,
+                wrapper_folders: match map.get("wrapper_folders") {
+                    None | Some(Value::Null) => None,
+                    Some(v) => Some(v.as_u64().and_then(|n| usize::try_from(n).ok()).ok_or_else(|| {
+                        format!("[{}] wrapper_folders: expected a number, such as 1, got {v}", o.section)
+                    })?),
+                },
+                system_dependencies: o.text("system_dependencies")?,
+                orrery: false,
+                repo_pinned: true,
+            })
+        }
         Some(t @ ("web" | "zip" | "python")) => {
             return Err(format!("[{}]: orrery doesn't update {t} entries yet, so this entry is left out", o.section));
         }
@@ -826,7 +889,9 @@ pub fn entry(name: &str, map: &Map<String, Value>, global: &Global) -> Result<En
         hash: hash(map),
         kind,
         klippy: None,
-        preflight: Vec::new(),
+        preflight: None,
+        install: None,
+        upgrade: None,
     })
 }
 
@@ -1099,11 +1164,11 @@ mod tests {
         // A preflight, from orrery.toml only, as for any entry.
         let sections = vec![section("klipper", json!({"preflight": ["scripts/check_config.sh"]}), &["preflight"])];
         let e = klipper_entry(&klippy(Project::Kalico, dir.path()), &sections, &g, &mut w).unwrap().unwrap();
-        assert_eq!(e.preflight, ["scripts/check_config.sh"]);
+        assert_eq!(e.preflight, command::words(&["scripts/check_config.sh"]));
         assert!(w.is_empty(), "{w:?}");
         let sections = vec![section("klipper", json!({"preflight": "scripts/check_config.sh"}), &[])];
         let e = klipper_entry(&klippy(Project::Kalico, dir.path()), &sections, &g, &mut w).unwrap().unwrap();
-        assert!(e.preflight.is_empty());
+        assert!(e.preflight.is_none());
         assert_eq!(
             w,
             ["[update_manager klipper]: orrery ignores the option preflight, since it takes it only from orrery.toml"]
@@ -1137,22 +1202,22 @@ mod tests {
         let sec = "update_manager tool";
         let mut w = Vec::new();
         let m = map(json!({"preflight": ["--check", "--quiet"]}));
-        assert_eq!(preflight(sec, &m, &["preflight".into()], &mut w).unwrap(), ["--check", "--quiet"]);
+        assert_eq!(preflight(sec, &m, &["preflight".into()], &mut w).unwrap(), command::words(&["--check", "--quiet"]));
         assert!(w.is_empty());
         // From moonraker.conf, it's text, and it's ignored.
         let m = map(json!({"preflight": "--check"}));
-        assert!(preflight(sec, &m, &[], &mut w).unwrap().is_empty());
+        assert!(preflight(sec, &m, &[], &mut w).unwrap().is_none());
         assert_eq!(
             w,
             ["[update_manager tool]: orrery ignores the option preflight, since it takes it only from orrery.toml"]
         );
-        // In orrery.toml, it's a list of words.
-        let err = preflight(sec, &m, &["preflight".into()], &mut Vec::new()).unwrap_err();
-        assert_eq!(
-            err,
-            r#"[update_manager tool] preflight: expected a list of words, such as ["--check"], got "--check""#
-        );
-        assert!(preflight(sec, &map(json!({})), &[], &mut Vec::new()).unwrap().is_empty());
+        // In orrery.toml, a string is a shell line, and anything else is an error.
+        let toml = ["preflight".to_owned()];
+        let line = map(json!({"preflight": "tool --check"}));
+        assert_eq!(preflight(sec, &line, &toml, &mut Vec::new()).unwrap(), Some(Command::Shell("tool --check".into())));
+        let err = preflight(sec, &map(json!({"preflight": 3})), &toml, &mut Vec::new()).unwrap_err();
+        assert!(err.starts_with("[update_manager tool] preflight: expected a shell line"), "{err}");
+        assert!(preflight(sec, &map(json!({})), &[], &mut Vec::new()).unwrap().is_none());
     }
 
     #[test]
@@ -1184,7 +1249,7 @@ mod tests {
         );
         assert!(o.orrery && !o.repo_pinned);
         assert_eq!(repo(&e), orrery_build::REPO);
-        assert_eq!(e.preflight, ["orrery", "-c", "/x/moonraker.conf", "preflight"]);
+        assert_eq!(e.preflight, command::words(&["orrery", "-c", "/x/moonraker.conf", "preflight"]));
         assert!(w.is_empty());
         // A fork, from orrery.toml, wins over release_info.json.
         let e = orrery(json!({"repo": "someone/orrery/"}), &["repo"], &mut w).unwrap().unwrap();

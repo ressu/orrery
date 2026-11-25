@@ -3,8 +3,10 @@
 **Decision (2026-11-25):** An update manager entry can say that the updater
 may install what it describes, from nothing. It can also name a command to run after that
 first install, and another to run after each upgrade. A user then adds the entry and presses
-update, with no separate installer and no `curl | sudo sh` (user, 2026-11-24). Nothing here is
-built yet.
+update, with no separate installer and no `curl | sudo sh` (user, 2026-11-24).
+
+**Status (2026-11-25):** built, in `crates/orrery-updater/src/command.rs` (the commands) and
+`manager.rs` (when they run). Two details the build settled are marked "(build)" below.
 
 ## Why
 
@@ -45,7 +47,9 @@ A command is written the same way for `install`, `upgrade` and `preflight`:
 - **A shell line:** `"./install.sh --unattended"`, run with `sh -c`.
 - **A list of words:** `["./install.sh", "--unattended"]`, run without a shell.
 
-`preflight` gains the shell line; its list stays as it is.
+`preflight` gains the shell line; its list stays as it is. A shell-line preflight runs in the
+entry's folder with the new version's programs first on `PATH`, so `"tool --check"` runs the
+new `tool`, not the one in place (build).
 
 ```toml
 [update_manager.tool]
@@ -89,7 +93,9 @@ nothing: the updater can't fix that entry. This replaces today's rule, where eve
 and `executable` entry shows `v0.0.0-missing` or `v0.0.0-invalid`.
 
 A git entry without a repository has no current commit. Its refresh reads the remote branch's
-commit with `git ls-remote`, so the page has an update to offer.
+commit with `git ls-remote`, so the page has an update to offer. Without the history there's
+no count of commits since a tag, so the remote version is `<tag>-0` when a tag points at that
+commit, and the commit otherwise (build).
 
 ## The steps
 
@@ -108,7 +114,9 @@ check never leaves a half-migrated install.
 | 6 | Restart | Restart | Restart |
 
 A fresh install has no preflight: nothing runs yet that needs protecting, and `install` is what
-makes the program work. `install` runs before the Python packages, since it may make the
+makes the program work. Only an install into a folder that isn't there skips it, though: a
+folder without a record may hold a program that runs, such as Orrery's own after an install
+from v0.1.2, and the check protects it (build). `install` runs before the Python packages, since it may make the
 virtualenv.
 
 ## Running a command

@@ -8,6 +8,7 @@
 //! `update_manager` namespace.
 
 mod archive;
+mod command;
 mod config;
 mod deps;
 mod executable;
@@ -15,7 +16,6 @@ mod git;
 mod manager;
 mod packagekit;
 mod plugins;
-mod preflight;
 mod release;
 mod version;
 

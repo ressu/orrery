@@ -68,8 +68,8 @@ steps:
           is_valid: false
           owner: example
           repo_name: tool
-          # Its folder is missing.
-          version: v0.0.0-missing
+          # Its folder is missing, and it has no install option: the update manager can't fix it.
+          version: "?"
           remote_version: "?"
           warnings: ["Location at option 'path: /nonexistent/orrery-updater-tool' is not a directory.", Failed to validate installation]
   # An entry it can't use is a warning, and the others keep working.
