@@ -11,6 +11,9 @@ Fluidd and Mainsail link to the release page on GitHub, which shows the same not
 - Fluidd no longer shows "Spoolman server not available" when it connects while Orrery is
   starting. A Spoolman request waits up to a few seconds for the first connection to
   Spoolman.
+- A request to an agent that's still starting, such as Spoolman's or the update manager's
+  just after Orrery starts, waits up to 10 seconds for the agent, instead of failing with
+  "Agent spoolman not connected" or "Not Found".
 
 ## 0.2.0 (2026-11-25)
 

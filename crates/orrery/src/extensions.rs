@@ -40,6 +40,8 @@ struct Inner {
     /// Connected agents by name, in the order they identified, as `server.extensions.list`
     /// reports them.
     agents: Vec<(String, ConnId)>,
+    /// When each connected agent connected.
+    connected_at: HashMap<String, std::time::Instant>,
     /// Klippy remote methods agents registered, and the agent each one goes to.
     methods: HashMap<String, ConnId>,
     /// Calls sent to agents and waiting for a reply, by connection and request id.
@@ -55,6 +57,11 @@ impl Extensions {
     /// The agent connection a Klippy remote method goes to.
     pub fn method_conn(&self, method: &str) -> Option<ConnId> {
         self.lock().methods.get(method).copied()
+    }
+
+    /// When the agent connected, if it's connected.
+    pub fn connected_at(&self, agent: &str) -> Option<std::time::Instant> {
+        self.lock().connected_at.get(agent).copied()
     }
 
     /// Every remote method agents registered, to register again when Klippy becomes ready.
@@ -85,6 +92,7 @@ pub async fn register_agent(app: &App, conn: ConnId, name: &str, identity: &Valu
             return Err(ApiError::bad_request(format!("Agent '{name}' already registered and connected")));
         }
         inner.agents.push((name.to_owned(), conn));
+        inner.connected_at.insert(name.to_owned(), std::time::Instant::now());
     }
     tracing::info!("Agent {name} connected");
     if let Some(warning) = app.agents.version_warning(name, identity["version"].as_str()) {
@@ -104,6 +112,9 @@ pub fn remove_connection(app: &App, conn: ConnId) {
         let pending: Vec<_> = keys.iter().filter_map(|k| inner.pending.remove(k)).collect();
         inner.methods.retain(|_, c| *c != conn);
         let name = inner.agents.iter().position(|&(_, c)| c == conn).map(|i| inner.agents.remove(i).0);
+        if let Some(name) = &name {
+            inner.connected_at.remove(name);
+        }
         (pending, name)
     };
     for tx in pending {

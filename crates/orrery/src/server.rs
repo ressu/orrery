@@ -137,7 +137,44 @@ const COMPONENTS: &[&str] = &[
     "authorization",
 ];
 
+/// How long a call to a known agent waits for the agent to connect, and for a connected agent
+/// to register what the call names, counted from when it connected.
+const AGENT_START_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
 impl App {
+    /// Waits, for up to [`AGENT_START_WAIT`], while `unregistered` names a known agent that
+    /// hasn't registered the call yet: it may still be starting. Orrery can't know what an
+    /// agent will register, so a name the agent never registers waits out the window too.
+    async fn wait_for_agent(&self, unregistered: impl Fn(&Registry) -> Option<String>) {
+        let start = std::time::Instant::now();
+        loop {
+            let Some(agent) = unregistered(&self.registry.read().expect("registry lock")) else { return };
+            if !self.agents.is_configured(&agent) {
+                return;
+            }
+            let deadline = match self.extensions.connected_at(&agent) {
+                Some(at) => (at + AGENT_START_WAIT).min(start + AGENT_START_WAIT),
+                None => start + AGENT_START_WAIT,
+            };
+            if std::time::Instant::now() >= deadline {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+
+    /// The endpoint a JSON-RPC method names, after waiting for an agent that's starting.
+    pub async fn find_method(&self, method: &str) -> Option<(crate::api::Endpoint, RequestType)> {
+        self.wait_for_agent(|r| r.unregistered_agent_method(method)).await;
+        self.registry.read().expect("registry lock").by_method(method)
+    }
+
+    /// The endpoint an HTTP path names, after waiting for an agent that's starting.
+    pub async fn find_path(&self, path: &str) -> Option<crate::api::Endpoint> {
+        self.wait_for_agent(|r| r.unregistered_agent_path(path)).await;
+        self.registry.read().expect("registry lock").by_path(path)
+    }
+
     pub fn new(config: Config, paths: Paths) -> Result<Arc<Self>> {
         let (events, _) = broadcast::channel(1024);
         let server = config.section("server");
@@ -433,7 +470,7 @@ impl App {
     /// check, its handler, and the audit line. Actions run their calls this way, so an action
     /// never does more than its caller could.
     pub async fn call_method(self: &Arc<Self>, access: &Access, method: &str, args: Map<String, Value>) -> ApiResult {
-        let found = self.registry.read().expect("registry lock").by_method(method);
+        let found = self.find_method(method).await;
         let Some((endpoint, kind)) = found else {
             return Err(ApiError::not_found(format!("Method {method} not found")));
         };
@@ -474,7 +511,7 @@ impl App {
         let Some(method) = method.as_str() else {
             return Some(rpc_error(-32600, "Invalid Request", id));
         };
-        let found = self.registry.read().expect("registry lock").by_method(method);
+        let found = self.find_method(method).await;
         let Some((endpoint, kind)) = found else {
             return Some(rpc_error(-32601, "Method not found", id));
         };

@@ -259,7 +259,6 @@ async fn http_request(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let found = app.registry.read().expect("registry lock").by_path(uri.path());
     let access = match request_access(&app, peer, &headers, query.as_deref()) {
         Ok(a) => a,
         Err(e) => {
@@ -268,6 +267,7 @@ async fn http_request(
             return error_response(e.status, &e.message);
         }
     };
+    let found = app.find_path(uri.path()).await;
     let Some(endpoint) = found.filter(|e| e.http) else {
         if let Some(rest) = uri.path().strip_prefix("/server/files/") {
             let kind = if method == Method::DELETE { RequestType::Delete } else { RequestType::Get };

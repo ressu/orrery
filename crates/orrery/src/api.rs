@@ -417,6 +417,34 @@ impl Registry {
             .unwrap_or_else(|| path.trim_start_matches('/').replace('/', "."))
     }
 
+    /// The agent a method goes to, while that agent hasn't registered it: through a map, such
+    /// as `server.spoolman.proxy`, or by its own name, `agent.<name>.…`.
+    pub fn unregistered_agent_method(&self, method: &str) -> Option<String> {
+        for alias in &self.aliases {
+            if let Some(target) = swap_prefix(method, &alias.public_method, &alias.agent_method, '.') {
+                return self.direct_method(&target).is_none().then(|| alias.agent.clone());
+            }
+        }
+        if self.direct_method(method).is_some() {
+            return None;
+        }
+        method.strip_prefix("agent.")?.split('.').next().filter(|n| !n.is_empty()).map(str::to_owned)
+    }
+
+    /// The agent an HTTP path goes to, while that agent hasn't registered it: through a map, or
+    /// as `/agent/<name>/…`.
+    pub fn unregistered_agent_path(&self, path: &str) -> Option<String> {
+        for alias in &self.aliases {
+            if let Some(target) = swap_prefix(path, &alias.public_path, &alias.agent_path, '/') {
+                return (!self.by_path.contains_key(&target)).then(|| alias.agent.clone());
+            }
+        }
+        if self.by_path.contains_key(path) {
+            return None;
+        }
+        path.strip_prefix("/agent/")?.split('/').next().filter(|n| !n.is_empty()).map(str::to_owned)
+    }
+
     /// True if any registered method is `prefix` or starts with `prefix.`.
     pub fn has_prefix(&self, prefix: &str) -> bool {
         self.methods.keys().any(|m| swap_prefix(m, prefix, "", '.').is_some())
@@ -475,6 +503,16 @@ mod tests {
         // A mapped name the agent hasn't registered still answers, with the stub.
         assert_eq!(r.by_method("server.spoolman.proxy").unwrap().0.endpoint, "/agent/spoolman");
         assert_eq!(r.by_path("/server/spoolman/proxy").unwrap().endpoint, "/agent/spoolman/proxy");
+        // Which agent a name waits for, while the agent hasn't registered it.
+        assert_eq!(r.unregistered_agent_method("server.spoolman.proxy").as_deref(), Some("spoolman"));
+        assert_eq!(r.unregistered_agent_method("agent.spoolman.proxy").as_deref(), Some("spoolman"));
+        assert_eq!(r.unregistered_agent_method("server.spoolman.post_spool_id"), None);
+        assert_eq!(r.unregistered_agent_method("server.info"), None);
+        assert_eq!(r.unregistered_agent_method("server.nothing"), None);
+        assert_eq!(r.unregistered_agent_path("/server/spoolman/proxy").as_deref(), Some("spoolman"));
+        assert_eq!(r.unregistered_agent_path("/agent/update_manager/status").as_deref(), Some("update_manager"));
+        assert_eq!(r.unregistered_agent_path("/server/spoolman/spool_id"), None);
+        assert_eq!(r.unregistered_agent_path("/agent/"), None);
         // Only whole prefixes match.
         assert!(r.by_method("server.spoolmanx.proxy").is_none());
         assert!(r.has_prefix("server"));
