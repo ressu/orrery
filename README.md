@@ -20,7 +20,7 @@ out ideas Moonraker doesn't have, such as permissions for each user.
   manager are agents.
 
 Some things work differently from Moonraker, and some aren't there yet. See
-[Known differences from Moonraker](docs/regressions.md) before you switch.
+[Orrery compared with Moonraker](docs/comparison.md) before you switch.
 
 ## Installing
 
@@ -104,7 +104,8 @@ Moonraker works without changes. Orrery's own settings, and any new ones you add
 |---|---|
 | [Installing Orrery](docs/install.md) | The installer, installing by hand, importing, updating, and removing |
 | [Configuring Orrery](docs/configuration/README.md) | `orrery.toml`, and the settings Orrery reads from `moonraker.conf` |
-| [Known differences from Moonraker](docs/regressions.md) | What Orrery does differently, and what it doesn't do yet |
+| [Orrery compared with Moonraker](docs/comparison.md) | What you lose, gain, and should look out for when you switch |
+| [Regressions](docs/regressions.md) | Each difference from Moonraker that a conformance case checks |
 | [Moonraker oddities Orrery keeps](docs/oddities.md) | Moonraker behaviour that looks odd, kept so clients work |
 | [Changelog](CHANGELOG.md) | What changes in each release |
 | [Developing Orrery](docs/development.md) | Building, testing, and making a release |

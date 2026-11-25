@@ -1,12 +1,13 @@
-# Known differences from Moonraker
+# Regressions
 
-This file lists every known way orrery behaves differently from Moonraker, so the differences are
-deliberate and tracked. Each entry has an id. A conformance case that fails because of an entry is
-marked `known_regression: <id>`. To fix a difference, remove its entry and the marks together.
+Every difference from Moonraker that a conformance case checks, so each one is deliberate and
+tracked. Each entry has an id. A case that fails against Moonraker because of an entry is marked
+`known_regression: <id>`; the entry lists all its cases under **Cases:**. To fix a difference,
+remove its entry and the marks together.
 
-Most missing features are simply not written yet. Those show up as failing cases in the
-conformance results, not here. This file lists the differences that are deliberate, or that
-change how safe or complete orrery is to run.
+For an overview of what you lose, gain, and should look out for when you switch from
+Moonraker, see [Orrery compared with Moonraker](comparison.md). A difference that no case
+checks is described there only.
 
 ## Entry format
 
@@ -17,7 +18,7 @@ change how safe or complete orrery is to run.
 - **Moonraker:** what Moonraker does
 - **orrery:** what orrery does instead
 - **Why:** the reason, such as too much effort for now or out of scope
-- **Cases:** conformance case ids marked with this regression
+- **Cases:** the conformance cases that check it
 ```
 
 ## Entries
@@ -123,16 +124,6 @@ change how safe or complete orrery is to run.
   that orrery uses it; this file lists what orrery ignores.
 - **Cases:** `server/config` passes.
 
-### datastore: orrery keeps its own store
-
-- **Area:** datastore import
-- **Moonraker:** keeps its data in SQLite, `database/moonraker-sql.db`.
-- **orrery:** keeps its data in redb, `database/orrery.redb`, and doesn't read Moonraker's file.
-  Database backups are copies of the redb file. Importing Moonraker's data will be a separate
-  tool.
-- **Why:** see `docs/design/2026-11-01-datastore-spike.md`.
-- **Cases:** none; the API behaves the same.
-
 ### file-watcher: the file watcher announces outcomes, not every step
 
 - **Area:** files
@@ -170,14 +161,6 @@ change how safe or complete orrery is to run.
   or object processing.
 - **Why:** these are the slicers most printers use. The others can be ported one at a time.
 - **Cases:** `files/metadata`, `files/metadata_plain`, `files/metascan`.
-
-### missing-file-roots: no `config_examples` or `docs` roots
-
-- **Area:** files
-- **Moonraker:** adds the `config_examples` and `docs` roots from Klipper's folder.
-- **orrery:** has the `config`, `logs`, and `gcodes` roots.
-- **Why:** frontends work without them.
-- **Cases:** none yet.
 
 ### log-file: orrery's log is `orrery.log`
 
@@ -279,26 +262,6 @@ change how safe or complete orrery is to run.
   `provider: none`, so the actions were checked by hand; the D-Bus client is tested against a
   private `dbus-daemon`.
 
-### import-gaps: what `orrery-import` doesn't bring over
-
-- **Area:** datastore import
-- **Moonraker:** keeps users, its own state, and the gcode metadata cache in `moonraker-sql.db`.
-- **orrery:** `orrery-import` skips these:
-  - Users' signing keys, so users log in again after the switch, with the same password.
-    orrery makes them new keys.
-  - Users' groups, which Moonraker stores but doesn't use. Users themselves are imported, with
-    their password hashes, and Moonraker's API key is copied, as orrery's `moonraker` key. A user that orrery already has is left as it is, and so is orrery's own
-    user with the same name. An LDAP user is imported, but can't log in until orrery has LDAP.
-  - The `moonraker` and `database` namespaces: Moonraker's own state, such as its instance id.
-    orrery keeps its own.
-  - `update_manager`: Moonraker's update manager state. orrery's update agent keeps its own
-    there, in its own format, and checks each entry again on its first start.
-  - `gcode_metadata`: orrery reads the files again instead. It still copies each file's link to
-    its last print (`job_id` and `print_start_time`) when the file hasn't changed.
-  - The legacy LMDB database (`moonraker.db/`), from Moonraker before v0.9.
-- **Why:** orrery has no groups yet. The rest belongs to Moonraker, or orrery rebuilds it.
-- **Cases:** none; the import's unit tests read `conformance/fixtures/import/seed.db`.
-
 ### agent-null-result: an agent's `null` result is a result
 
 - **Area:** API
@@ -310,15 +273,6 @@ change how safe or complete orrery is to run.
 - **Why:** Moonraker's behaviour looks accidental: its docs don't mention it, and agents such as
   aldis work around it. Agents written for Moonraker never reply `null`, so none of them change.
 - **Cases:** `extensions/null_result`.
-
-### webcam-test-no-tls: `server.webcams.test` can't reach `https` snapshots
-
-- **Area:** API
-- **Moonraker:** fetches the snapshot URL over HTTP or HTTPS to report `snapshot_reachable`.
-- **orrery:** has no TLS, so an `https` snapshot URL is always reported as unreachable. Plain
-  `http` URLs work as in Moonraker.
-- **Why:** orrery stays free of C dependencies, and the check is only a hint for clients.
-- **Cases:** none.
 
 ### update-agent: the update manager is a separate program, and has fewer entry types
 
@@ -426,34 +380,3 @@ change how safe or complete orrery is to run.
     `enable_auto_refresh` is on, and then only between midnight and 5 am.
 - **Why:** docs/design/2026-11-22-update-manager.md, "Differences from Moonraker".
 - **Cases:** `update/agent` (orrery only); the refusals while printing are covered there.
-
-## Planned entries
-
-These differences are already decided in the plan. Each gets an entry when the code that
-introduces it lands:
-
-- No TLS: `ssl_certificate_path` and `ssl_key_path` are ignored.
-- `moonraker.conf` support is best effort: `[secrets]`, Jinja templating, and full option
-  validation come later.
-- Legacy LMDB databases from before Moonraker v0.9 can't be imported.
-- Out-of-scope components (power, sensors, MQTT, and others) are missing or stubbed.
-
-### button-templates: buttons run actions, not templates
-
-- **Area:** config, API
-- **Moonraker:** a `[button]` section runs Jinja templates on press and release, with
-  `call_method`, `send_notification`, `event`, and `user_data`. Klipper's macros may call any
-  of Moonraker's remote methods, including `shutdown_machine` and `reboot_machine`.
-- **orrery:** a button runs lists of [actions](configuration/actions.md), on `on_press`,
-  `on_release`, `on_click`, and `on_long_press`, through the `orrery-gpio` agent. What's
-  different:
-  - From `moonraker.conf`, only a template that's a single `call_method` with fixed arguments
-    converts. Anything else is left out, with a warning that names the button and the option.
-  - `notify_button_event` is sent for every event that runs actions, with `{name, event}`.
-    Moonraker sends it only from `send_notification`, with `{name, type, event, aux}`.
-  - Klipper's remote methods run actions as `operator`. `shutdown_machine` and
-    `reboot_machine` run as `admin` with `[moonraker_compat] klipper_shutdown`, on by default.
-  - The remote method `run_action` is orrery's own.
-- **Why:** a Jinja engine is a large dependency, and a conversion that guesses wrong runs the
-  wrong thing when someone presses the button. See docs/design/2026-11-23-buttons-and-actions.md.
-- **Cases:** none.

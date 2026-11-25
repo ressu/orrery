@@ -29,7 +29,8 @@ the larger features.
 | `crates/conformance` | The conformance test runner |
 | `conformance/` | Test cases, fixtures, and recorded snapshots |
 | `scripts/` | The installer, release archives, and copying builds to a printer |
-| `docs/regressions.md` | Known differences from Moonraker |
+| `docs/comparison.md` | What you lose, gain, and should look out for, compared with Moonraker |
+| `docs/regressions.md` | Each difference from Moonraker that a conformance case checks |
 | `docs/oddities.md` | Moonraker behaviour that looks odd but that Orrery keeps on purpose |
 | `docs/design/` | The plan, its decision log, and design notes |
 | `spikes/` | Throwaway experiments, each a standalone crate outside the workspace |

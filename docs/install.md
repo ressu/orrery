@@ -101,7 +101,9 @@ To switch to Orrery later, run `sudo ~/orrery/orrery setup --migrate`.
 ## Importing Moonraker's data
 
 `orrery-import` copies Moonraker's settings, webcams, print history, job queue, API key, and
-users into Orrery's database. It only works with Moonraker v0.8 or later. The installer's
+users into Orrery's database. It reads `moonraker-sql.db`, which Moonraker has used since v0.9.0.
+An older Moonraker keeps its data in `moonraker.db/`: update Moonraker and start it once, and it
+moves the data into `moonraker-sql.db`. The installer's
 `--import` does these steps for you:
 
 1. Stop Moonraker and Orrery.
@@ -123,8 +125,8 @@ everything earlier imports wrote.
 
 Imported users log in with the same password as before. Until you give them roles, they're
 `admin`, as every Moonraker user is; see [Users and logins](configuration/access.md#users-and-logins).
-For what the import leaves out, see `import-gaps` in
-[Known differences from Moonraker](regressions.md).
+For what the import leaves out, see "Your data" in
+[Orrery compared with Moonraker](comparison.md#what-to-look-out-for).
 
 ## Updating Orrery
 

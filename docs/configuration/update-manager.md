@@ -239,5 +239,6 @@ setup again after you add an entry, so polkit allows its service.
 
 `moonraker` in `managed_services` restarts nothing, since Orrery isn't Moonraker.
 
-For how the update manager differs from Moonraker's, see `update-agent` and `update-safety` in
-[Known differences from Moonraker](../regressions.md).
+For how the update manager differs from Moonraker's, see
+[Orrery compared with Moonraker](../comparison.md), and `update-agent` and `update-safety` in
+[regressions.md](../regressions.md) for the details.

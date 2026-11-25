@@ -2,7 +2,7 @@
 
 This file lists Moonraker behaviour that looks like a bug, but that orrery copies on purpose so
 clients see the same thing. Each entry says what happens, why, and what a fix would cost.
-Differences from Moonraker go in [regressions.md](regressions.md) instead.
+Differences from Moonraker go in [regressions.md](regressions.md) or [comparison.md](comparison.md) instead.
 
 ## Entry format
 
