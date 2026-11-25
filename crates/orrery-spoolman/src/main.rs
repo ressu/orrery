@@ -38,6 +38,9 @@ const NAME: &str = "spoolman";
 const HISTORY_FIELD: &str = "spool_ids";
 /// Moonraker's history keeps at most this many spools per job.
 const MAX_JOB_SPOOLS: usize = 100;
+/// How long a request waits for the first connection to Spoolman: longer than the connect's
+/// own time limit, so the attempt ends first.
+const FIRST_CONNECT_WAIT: Duration = Duration::from_secs(6);
 
 struct Spoolman {
     /// Set from the config the first time the agent connects.
@@ -46,6 +49,8 @@ struct Spoolman {
     /// The connection to orrery, when there is one.
     agent: Mutex<Option<Agent>>,
     state: Mutex<State>,
+    /// Whether the first attempt to connect to Spoolman has ended, either way.
+    attempted: tokio::sync::watch::Sender<bool>,
 }
 
 #[derive(Default)]
@@ -93,6 +98,7 @@ async fn main() {
         sync_rate: OnceLock::new(),
         agent: Mutex::new(None),
         state: Mutex::new(State { extruder: "extruder".into(), ..State::default() }),
+        attempted: tokio::sync::watch::Sender::new(false),
     });
     let mut builder = AgentBuilder::new(NAME).version(orrery_build::VERSION);
     if let Some(socket) = cli.socket {
@@ -119,6 +125,7 @@ async fn main() {
     builder = builder.method("status", move |_| {
         let s = s.clone();
         async move {
+            s.first_connect().await;
             let st = s.state();
             let pending: Vec<Value> =
                 st.pending.iter().map(|(id, used)| json!({"spool_id": id, "filament_used": used})).collect();
@@ -361,6 +368,17 @@ impl Spoolman {
         }
     }
 
+    /// Waits for the first attempt to connect to Spoolman, so a client that connects while
+    /// orrery is still starting isn't told that Spoolman isn't there. Afterwards it returns at
+    /// once, and requests see the connection as it is, as in Moonraker.
+    async fn first_connect(&self) {
+        if self.state().connected {
+            return;
+        }
+        let mut attempted = self.attempted.subscribe();
+        let _ = tokio::time::timeout(FIRST_CONNECT_WAIT, attempted.wait_for(|done| *done)).await;
+    }
+
     async fn send_status(&self) {
         let connected = self.state().connected;
         self.send_event("spoolman_status_changed", json!({"spoolman_connected": connected})).await;
@@ -371,7 +389,12 @@ impl Spoolman {
     async fn websocket_loop(self: Arc<Self>) {
         let mut last_error = None;
         loop {
-            match self.server().connect_ws().await {
+            let result = self.server().connect_ws().await;
+            if result.is_ok() {
+                self.state().connected = true;
+            }
+            self.attempted.send_replace(true);
+            match result {
                 Err(e) => {
                     // One line per new error, not one every two seconds.
                     if last_error.as_ref() != Some(&e) {
@@ -535,6 +558,7 @@ impl Spoolman {
             None => path,
         };
         let v2_error = |status: u16, message: String| json!({"response": null, "error": {"status_code": status, "message": message}});
+        self.first_connect().await;
         if !self.state().connected {
             if !v2 {
                 return Err(MethodError::new(503, "Spoolman server not available"));

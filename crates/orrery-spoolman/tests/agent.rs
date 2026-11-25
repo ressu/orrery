@@ -18,13 +18,17 @@ enum Seen {
     Call(String, Value),
     /// A request the agent sent to Spoolman's API.
     Http(String, String, Value),
+    /// The agent's answer to a call from orrery.
+    Reply(Value),
 }
 
-/// Spoolman: every request gets `{}`, and the websocket sends what `events` gets.
+/// Spoolman: every request gets `{}`, and the websocket, which opens after `ws_delay`, sends
+/// what `events` gets.
 async fn fake_spoolman(
     listener: TcpListener,
     seen: mpsc::UnboundedSender<Seen>,
     events: mpsc::UnboundedReceiver<String>,
+    ws_delay: Duration,
 ) {
     let mut events = Some(events);
     loop {
@@ -35,6 +39,7 @@ async fn fake_spoolman(
         if text.contains("upgrade: websocket") {
             let mut events = events.take().expect("one websocket");
             tokio::spawn(async move {
+                tokio::time::sleep(ws_delay).await;
                 let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
                 while let Some(event) = events.recv().await {
                     ws.send(Message::text(event)).await.unwrap();
@@ -87,18 +92,26 @@ async fn expect(rx: &mut mpsc::UnboundedReceiver<Seen>, want: impl Fn(&Seen) -> 
     tokio::time::timeout(Duration::from_secs(10), wait).await.expect("timed out")
 }
 
-#[tokio::test]
-async fn reports_use_and_follows_deleted_spools() {
+/// The agent, connected to stand-ins for orrery and Spoolman.
+struct Harness {
+    agent: tokio::process::Child,
+    to_agent: mpsc::UnboundedSender<Value>,
+    seen: mpsc::UnboundedReceiver<Seen>,
+    events: mpsc::UnboundedSender<String>,
+    _dir: tempfile::TempDir,
+}
+
+async fn start(ws_delay: Duration) -> Harness {
     let dir = tempfile::tempdir().unwrap();
     let socket = dir.path().join("moonraker.sock");
     let orrery = UnixListener::bind(&socket).unwrap();
     let spoolman = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", spoolman.local_addr().unwrap());
-    let (seen_tx, mut seen) = mpsc::unbounded_channel();
+    let (seen_tx, seen) = mpsc::unbounded_channel();
     let (events, events_rx) = mpsc::unbounded_channel();
-    tokio::spawn(fake_spoolman(spoolman, seen_tx.clone(), events_rx));
+    tokio::spawn(fake_spoolman(spoolman, seen_tx.clone(), events_rx, ws_delay));
 
-    let mut agent = tokio::process::Command::new(env!("CARGO_BIN_EXE_orrery-spoolman"))
+    let agent = tokio::process::Command::new(env!("CARGO_BIN_EXE_orrery-spoolman"))
         .arg(&socket)
         .kill_on_drop(true)
         .spawn()
@@ -119,7 +132,10 @@ async fn reports_use_and_follows_deleted_spools() {
             }
             buf.pop();
             let msg: Value = serde_json::from_slice(&buf).unwrap();
-            let Some(method) = msg["method"].as_str() else { continue };
+            let Some(method) = msg["method"].as_str() else {
+                seen_calls.send(Seen::Reply(msg)).unwrap();
+                continue;
+            };
             let params = msg.get("params").cloned().unwrap_or_default();
             let result = match method {
                 "orrery.agent.config" => json!({"exists": true, "options": {"server": url, "sync_rate": 1}}),
@@ -144,6 +160,12 @@ async fn reports_use_and_follows_deleted_spools() {
             send(&mut writer, msg).await;
         }
     });
+    Harness { agent, to_agent, seen, events, _dir: dir }
+}
+
+#[tokio::test]
+async fn reports_use_and_follows_deleted_spools() {
+    let Harness { mut agent, to_agent, mut seen, events, _dir } = start(Duration::ZERO).await;
 
     // The agent finishes its setup, and opens the websocket to Spoolman, in either order.
     let (mut set_up, mut connected) = (false, false);
@@ -187,5 +209,27 @@ async fn reports_use_and_follows_deleted_spools() {
     .await;
     assert!(matches!(event, Seen::Call(_, p) if p["data"] == json!({"spool_id": null})));
 
+    agent.kill().await.unwrap();
+}
+
+/// A client that asks while the agent is still connecting to Spoolman, as Fluidd does when it
+/// connects while orrery starts, gets Spoolman's answer, not "Spoolman server not available".
+#[tokio::test]
+async fn waits_for_the_first_connection() {
+    let Harness { mut agent, to_agent, mut seen, events: _events, _dir } = start(Duration::from_millis(1500)).await;
+    expect(&mut seen, |s| matches!(s, Seen::Call(m, _) if m == "orrery.agent.config")).await;
+    let proxy = json!({"request_method": "GET", "path": "/v1/spool", "use_v2_response": true});
+    to_agent.send(json!({"jsonrpc": "2.0", "method": "proxy", "params": proxy, "id": 1})).unwrap();
+    to_agent.send(json!({"jsonrpc": "2.0", "method": "status", "params": {}, "id": 2})).unwrap();
+    let mut replies = Vec::new();
+    while replies.len() < 2 {
+        if let Seen::Reply(r) = expect(&mut seen, |s| matches!(s, Seen::Reply(_))).await {
+            replies.push(r);
+        }
+    }
+    replies.sort_by_key(|r| r["id"].as_i64());
+    let proxied = &replies[0]["result"];
+    assert_eq!((&proxied["response"], &proxied["error"]), (&json!({}), &Value::Null), "{replies:?}");
+    assert_eq!(replies[1]["result"]["spoolman_connected"], true);
     agent.kill().await.unwrap();
 }
