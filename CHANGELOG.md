@@ -4,7 +4,7 @@ What changes in each release of orrery. Read it before you update, so you know w
 
 Fluidd and Mainsail link to the release page on GitHub, which shows the same notes.
 
-## Unreleased
+## 0.2.0 (2026-11-25)
 
 ### New
 
@@ -27,11 +27,6 @@ Fluidd and Mainsail link to the release page on GitHub, which shows the same not
 - Updating Orrery installs every file of the release, so a release can bring a new program,
   such as `orrery-gpio`, and removes the files a release drops. A rollback removes the files
   the older version doesn't have.
-
-  An install from v0.1.2 or older shows Orrery's version as `v0.0.0-invalid` until its first
-  update. Updating from v0.1.2 or older installs only the programs the old updater knows, so
-  the update manager then offers the same release again: update once more to install the
-  rest.
 - An update manager entry can install what it describes: with `install = true`, or a command
   to run after the release is in place, the first update installs it, so adding the entry and
   pressing update is the whole install. `upgrade` names a command each later update runs. A
