@@ -11,7 +11,11 @@
   button is pressed, released, clicked, or held. It replaces Moonraker's `[button]`, without
   Jinja templates.
 
-**Status (2026-11-23):** design. Nothing is built.
+**Status (2026-11-26):** built, and released in v0.2.0: `orrery-gpio` for the buttons, and
+actions in Orrery (`crates/orrery/src/actions.rs`). On pink-0 (2026-11-25), the button converted
+from `moonraker.conf` ran `shutdown` on a press, and logind powered the machine off. Release,
+click, long press, and debounce are tested only without hardware. The cost check under "Is an
+agent worth it?" and the open questions are still open.
 
 ## Why
 
