@@ -62,6 +62,12 @@ pub trait Host {
     /// Runs a program. Returns whether it succeeded, and what it printed. An error means it
     /// couldn't run at all.
     fn run(&mut self, program: &str, args: &[&str]) -> Result<(bool, String)>;
+
+    /// Calls a method on the running orrery, over its unix socket.
+    fn ask_orrery(&mut self, socket: &Path, method: &str) -> Result<serde_json::Value> {
+        let _ = (socket, method);
+        bail!("orrery isn't reachable")
+    }
 }
 
 /// The real system.
@@ -72,6 +78,10 @@ impl Host for System {
         let out =
             std::process::Command::new(program).args(args).output().with_context(|| format!("can't run {program}"))?;
         Ok((out.status.success(), String::from_utf8_lossy(&out.stdout).into_owned()))
+    }
+
+    fn ask_orrery(&mut self, socket: &Path, method: &str) -> Result<serde_json::Value> {
+        crate::unix_socket::call(socket, method, serde_json::json!({}))
     }
 }
 
@@ -119,6 +129,64 @@ pub struct Report {
 impl Report {
     fn line(&mut self, text: impl Into<String>) {
         self.lines.push(text.into());
+    }
+
+    /// One `--check` finding, with its status in a column of its own.
+    fn found(&mut self, status: Status, text: impl AsRef<str>) {
+        if status == Status::Update {
+            self.ok = false;
+        }
+        let mut label = status.label();
+        for part in wrap(text.as_ref(), CHECK_WIDTH - CHECK_INDENT) {
+            self.lines.push(format!("  {label:<7}  {part}"));
+            label = "";
+        }
+    }
+}
+
+/// How wide `--check`'s lines are, and where their text starts after the status.
+const CHECK_WIDTH: usize = 100;
+const CHECK_INDENT: usize = 11;
+
+/// `text` in lines of at most `width` characters, broken at spaces. A longer word, such as a
+/// path, gets a line of its own.
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    let mut lines = vec![String::new()];
+    for word in text.split(' ') {
+        let line = lines.last_mut().expect("one line");
+        if !line.is_empty() && line.chars().count() + 1 + word.chars().count() > width {
+            lines.push(word.to_owned());
+        } else {
+            if !line.is_empty() {
+                line.push(' ');
+            }
+            line.push_str(word);
+        }
+    }
+    lines
+}
+
+/// What `--check` makes of one part.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Status {
+    /// In place.
+    Ok,
+    /// `sudo orrery setup` would change it.
+    Update,
+    /// The check can't tell.
+    Unknown,
+    /// Information, nothing to do.
+    Note,
+}
+
+impl Status {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Update => "update",
+            Self::Unknown => "unknown",
+            Self::Note => "note",
+        }
     }
 }
 
@@ -178,8 +246,8 @@ pub fn run(options: &Options, root: &Path, host: &mut dyn Host) -> Result<Report
     let declined = declined && !waits;
     let unit = unit_file(&account.name, &options.exe, &args, alias, declined);
     let gid = group_gid(host)?;
-    let strict = options.strict
-        || (options.check && std::fs::read_to_string(sys(RULE_PATH)).is_ok_and(|r| r.starts_with(STRICT_MARK)));
+    let installed_rule = std::fs::read_to_string(sys(RULE_PATH));
+    let strict = options.strict || (options.check && installed_rule.as_ref().is_ok_and(|r| r.starts_with(STRICT_MARK)));
     let units = if strict { Some(allowed_units(&account, &args, &config)?) } else { None };
     let rule = |gid: u32| match &units {
         Some(units) => strict_rule(&account.name, gid, units),
@@ -191,37 +259,48 @@ pub fn run(options: &Options, root: &Path, host: &mut dyn Host) -> Result<Report
         let mut report = Report { ok: true, ..Report::default() };
         report.line(format!("orrery setup for the user {}:", account.name));
         match gid {
-            Some(gid) => report.line(format!("  The group {GROUP} is there (gid {gid}).")),
-            None => {
-                report.ok = false;
-                report.line(format!("  The group {GROUP} is missing."));
-            }
+            Some(gid) => report.found(Status::Ok, format!("The group {GROUP} is there (gid {gid}).")),
+            None => report.found(Status::Update, format!("The group {GROUP} is missing.")),
         }
         check_file(&mut report, &sys(UNIT_PATH), &format!("/{UNIT_PATH}"), &unit);
         let rule = rule(gid.unwrap_or(u32::MAX));
-        check_file(&mut report, &sys(RULE_PATH), &format!("/{RULE_PATH} ({rule_kind})"), &rule);
-        report.line(format!("  {SERVICE} is {}.", unit_state(host, "orrery")?));
+        match &installed_rule {
+            // The rules folder is readable only by root, so a check as the printer's user can't
+            // tell which rule it is. What polkit allows, below, is what matters.
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => report.found(
+                Status::Unknown,
+                format!("/{RULE_PATH} can't be read as {}. sudo orrery setup --check compares it.", account.name),
+            ),
+            _ => check_file(&mut report, &sys(RULE_PATH), &format!("/{RULE_PATH} ({rule_kind})"), &rule),
+        }
+        let running = is_active(host, "orrery")?;
+        let state = format!("{SERVICE} is {}.", unit_state(host, "orrery")?);
+        report.found(if running { Status::Ok } else { Status::Note }, state);
+        if running {
+            let socket = data_folder(&account, &args).join("comms/moonraker.sock");
+            check_permissions(&mut report, host.ask_orrery(&socket, "orrery.machine.permissions"));
+        } else {
+            report.found(Status::Unknown, format!("What polkit allows {SERVICE}: setup asks it while it runs."));
+        }
         match (moonraker_unit, want_alias) {
-            (MoonrakerUnit::Alias, true) => report.line(format!("  {MOONRAKER} is a name for {SERVICE}.")),
+            (MoonrakerUnit::Alias, true) => report.found(Status::Ok, format!("{MOONRAKER} is a name for {SERVICE}.")),
             (MoonrakerUnit::Alias, false) => {
-                report.ok = false;
-                report.line(format!("  {MOONRAKER} is a name for {SERVICE}, but it shouldn't be."));
+                report.found(Status::Update, format!("{MOONRAKER} is a name for {SERVICE}, but it shouldn't be."))
             }
-            (MoonrakerUnit::Own, true) => {
-                report.ok = false;
-                report.line(format!("  /{MOONRAKER_PATH} is Moonraker's own unit, so it isn't a name for {SERVICE}."));
-            }
+            (MoonrakerUnit::Own, true) => report.found(
+                Status::Update,
+                format!("/{MOONRAKER_PATH} is Moonraker's own unit, so it isn't a name for {SERVICE}."),
+            ),
             (MoonrakerUnit::Missing, true) => {
-                report.ok = false;
-                report.line(format!("  /{MOONRAKER_PATH}, the name for {SERVICE}, is missing."));
+                report.found(Status::Update, format!("/{MOONRAKER_PATH}, the name for {SERVICE}, is missing."))
             }
-            _ => report.line(format!("  {MOONRAKER} is {}.", unit_state(host, "moonraker")?)),
+            _ => report.found(Status::Note, format!("{MOONRAKER} is {}.", unit_state(host, "moonraker")?)),
         }
         if sys(SAVED_PATH).exists() {
-            report.line(format!("  Moonraker's own unit is saved as /{SAVED_PATH}."));
+            report.found(Status::Note, format!("Moonraker's own unit is saved as /{SAVED_PATH}."));
         }
         if !report.ok {
-            report.line("To put the missing parts in place, run:");
+            report.line("To make the updates, run:");
             report.line(format!(
                 "  sudo orrery setup{}{}",
                 if strict { " --strict" } else { "" },
@@ -785,15 +864,47 @@ fn unit_state(host: &mut dyn Host, unit: &str) -> Result<String> {
 
 fn check_file(report: &mut Report, path: &Path, name: &str, want: &str) {
     match std::fs::read_to_string(path) {
-        Ok(have) if have == want => report.line(format!("  {name} is in place.")),
-        Ok(_) => {
-            report.ok = false;
-            report.line(format!("  {name} differs from what setup writes."));
+        Ok(have) if have == want => report.found(Status::Ok, format!("{name} is in place.")),
+        Ok(_) => report.found(Status::Update, format!("{name} differs from what setup writes.")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            report.found(Status::Update, format!("{name} is missing."))
         }
-        Err(_) => {
-            report.ok = false;
-            report.line(format!("  {name} is missing."));
+        Err(e) => report.found(Status::Unknown, format!("{name} can't be read: {e}.")),
+    }
+}
+
+/// What the running orrery says polkit allows it. Only orrery's own process has the group the
+/// rule trusts, so setup can't ask polkit itself.
+fn check_permissions(report: &mut Report, answer: Result<serde_json::Value>) {
+    let answer = match answer {
+        Ok(a) => a,
+        Err(e) => {
+            report.found(Status::Unknown, format!("setup can't ask {SERVICE} what polkit allows it: {e:#}."));
+            return;
         }
+    };
+    if answer["checked"] != true {
+        match answer["error"].as_str() {
+            Some(e) => report.found(Status::Unknown, format!("{SERVICE} can't tell what polkit allows it: {e}.")),
+            None => {
+                report.found(Status::Unknown, format!("{SERVICE} hasn't asked polkit yet. Check again in a moment."))
+            }
+        }
+        return;
+    }
+    let list = answer["permissions"].as_array().cloned().unwrap_or_default();
+    let what = |allowed: bool| -> Vec<String> {
+        list.iter().filter(|p| p["allowed"] == allowed).filter_map(|p| p["what"].as_str().map(str::to_owned)).collect()
+    };
+    let refused = what(false);
+    if refused.is_empty() {
+        report.found(Status::Ok, format!("polkit lets {SERVICE}: {}.", what(true).join("; ")));
+    } else {
+        report.found(Status::Update, format!("polkit doesn't let {SERVICE}: {}.", refused.join("; ")));
+        report.found(
+            Status::Note,
+            format!("{SERVICE} asked polkit when it started: after sudo orrery setup, restart it and check again."),
+        );
     }
 }
 
@@ -834,6 +945,7 @@ fn tempfile_in(dir: &Path) -> Result<(PathBuf, std::fs::File)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use std::collections::{HashMap, HashSet};
 
     /// A system that records commands and answers from a script.
@@ -844,6 +956,8 @@ mod tests {
         enabled: HashMap<&'static str, &'static str>,
         active: HashSet<&'static str>,
         polkit: &'static str,
+        /// What the running orrery answers, or `None` when it can't be reached.
+        orrery: Option<serde_json::Value>,
     }
 
     impl Fake {
@@ -858,6 +972,12 @@ mod tests {
     }
 
     impl Host for Fake {
+        fn ask_orrery(&mut self, socket: &Path, method: &str) -> Result<serde_json::Value> {
+            assert!(socket.ends_with("printer_data/comms/moonraker.sock"), "{}", socket.display());
+            assert_eq!(method, "orrery.machine.permissions");
+            self.orrery.clone().context("connection refused")
+        }
+
         fn run(&mut self, program: &str, args: &[&str]) -> Result<(bool, String)> {
             let line = format!("{program} {}", args.join(" "));
             let reply = match (program, args) {
@@ -1100,7 +1220,7 @@ mod tests {
         );
         let report = run(&check, root.path(), &mut host).unwrap();
         assert!(report.ok, "{:#?}", report.lines);
-        assert!(report.lines.contains(&"  moonraker.service is a name for orrery.service.".to_owned()));
+        assert!(report.lines.contains(&"  ok       moonraker.service is a name for orrery.service.".to_owned()));
         assert!(report.lines.iter().any(|l| l.contains("saved as /etc/systemd/system/moonraker.service.orrery-saved")));
 
         // A Moonraker install writes its unit again: --check says so, and --force takes it back.
@@ -1275,6 +1395,83 @@ mod tests {
         let e = run(&options(), root.path(), &mut host).unwrap_err();
         assert!(format!("{e:#}").contains("setup reads the service's config"), "{e:#}");
         assert!(host.ran.is_empty(), "nothing changes: {:?}", host.ran);
+    }
+
+    #[test]
+    fn wraps_long_findings() {
+        assert_eq!(wrap("a bb ccc", 4), ["a bb", "ccc"]);
+        assert_eq!(wrap("short", 40), ["short"]);
+        assert_eq!(wrap("a /a/very/long/path b", 5), ["a", "/a/very/long/path", "b"]);
+        let mut report = Report::default();
+        report.found(Status::Ok, "word ".repeat(40).trim());
+        assert!(report.lines.len() > 1 && report.lines.iter().all(|l| l.chars().count() <= CHECK_WIDTH));
+        assert!(report.lines[0].starts_with("  ok       word") && report.lines[1].starts_with("           word"));
+    }
+
+    #[test]
+    fn check_asks_the_running_orrery_what_polkit_allows() {
+        let root = tempfile::tempdir().unwrap();
+        let base = options_in(root.path(), NO_ALIAS);
+        let mut host = Fake::new();
+        run(&base, root.path(), &mut host).unwrap();
+        let check = Options { check: true, ..base.clone() };
+        let lines = |host: &mut Fake| run(&check, root.path(), host).unwrap();
+        let report = lines(&mut host);
+        assert!(
+            report.lines.contains(&"  note     orrery.service is not installed.".to_owned()),
+            "{:#?}",
+            report.lines
+        );
+        assert!(
+            report
+                .lines
+                .contains(&"  unknown  What polkit allows orrery.service: setup asks it while it runs.".to_owned())
+        );
+
+        host.active.insert("orrery.service");
+        let allowed = |a: bool| {
+            json!({"checked": true, "error": null, "permissions": [
+            {"what": "start, stop, or restart services", "allowed": true},
+            {"what": "reboot the machine", "allowed": a}]})
+        };
+        host.orrery = Some(allowed(true));
+        let report = lines(&mut host);
+        assert!(report.ok, "{:#?}", report.lines);
+        assert!(report.lines.contains(
+            &"  ok       polkit lets orrery.service: start, stop, or restart services; reboot the machine.".to_owned()
+        ));
+        host.orrery = Some(allowed(false));
+        let report = lines(&mut host);
+        assert!(!report.ok);
+        assert!(report.lines.contains(&"  update   polkit doesn't let orrery.service: reboot the machine.".to_owned()));
+        let text = report.lines.join(" ").split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(text.contains("restart it and check again"), "{:#?}", report.lines);
+        host.orrery = Some(json!({"checked": false, "error": null}));
+        assert!(lines(&mut host).lines.iter().any(|l| l.contains("hasn't asked polkit yet")));
+        host.orrery = None;
+        let report = lines(&mut host);
+        assert!(report.lines.iter().any(|l| l.contains("can't ask orrery.service what polkit allows it")));
+        assert!(report.ok, "not reaching orrery isn't a missing part: {:#?}", report.lines);
+
+        // The rules folder is root's: a rule that can't be read isn't called missing.
+        if !rustix::process::geteuid().is_root() {
+            use std::os::unix::fs::PermissionsExt;
+            let rule = root.path().join(RULE_PATH);
+            std::fs::set_permissions(&rule, std::fs::Permissions::from_mode(0o000)).unwrap();
+            host.orrery = Some(allowed(true));
+            let report = lines(&mut host);
+            std::fs::set_permissions(&rule, std::fs::Permissions::from_mode(0o644)).unwrap();
+            assert!(report.ok, "{:#?}", report.lines);
+            assert!(
+                report
+                    .lines
+                    .iter()
+                    .any(|l| l.starts_with("  unknown  /etc/polkit-1/rules.d/orrery.rules can't be read as printer.")),
+                "{:#?}",
+                report.lines
+            );
+            assert!(!report.lines.iter().any(|l| l.contains("missing")), "{:#?}", report.lines);
+        }
     }
 
     #[test]

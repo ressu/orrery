@@ -61,7 +61,13 @@ pub struct Services {
     /// The services orrery and Klipper run in, such as `orrery` for `orrery.service`.
     own_unit: Mutex<Option<String>>,
     klipper_unit: Mutex<Option<String>>,
+    /// polkit's answers at startup, for `orrery setup --check`: each check's description and
+    /// whether it's allowed, or why orrery couldn't ask. `None` until it has asked.
+    permissions: Mutex<Option<Result<Permissions, String>>>,
 }
+
+/// polkit's answers: each check's description, and whether it's allowed.
+type Permissions = Vec<(&'static str, bool)>;
 
 #[derive(Debug, Clone, PartialEq)]
 struct Service {
@@ -93,6 +99,7 @@ impl Services {
             list: Mutex::new(Vec::new()),
             own_unit: Mutex::new(None),
             klipper_unit: Mutex::new(None),
+            permissions: Mutex::new(None),
         }
     }
 
@@ -246,6 +253,27 @@ pub fn register_endpoints(app: &Arc<App>) {
     for action in ["reboot", "shutdown"] {
         r.register(&format!("/machine/{action}"), &[RequestType::Post], Transports::All, handler(power_action));
     }
+    r.register("/orrery/machine/permissions", &[RequestType::Get], Transports::All, handler(permissions));
+}
+
+/// `orrery.machine.permissions`: what polkit told orrery at startup it may do. `orrery setup
+/// --check` asks it, since only orrery's own process has the group polkit's rule trusts.
+async fn permissions(app: Arc<App>, _req: Request) -> ApiResult {
+    let services = &app.machine.services;
+    if !services.enabled {
+        return Ok(
+            json!({"checked": false, "error": "[machine] provider isn't systemd_dbus, so orrery doesn't use polkit"}),
+        );
+    }
+    Ok(match &*services.permissions.lock().expect("permissions lock") {
+        None => json!({"checked": false, "error": null}),
+        Some(Err(e)) => json!({"checked": false, "error": e}),
+        Some(Ok(list)) => json!({
+            "checked": true,
+            "error": null,
+            "permissions": list.iter().map(|(what, allowed)| json!({"what": what, "allowed": allowed})).collect::<Vec<_>>(),
+        }),
+    })
 }
 
 /// `machine.reboot` and `machine.shutdown`, through logind, after Moonraker's
@@ -454,16 +482,24 @@ async fn check_permissions(app: &App, bus: &Bus) {
         (format!("org.freedesktop.login1.{shutdown}-multiple-sessions"), "shut down while other users are logged in"),
     ];
     let mut refused = Vec::new();
+    let mut answers = Vec::new();
     for (action, what) in &checks {
         match is_authorized(bus, action).await {
-            Ok(true) => {}
-            Ok(false) => refused.push(*what),
+            Ok(allowed) => {
+                answers.push((*what, allowed));
+                if !allowed {
+                    refused.push(*what);
+                }
+            }
             Err(e) => {
                 app.add_warning(format!("[machine]: orrery can't ask polkit what it may do: {e}"));
+                *app.machine.services.permissions.lock().expect("permissions lock") =
+                    Some(Err(format!("orrery can't ask polkit: {e}")));
                 return;
             }
         }
     }
+    *app.machine.services.permissions.lock().expect("permissions lock") = Some(Ok(answers));
     if !refused.is_empty() {
         app.add_warning(format!(
             "[machine]: polkit doesn't allow orrery to: {}. On a Moonraker install, run orrery as a service with the moonraker-admin group.",
@@ -672,6 +708,8 @@ pub async fn run(app: Arc<App>) {
     }
     let Some(bus) = services.bus().await else {
         app.add_warning("[machine]: D-Bus isn't available, so orrery can't list or control services.");
+        *services.permissions.lock().expect("permissions lock") =
+            Some(Err("D-Bus isn't available, so orrery can't ask polkit".into()));
         return;
     };
     check_permissions(&app, bus).await;

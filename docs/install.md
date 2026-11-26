@@ -190,4 +190,6 @@ sudo <path to orrery> setup
 
 `<path to orrery>` is the installed program, such as `~/orrery/orrery`. Setup writes the service
 to run the program it was started from. To see what's in place without changing anything, run
-`<path to orrery> setup --check`.
+`<path to orrery> setup --check`. It also asks the running Orrery what polkit allows it, which
+is what the rule is for. Only root can read the rule itself, so to compare it with what setup
+writes, run the check with `sudo`.

@@ -361,6 +361,7 @@ fn action(app: &App, endpoint: &str, kind: RequestType, args: &Args) -> String {
         ("/orrery/access/key/list", _) => Some("list API keys".to_owned()),
         ("/orrery/access/user/list", _) => Some("list users".to_owned()),
         ("/orrery/access/key/rotate", _) => Some("rotate API keys".to_owned()),
+        ("/orrery/machine/permissions", _) => Some("see what polkit allows orrery".to_owned()),
         ("/access/users/list", _) => Some("list users".to_owned()),
         ("/access/user", Post) => Some("add users".to_owned()),
         ("/access/user", Delete) => Some("delete users".to_owned()),
