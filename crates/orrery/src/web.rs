@@ -229,6 +229,9 @@ async fn serve_socket(
             Message::Close(_) => break,
             _ => continue,
         };
+        if app.take_reply(&text, conn) {
+            continue;
+        }
         // Requests run side by side, as in Moonraker: a slow one doesn't hold up the rest.
         let app = app.clone();
         let tx = tx.clone();

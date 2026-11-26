@@ -14,6 +14,8 @@ Fluidd and Mainsail link to the release page on GitHub, which shows the same not
 - A request to an agent that's still starting, such as Spoolman's or the update manager's
   just after Orrery starts, waits up to 10 seconds for the agent, instead of failing with
   "Agent spoolman not connected" or "Not Found".
+- An agent's answer that comes just before it disconnects is no longer lost: the call that
+  waits for it gets the answer, not "Client Socket Disconnected".
 - `orrery setup --check` no longer reports the polkit rule as missing when it's run without
   `sudo` and can't read it. It also asks the running Orrery what polkit allows it, such as
   restarting services and shutting down, which a check without `sudo` can see. Each line starts

@@ -163,6 +163,23 @@ impl App {
         }
     }
 
+    /// Hands a client's reply to a call orrery sent it to the call, at once. The read loops
+    /// call this before they read the next message, so a reply that comes just before the
+    /// connection closes reaches its call before the close fails it. Returns false for
+    /// anything else, which goes to `dispatch_jsonrpc`.
+    pub fn take_reply(&self, text: &str, conn: ConnId) -> bool {
+        // A request always names its method, so only a message without one is parsed here.
+        if text.contains("\"method\"") {
+            return false;
+        }
+        let Ok(obj @ Value::Object(_)) = serde_json::from_str::<Value>(text) else { return false };
+        if obj.get("jsonrpc").and_then(Value::as_str) != Some("2.0") || obj.get("method").is_some() {
+            return false;
+        }
+        crate::extensions::resolve_response(self, conn, &obj);
+        true
+    }
+
     /// The endpoint a JSON-RPC method names, after waiting for an agent that's starting.
     pub async fn find_method(&self, method: &str) -> Option<(crate::api::Endpoint, RequestType)> {
         self.wait_for_agent(|r| r.unregistered_agent_method(method)).await;

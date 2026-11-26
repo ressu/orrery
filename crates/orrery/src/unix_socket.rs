@@ -158,6 +158,9 @@ async fn read_messages(
             continue;
         };
         errors_left = MAX_ERRORS;
+        if app.take_reply(&text, conn) {
+            continue;
+        }
         // Requests run side by side, as on the websocket.
         let app = app.clone();
         let tx = tx.clone();
