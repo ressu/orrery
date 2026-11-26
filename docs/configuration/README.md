@@ -154,6 +154,7 @@ These work only in `orrery.toml`:
 | `[moonraker_compat]` | [Moonraker compatibility](access.md#moonraker-compatibility) |
 | `[agent.<name>]` | [Agents](agents.md) |
 | `[action.<name>]` | [Actions](actions.md) |
+| `[setup]` | What `sudo orrery setup` sets up besides the service: [Removing old logs](../install.md#removing-old-logs) |
 
 ## Command-line options
 

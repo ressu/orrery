@@ -169,15 +169,59 @@ If the new version doesn't run at all, run the old one's rollback instead:
 A build of your own doesn't update itself. To follow a fork's releases, see
 [Orrery's own entry](configuration/update-manager.md#orrerys-own-entry).
 
+## Removing old logs
+
+Setup can have the printer's user remove old files in the logs folder, `~/printer_data/logs`.
+It's off unless you turn it on, because it removes every program's files there, not only logs.
+Some tools keep results in the logs folder, such as older versions of Shake&Tune, in
+`ShakeTune_results`. Move what you want to keep before you turn the cleanup on.
+
+To turn it on, set this in `orrery.toml` and run setup again:
+
+```toml
+[setup]
+log_cleanup = true
+```
+
+Or run `sudo ~/orrery/orrery setup --log-cleanup`. `--no-log-cleanup` turns it off again, and
+later runs of setup keep the choice. A flag wins over `orrery.toml`.
+
+Once a day, the user's `systemd-tmpfiles-clean.timer` then removes the files that nothing has
+written, read, or renamed for 14 days. The setting is in
+`~/.config/user-tmpfiles.d/orrery.conf`. So that the timer runs while nobody is logged in, setup
+turns on lingering for the user, and enables the timer, which Debian leaves off. Turning the
+cleanup off, or `setup --remove`, removes the file and leaves both on.
+
+### Lingering and the timer
+
+Lingering keeps the user's own services and timers running while nobody is logged in. Other
+programs may need it too, such as an agent with `systemd_scope = "user"`, so setup never turns
+it off. If nothing needs it any more, turn it off with:
+
+```
+sudo loginctl disable-linger <user>
+```
+
+`<user>` is the printer's user. The user's services then stop when the user logs out.
+
+The timer applies every file in `~/.config/user-tmpfiles.d`, and does nothing without one. To
+turn it off, run as the printer's user:
+
+```
+systemctl --user disable --now systemd-tmpfiles-clean.timer
+```
+
 ## Going back to Moonraker
 
 ```
 sudo ~/orrery/orrery setup --remove
 ```
 
-This removes Orrery's service, and puts Moonraker's service file back if setup moved it. It
-prints the command that starts Moonraker again. Orrery's programs and database stay in
-`~/orrery` and `~/printer_data/database`, so you can switch back later.
+This removes Orrery's service and its log cleanup's file, and puts Moonraker's service file
+back if setup moved it. It prints the command that starts Moonraker again. Orrery's programs
+and database stay in `~/orrery` and `~/printer_data/database`, so you can switch back later.
+Lingering and the user's cleanup timer stay on; see
+[Lingering and the timer](#lingering-and-the-timer).
 
 ## Running setup again
 

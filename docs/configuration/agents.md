@@ -46,8 +46,8 @@ systemd_scope = "user"
 ```
 
 `systemd_scope` is `system`, the default, or `user`, for a unit of Orrery's user in
-`~/.config/systemd/user`. A user unit has to run while nobody is logged in. To allow that, run
-`loginctl enable-linger <user>`, where `<user>` is Orrery's user.
+`~/.config/systemd/user`. A user unit has to run while nobody is logged in, which needs lingering. `sudo orrery setup`
+turns it on for Orrery's user.
 
 With a unit:
 

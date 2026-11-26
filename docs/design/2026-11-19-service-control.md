@@ -184,6 +184,21 @@ call the same command, so the files have one source. It writes:
   actions too, for the update manager: refreshing the package lists, installing packages, and
   updating the system (see `2026-11-22-update-manager.md`). Moonraker's rule allows every
   PackageKit action.
+- **`~/.config/user-tmpfiles.d/orrery.conf`** (2026-11-26), one `e` line for the data folder's
+  `logs`. The user's own `systemd-tmpfiles-clean.timer` then removes, once a day, the logs that
+  nothing has written, read, or renamed for 14 days, whichever program wrote them. Orrery
+  itself keeps two days of its own log, and Klipper five, but other programs' logs grew until
+  someone removed them. The user's own cleanup, not the OS's: system services shouldn't change
+  home folders, and it isn't an agent or a tool of Orrery's (user, 2026-11-26). Setup writes the
+  file as the user, through `runuser`, so a symlink in the home folder can't redirect root's
+  write. The user's timer is off on Debian and Armbian (pink-0: `disabled; preset: enabled`),
+  and runs only while the user's systemd does, so setup also turns on lingering and enables the
+  timer. `--remove` removes the file and leaves both on, since other units may need them.
+  It's off by default (user, 2026-11-26): pink-0's logs folder held Shake&Tune's graphs from
+  2025, which the first run would have removed, and setup mustn't remove other people's files
+  by surprise. `--log-cleanup` and `--no-log-cleanup` choose, then `[setup] log_cleanup` in
+  `orrery.toml`, then the last choice, which the file's presence records, as for the alias.
+  `[setup]` is for the parts of setup that can be turned on and off.
 
 By default setup only writes the files and reloads systemd, which is also how an upgrade is
 applied (user, 2026-11-22). Switching over takes explicit flags:
@@ -197,7 +212,7 @@ applied (user, 2026-11-22). Switching over takes explicit flags:
 | `--force` | Moves Moonraker's own unit file aside, so `moonraker.service` can be orrery's name |
 | `--strict` | Writes the strict rule (below) |
 | `--check` | Reports what's in place and changes nothing; works without sudo |
-| `--remove` | Stops and disables `orrery.service`, then removes the unit, the rule, and the group |
+| `--remove` | Stops and disables `orrery.service`, then removes the unit, the rule, the log cleanup's file, and the group |
 
 **polkit 0.105** (Debian 11, Raspberry Pi OS Bullseye) has no JavaScript rules, so a rule can't
 check a process's groups. Moonraker's installer then trusts the user in every process. orrery's

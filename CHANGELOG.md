@@ -6,6 +6,14 @@ Fluidd and Mainsail link to the release page on GitHub, which shows the same not
 
 ## Unreleased
 
+### New
+
+- `orrery setup` can remove old logs, with `[setup] log_cleanup = true` in `orrery.toml` or
+  `setup --log-cleanup`. Once a day, the printer's user then removes the files in
+  `~/printer_data/logs` that nothing has written, read, or renamed for 14 days, whichever
+  program wrote them. It's off by default; see
+  [Removing old logs](docs/install.md#removing-old-logs).
+
 ### Fixed
 
 - Fluidd no longer shows "Spoolman server not available" when it connects while Orrery is

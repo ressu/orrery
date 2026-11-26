@@ -7,6 +7,11 @@
 //! - `/etc/polkit-1/rules.d/orrery.rules`, which lets processes of that user with the group
 //!   manage units, reboot, shut down, and update packages. The strict rule allows only orrery's
 //!   allowed units.
+//! - `~/.config/user-tmpfiles.d/orrery.conf`, written as that user, which has the user's own
+//!   systemd-tmpfiles remove files in the logs folder that nothing has touched for 14 days.
+//!   Setup also turns on lingering for the user, and the user's `systemd-tmpfiles-clean.timer`,
+//!   so the cleanup runs while nobody is logged in. It's off unless `--log-cleanup` or
+//!   `[setup] log_cleanup` turns it on; later runs keep the choice, which the file records.
 //!
 //! By default setup only writes the files, so it's also how orrery's setup is upgraded.
 //! `--disable-moonraker` and `--start` switch over from Moonraker, and `--migrate` does both.
@@ -25,6 +30,12 @@ use anyhow::{Context, Result, bail};
 pub const GROUP: &str = "orrery-admin";
 const UNIT_PATH: &str = "etc/systemd/system/orrery.service";
 const RULE_PATH: &str = "etc/polkit-1/rules.d/orrery.rules";
+/// The log cleanup, in the home folder of orrery's user.
+const TMPFILES_PATH: &str = ".config/user-tmpfiles.d/orrery.conf";
+/// The user's timer that applies `user-tmpfiles.d` once a day. Debian ships it disabled.
+const CLEAN_TIMER: &str = "systemd-tmpfiles-clean.timer";
+/// How long a log nobody writes or reads stays in the logs folder.
+const LOG_AGE: &str = "14d";
 const SERVICE: &str = "orrery.service";
 const MOONRAKER: &str = "moonraker.service";
 /// Where the alias goes, and where Moonraker's installer puts its unit.
@@ -63,6 +74,13 @@ pub trait Host {
     /// couldn't run at all.
     fn run(&mut self, program: &str, args: &[&str]) -> Result<(bool, String)>;
 
+    /// Writes a file as `account`, making its folders, so a symlink in the user's home can't
+    /// send root's write somewhere else.
+    fn write_as(&mut self, account: &Account, path: &Path, contents: &str) -> Result<()>;
+
+    /// Removes a file as `account`.
+    fn remove_as(&mut self, account: &Account, path: &Path) -> Result<()>;
+
     /// Calls a method on the running orrery, over its unix socket.
     fn ask_orrery(&mut self, socket: &Path, method: &str) -> Result<serde_json::Value> {
         let _ = (socket, method);
@@ -78,6 +96,36 @@ impl Host for System {
         let out =
             std::process::Command::new(program).args(args).output().with_context(|| format!("can't run {program}"))?;
         Ok((out.status.success(), String::from_utf8_lossy(&out.stdout).into_owned()))
+    }
+
+    fn write_as(&mut self, account: &Account, path: &Path, contents: &str) -> Result<()> {
+        use std::io::Write as _;
+        // The new file goes next to the old one and takes its place, so it's never half written.
+        let script =
+            r#"set -e; umask 022; mkdir -p "$(dirname "$1")"; t="$1.orrery-setup.$$"; cat > "$t"; mv -f "$t" "$1""#;
+        let mut child = std::process::Command::new("runuser")
+            .args(["-u", &account.name, "--", "sh", "-c", script, "sh"])
+            .arg(path)
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .context("can't run runuser")?;
+        child.stdin.take().context("runuser's input")?.write_all(contents.as_bytes())?;
+        if !child.wait()?.success() {
+            bail!("can't write {} as {}", path.display(), account.name);
+        }
+        Ok(())
+    }
+
+    fn remove_as(&mut self, account: &Account, path: &Path) -> Result<()> {
+        let status = std::process::Command::new("runuser")
+            .args(["-u", &account.name, "--", "rm", "-f", "--"])
+            .arg(path)
+            .status()
+            .context("can't run runuser")?;
+        if !status.success() {
+            bail!("can't remove {} as {}", path.display(), account.name);
+        }
+        Ok(())
     }
 
     fn ask_orrery(&mut self, socket: &Path, method: &str) -> Result<serde_json::Value> {
@@ -100,6 +148,8 @@ pub struct Options {
     /// `--alias-moonraker` or `--no-alias-moonraker`: whether `moonraker.service` is a name
     /// for `orrery.service`. `None`: the config or the last choice decides.
     pub alias: Option<bool>,
+    /// `--log-cleanup` or `--no-log-cleanup`. `None`: the config or the last choice decides.
+    pub log_cleanup: Option<bool>,
     /// Move Moonraker's own unit file aside, so `moonraker.service` can be orrery's name.
     pub force: bool,
     /// The server's path options, as given. They go into `ExecStart`.
@@ -205,7 +255,7 @@ pub fn run(options: &Options, root: &Path, host: &mut dyn Host) -> Result<Report
     let account = account(options, host)?;
     let sys = |path: &str| root.join(path);
     if options.remove {
-        return remove(host, &sys);
+        return remove(host, &sys, &account);
     }
     check_polkit(host)?;
     let installed_unit = std::fs::read_to_string(sys(UNIT_PATH)).ok();
@@ -254,6 +304,16 @@ pub fn run(options: &Options, root: &Path, host: &mut dyn Host) -> Result<Report
         None => normal_rule(&account.name, gid),
     };
     let rule_kind = if strict { "the strict rule" } else { "the normal rule" };
+    let cleanup = LogCleanup::new(&account, &data_folder(&account, &args), &sys);
+    // Whether to clean up logs: the flag, then orrery.toml, then the last choice, which the
+    // file records. Off by default, since it removes files that other programs wrote.
+    let cleanup_from_toml = if config.toml_has("setup", "log_cleanup") {
+        Some(config.section("setup").get_bool("log_cleanup", false)?)
+    } else {
+        None
+    };
+    let cleanup_installed = cleanup.path.exists();
+    let want_cleanup = options.log_cleanup.or(cleanup_from_toml).unwrap_or(cleanup_installed);
 
     if options.check {
         let mut report = Report { ok: true, ..Report::default() };
@@ -272,6 +332,13 @@ pub fn run(options: &Options, root: &Path, host: &mut dyn Host) -> Result<Report
                 format!("/{RULE_PATH} can't be read as {}. sudo orrery setup --check compares it.", account.name),
             ),
             _ => check_file(&mut report, &sys(RULE_PATH), &format!("/{RULE_PATH} ({rule_kind})"), &rule),
+        }
+        if want_cleanup {
+            cleanup.check(&mut report, options, host)?;
+        } else if cleanup_installed {
+            report.found(Status::Update, format!("{} is there, but log cleanup is off.", cleanup.name));
+        } else {
+            report.found(Status::Note, "Log cleanup is off.");
         }
         let running = is_active(host, "orrery")?;
         let state = format!("{SERVICE} is {}.", unit_state(host, "orrery")?);
@@ -329,6 +396,12 @@ pub fn run(options: &Options, root: &Path, host: &mut dyn Host) -> Result<Report
     };
     let unit_changed = install(&mut report, &sys(UNIT_PATH), &format!("/{UNIT_PATH}"), &unit)?;
     install(&mut report, &sys(RULE_PATH), &format!("/{RULE_PATH} ({rule_kind})"), &rule(gid))?;
+    if want_cleanup {
+        cleanup.install(&mut report, options, host)?;
+    } else if cleanup_installed {
+        host.remove_as(&account, &cleanup.path)?;
+        report.line(format!("  Removed {}, since log cleanup is off.", cleanup.name));
+    }
     let stopped_for_name = name_changes && is_active(host, "orrery")?;
     if stopped_for_name {
         command(host, "systemctl", &["stop", SERVICE])?;
@@ -464,8 +537,8 @@ fn give_back_moonrakers_name(report: &mut Report, sys: &dyn Fn(&str) -> PathBuf)
     Ok(())
 }
 
-/// Removes the unit, the rule, and the group, after stopping and disabling orrery.service.
-fn remove(host: &mut dyn Host, sys: &dyn Fn(&str) -> PathBuf) -> Result<Report> {
+/// Removes the unit, the rule, the log cleanup, and the group, after stopping and disabling orrery.service.
+fn remove(host: &mut dyn Host, sys: &dyn Fn(&str) -> PathBuf, account: &Account) -> Result<Report> {
     let mut report = Report { ok: true, ..Report::default() };
     let state = unit_state(host, "orrery")?;
     if state != "not installed" && state != "disabled and stopped" {
@@ -494,6 +567,13 @@ fn remove(host: &mut dyn Host, sys: &dyn Fn(&str) -> PathBuf) -> Result<Report> 
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => report.line(format!("/{path} wasn't there.")),
             Err(e) => return Err(e).with_context(|| format!("can't remove /{path}")),
         }
+    }
+    let cleanup = sys(&home_path(account, TMPFILES_PATH));
+    if cleanup.exists() {
+        host.remove_as(account, &cleanup)?;
+        report.line(format!("Removed {}/{TMPFILES_PATH}, the log cleanup.", account.home.display()));
+        report
+            .line(format!("Lingering and {}'s {CLEAN_TIMER} stay on, for other programs that use them.", account.name));
     }
     if group_gid(host)?.is_some() {
         command(host, "groupdel", &[GROUP])?;
@@ -699,6 +779,122 @@ pub fn unit_file(user: &str, exe: &Path, args: &[String], alias: bool, declined:
          [Install]\n\
          WantedBy=multi-user.target\n\
          {install}"
+    )
+}
+
+/// A path in the account's home folder, as a system path for `sys`.
+fn home_path(account: &Account, path: &str) -> String {
+    let home = account.home.display().to_string();
+    format!("{}/{path}", home.trim_start_matches('/').trim_end_matches('/'))
+}
+
+/// The log cleanup: the user's tmpfiles config, lingering, and the user's timer.
+struct LogCleanup<'a> {
+    account: &'a Account,
+    path: PathBuf,
+    name: String,
+    contents: String,
+}
+
+impl<'a> LogCleanup<'a> {
+    fn new(account: &'a Account, data: &Path, sys: &dyn Fn(&str) -> PathBuf) -> Self {
+        Self {
+            account,
+            path: sys(&home_path(account, TMPFILES_PATH)),
+            name: format!("{}/{TMPFILES_PATH} (log cleanup)", account.home.display()),
+            contents: tmpfiles_conf(&data.join("logs")),
+        }
+    }
+
+    fn check(&self, report: &mut Report, options: &Options, host: &mut dyn Host) -> Result<()> {
+        check_file(report, &self.path, &self.name, &self.contents);
+        let user = &self.account.name;
+        if lingers(host, user)? {
+            report
+                .found(Status::Ok, format!("Lingering is on for {user}, so its timers run while nobody is logged in."));
+        } else {
+            report.found(
+                Status::Update,
+                format!("Lingering is off for {user}, so its timers run only while it's logged in."),
+            );
+        }
+        match timer_state(host, options, self.account)? {
+            Some((true, true)) => report.found(Status::Ok, format!("{user}'s {CLEAN_TIMER} is enabled and running.")),
+            Some(_) => report.found(Status::Update, format!("{user}'s {CLEAN_TIMER} isn't enabled and running.")),
+            None => {
+                report.found(Status::Unknown, format!("setup can't reach {user}'s systemd to ask about {CLEAN_TIMER}."))
+            }
+        }
+        Ok(())
+    }
+
+    fn install(&self, report: &mut Report, options: &Options, host: &mut dyn Host) -> Result<()> {
+        let old = std::fs::read_to_string(&self.path).ok();
+        if old.as_deref() == Some(self.contents.as_str()) {
+            report.line(format!("  {} is already current.", self.name));
+        } else {
+            host.write_as(self.account, &self.path, &self.contents)?;
+            report.line(format!("  {} {}.", if old.is_some() { "Updated" } else { "Installed" }, self.name));
+        }
+        let user = &self.account.name;
+        if !lingers(host, user)? {
+            command(host, "loginctl", &["enable-linger", user])?;
+            // Lingering starts the user's systemd without waiting for it; the timer needs it.
+            command(host, "systemctl", &["start", &format!("user@{}.service", self.account.uid)])?;
+            report.line(format!("  Turned on lingering for {user}, so its timers run while nobody is logged in."));
+        }
+        if timer_state(host, options, self.account)? != Some((true, true)) {
+            let (ok, _) = user_systemctl(host, options, self.account, &["enable", "--now", CLEAN_TIMER])?;
+            if !ok {
+                bail!("can't enable {user}'s {CLEAN_TIMER}");
+            }
+            report.line(format!("  Enabled and started {user}'s {CLEAN_TIMER}."));
+        }
+        Ok(())
+    }
+}
+
+/// Whether logind keeps the user's systemd running while the user isn't logged in.
+fn lingers(host: &mut dyn Host, user: &str) -> Result<bool> {
+    // show-user fails for a user who isn't logged in and doesn't linger.
+    let (ok, out) = host.run("loginctl", &["show-user", user, "--property=Linger", "--value"])?;
+    Ok(ok && out.trim() == "yes")
+}
+
+/// Whether the user's cleanup timer is enabled, and whether it runs. `None` when the user's
+/// systemd can't be reached.
+fn timer_state(host: &mut dyn Host, options: &Options, account: &Account) -> Result<Option<(bool, bool)>> {
+    let (_, enabled) = user_systemctl(host, options, account, &["is-enabled", CLEAN_TIMER])?;
+    let (_, active) = user_systemctl(host, options, account, &["is-active", CLEAN_TIMER])?;
+    if enabled.trim().is_empty() {
+        return Ok(None);
+    }
+    Ok(Some((enabled.trim() == "enabled", active.trim() == "active")))
+}
+
+/// `systemctl --user` as orrery's user: through runuser when setup runs as root.
+fn user_systemctl(host: &mut dyn Host, options: &Options, account: &Account, args: &[&str]) -> Result<(bool, String)> {
+    if !options.is_root {
+        let mut all = vec!["--user"];
+        all.extend_from_slice(args);
+        return host.run("systemctl", &all);
+    }
+    let runtime = format!("XDG_RUNTIME_DIR=/run/user/{}", account.uid);
+    let mut all = vec!["-u", account.name.as_str(), "--", "env", runtime.as_str(), "systemctl", "--user"];
+    all.extend_from_slice(args);
+    host.run("runuser", &all)
+}
+
+/// systemd-tmpfiles' config for the logs folder. `e` only cleans a folder that's there: the
+/// user's systemd-tmpfiles-clean.timer removes, once a day, the files in it that nothing has
+/// written, read, or renamed for [`LOG_AGE`]. Logs that something still writes stay.
+pub fn tmpfiles_conf(logs: &Path) -> String {
+    format!(
+        "# Written by sudo orrery setup. Run it again instead of editing this file.\n\
+         # The printer's user removes files in the logs folder that nothing has written, read, or\n\
+         # renamed for {LOG_AGE}. [setup] log_cleanup in orrery.toml turns this on and off.\n\
+         e {} - - - {LOG_AGE}\n",
+        quote(&logs.display().to_string())
     )
 }
 
@@ -958,6 +1154,9 @@ mod tests {
         polkit: &'static str,
         /// What the running orrery answers, or `None` when it can't be reached.
         orrery: Option<serde_json::Value>,
+        /// Whether the user lingers, and the user's cleanup timer is enabled and runs.
+        linger: bool,
+        timer: bool,
     }
 
     impl Fake {
@@ -966,12 +1165,25 @@ mod tests {
                 polkit: "pkaction version 122\n",
                 enabled: [("orrery.service", ""), ("moonraker.service", "enabled")].into_iter().collect(),
                 active: ["moonraker.service"].into_iter().collect(),
+                linger: true,
+                timer: true,
                 ..Self::default()
             }
         }
     }
 
     impl Host for Fake {
+        fn write_as(&mut self, account: &Account, path: &Path, contents: &str) -> Result<()> {
+            assert_eq!(account.name, "printer");
+            std::fs::create_dir_all(path.parent().unwrap())?;
+            Ok(std::fs::write(path, contents)?)
+        }
+
+        fn remove_as(&mut self, account: &Account, path: &Path) -> Result<()> {
+            assert_eq!(account.name, "printer");
+            Ok(std::fs::remove_file(path)?)
+        }
+
         fn ask_orrery(&mut self, socket: &Path, method: &str) -> Result<serde_json::Value> {
             assert!(socket.ends_with("printer_data/comms/moonraker.sock"), "{}", socket.display());
             assert_eq!(method, "orrery.machine.permissions");
@@ -997,6 +1209,30 @@ mod tests {
                     (true, String::new())
                 }
                 ("pkaction", _) => (true, self.polkit.to_owned()),
+                ("loginctl", ["show-user", "printer", ..]) => {
+                    (self.linger, if self.linger { "yes\n" } else { "" }.into())
+                }
+                ("loginctl", ["enable-linger", "printer"]) => {
+                    self.linger = true;
+                    (true, String::new())
+                }
+                (
+                    "runuser",
+                    ["-u", "printer", "--", "env", "XDG_RUNTIME_DIR=/run/user/1000", "systemctl", "--user", rest @ ..],
+                )
+                | ("systemctl", ["--user", rest @ ..]) => match rest {
+                    ["is-enabled", CLEAN_TIMER] => {
+                        (self.timer, if self.timer { "enabled\n" } else { "disabled\n" }.into())
+                    }
+                    ["is-active", CLEAN_TIMER] => {
+                        (self.timer, if self.timer { "active\n" } else { "inactive\n" }.into())
+                    }
+                    ["enable", "--now", CLEAN_TIMER] => {
+                        self.timer = true;
+                        (true, String::new())
+                    }
+                    _ => (false, String::new()),
+                },
                 ("systemctl", ["is-enabled", unit]) => {
                     (false, self.enabled.get(unit).map_or("not-found", |s| s).to_owned() + "\n")
                 }
@@ -1014,6 +1250,7 @@ mod tests {
                     self.enabled.insert(SERVICE, "enabled");
                     (true, String::new())
                 }
+                ("systemctl", ["start", "user@1000.service"]) => (true, String::new()),
                 ("systemctl", ["start" | "restart", _]) => {
                     self.active.insert(SERVICE);
                     (true, String::new())
@@ -1025,7 +1262,8 @@ mod tests {
                 ("systemctl", _) => (true, String::new()),
                 _ => (false, String::new()),
             };
-            if !matches!(args.first(), Some(&"is-enabled" | &"is-active" | &"group" | &"passwd" | &"--version")) {
+            let query = ["is-enabled", "is-active", "show-user", "group", "passwd", "--version"];
+            if !args.iter().any(|a| query.contains(a)) {
                 self.ran.push(line);
             }
             Ok(reply)
@@ -1067,6 +1305,8 @@ mod tests {
         );
         assert!(unit.contains("Conflicts=moonraker.service\n"));
         assert_eq!(installed_args(&unit).unwrap(), args);
+        let tmpfiles = tmpfiles_conf(Path::new("/home/printer/100% \"logs\""));
+        assert!(tmpfiles.ends_with("\ne \"/home/printer/100%% \\\"logs\\\"\" - - - 14d\n"), "{tmpfiles}");
         let account = Account { name: "printer".into(), uid: 1000, home: "/home/printer".into() };
         // Without new options, an upgrade keeps the installed ones.
         assert_eq!(server_args(&options(), &account, Some(&unit)).unwrap(), args);
@@ -1107,12 +1347,17 @@ mod tests {
     #[test]
     fn setup_installs_checks_and_removes() {
         let root = tempfile::tempdir().unwrap();
-        let base = options_in(root.path(), NO_ALIAS);
-        let mut host = Fake::new();
+        let base = options_in(root.path(), &format!("{NO_ALIAS}[setup]\nlog_cleanup = true\n"));
+        let mut host = Fake { linger: false, timer: false, ..Fake::new() };
         // --check before anything is there.
         let check = Options { check: true, ..base.clone() };
         let report = run(&check, root.path(), &mut host).unwrap();
         assert!(!report.ok, "{:#?}", report.lines);
+        for line in
+            ["log cleanup) is missing", "Lingering is off for printer", "systemd-tmpfiles-clean.timer isn't enabled"]
+        {
+            assert!(report.lines.iter().any(|l| l.contains(line)), "{line}: {:#?}", report.lines);
+        }
         assert!(host.ran.is_empty(), "--check changes nothing: {:?}", host.ran);
 
         let report = run(&base, root.path(), &mut host).unwrap();
@@ -1121,17 +1366,30 @@ mod tests {
             "{:#?}",
             report.lines
         );
-        assert_eq!(host.ran, ["groupadd --system orrery-admin", "systemctl daemon-reload"]);
+        assert_eq!(
+            host.ran,
+            [
+                "groupadd --system orrery-admin",
+                "loginctl enable-linger printer",
+                "systemctl start user@1000.service",
+                "runuser -u printer -- env XDG_RUNTIME_DIR=/run/user/1000 systemctl --user enable --now systemd-tmpfiles-clean.timer",
+                "systemctl daemon-reload"
+            ]
+        );
         let unit = std::fs::read_to_string(root.path().join(UNIT_PATH)).unwrap();
         assert!(unit.contains(r#"ExecStart="/home/printer/orrery-test/bin/orrery""#));
         assert!(unit.contains("Conflicts=moonraker.service\n") && !unit.contains("Alias="), "{unit}");
         let rule = std::fs::read_to_string(root.path().join(RULE_PATH)).unwrap();
         assert!(rule.contains(r"\\s994(\\s|$)"));
+        let cleanup = root.path().join("home/printer").join(TMPFILES_PATH);
+        let tmpfiles = std::fs::read_to_string(&cleanup).unwrap();
+        let logs = root.path().join("printer_data/logs");
+        assert!(tmpfiles.ends_with(&format!("\ne \"{}\" - - - 14d\n", logs.display())), "{tmpfiles}");
         assert!(run(&check, root.path(), &mut host).unwrap().ok);
 
         // Again: nothing to change.
         let report = run(&base, root.path(), &mut host).unwrap();
-        assert_eq!(report.lines.iter().filter(|l| l.contains("already current")).count(), 2, "{:#?}", report.lines);
+        assert_eq!(report.lines.iter().filter(|l| l.contains("already current")).count(), 3, "{:#?}", report.lines);
 
         // --check finds a file someone changed.
         std::fs::write(root.path().join(RULE_PATH), "edited").unwrap();
@@ -1162,7 +1420,10 @@ mod tests {
             host.ran,
             ["systemctl disable --now orrery.service", "groupdel orrery-admin", "systemctl daemon-reload"]
         );
-        assert!(!root.path().join(UNIT_PATH).exists() && !root.path().join(RULE_PATH).exists());
+        for path in [root.path().join(UNIT_PATH), root.path().join(RULE_PATH), cleanup] {
+            assert!(!path.exists(), "{}", path.display());
+        }
+        assert!(host.linger && host.timer, "lingering and the timer stay");
         assert!(report.lines.iter().any(|l| l.contains("enable --now moonraker.service")), "{:#?}", report.lines);
     }
 
@@ -1487,5 +1748,44 @@ mod tests {
         let units = allowed_units(&account, &[], &config).unwrap();
         assert_eq!(units.names, ["crowsnest", "orrery-cam", "sonar"]);
         assert_eq!(units.prefixes, ["moonraker", "klipper", "orrery"]);
+    }
+
+    #[test]
+    fn log_cleanup_is_off_until_turned_on_and_later_runs_keep_the_choice() {
+        let root = tempfile::tempdir().unwrap();
+        let base = options_in(root.path(), NO_ALIAS);
+        let cleanup = root.path().join("home/printer").join(TMPFILES_PATH);
+        let mut host = Fake { linger: false, timer: false, ..Fake::new() };
+        let check = Options { check: true, ..base.clone() };
+        // Off by default: nothing about it to do.
+        run(&base, root.path(), &mut host).unwrap();
+        assert!(!cleanup.exists() && !host.linger && !host.timer);
+        let report = run(&check, root.path(), &mut host).unwrap();
+        assert!(report.ok && report.lines.iter().any(|l| l.contains("Log cleanup is off.")), "{:#?}", report.lines);
+
+        // The flag turns it on, and a run without it keeps it.
+        run(&Options { log_cleanup: Some(true), ..base.clone() }, root.path(), &mut host).unwrap();
+        assert!(cleanup.exists() && host.linger && host.timer);
+        run(&base, root.path(), &mut host).unwrap();
+        assert!(cleanup.exists());
+        assert!(run(&check, root.path(), &mut host).unwrap().ok);
+
+        // orrery.toml turns it off, and removes the file, but not lingering or the timer.
+        let toml = root.path().join("printer_data/config/orrery.toml");
+        std::fs::write(&toml, format!("{NO_ALIAS}[setup]\nlog_cleanup = false\n")).unwrap();
+        let report = run(&check, root.path(), &mut host).unwrap();
+        assert!(
+            !report.ok && report.lines.iter().any(|l| l.contains("is there, but log cleanup")),
+            "{:#?}",
+            report.lines
+        );
+        run(&base, root.path(), &mut host).unwrap();
+        assert!(!cleanup.exists() && host.linger && host.timer);
+        // The flag wins over orrery.toml.
+        run(&Options { log_cleanup: Some(true), ..base.clone() }, root.path(), &mut host).unwrap();
+        assert!(cleanup.exists());
+        std::fs::write(&toml, NO_ALIAS).unwrap();
+        run(&Options { log_cleanup: Some(false), ..base }, root.path(), &mut host).unwrap();
+        assert!(!cleanup.exists());
     }
 }

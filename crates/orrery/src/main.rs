@@ -81,10 +81,10 @@ enum Command {
 #[derive(clap::Args)]
 struct SetupArgs {
     /// Report what's in place, and change nothing. It works without sudo.
-    #[arg(long, conflicts_with_all = ["remove", "disable_moonraker", "start", "migrate", "force", "alias_moonraker", "no_alias_moonraker"])]
+    #[arg(long, conflicts_with_all = ["remove", "disable_moonraker", "start", "migrate", "force", "alias_moonraker", "no_alias_moonraker", "log_cleanup", "no_log_cleanup"])]
     check: bool,
     /// Stop and disable orrery.service, then remove the unit, the polkit rule, and the group.
-    #[arg(long, conflicts_with_all = ["strict", "disable_moonraker", "start", "migrate", "force", "alias_moonraker", "no_alias_moonraker"])]
+    #[arg(long, conflicts_with_all = ["strict", "disable_moonraker", "start", "migrate", "force", "alias_moonraker", "no_alias_moonraker", "log_cleanup", "no_log_cleanup"])]
     remove: bool,
     /// Let orrery manage only its allowed services: moonraker.asvc, Klipper's and orrery's own,
     /// and agents' units. Run setup again after adding one.
@@ -108,6 +108,13 @@ struct SetupArgs {
     /// the choice.
     #[arg(long)]
     no_alias_moonraker: bool,
+    /// Remove files in the logs folder that nothing has touched for 14 days, whichever program
+    /// wrote them. Later runs keep the choice.
+    #[arg(long, conflicts_with = "no_log_cleanup")]
+    log_cleanup: bool,
+    /// Leave the logs folder as it is. Later runs keep the choice.
+    #[arg(long)]
+    no_log_cleanup: bool,
     /// Stop and disable Moonraker, and move its own unit file aside to
     /// moonraker.service.orrery-saved, so moonraker.service can be a name for orrery.service.
     /// --remove puts it back.
@@ -271,6 +278,11 @@ fn setup_command(cli: &Cli, args: &SetupArgs) -> ExitCode {
         disable_moonraker: args.disable_moonraker || args.migrate,
         start: args.start || args.migrate,
         alias: match (args.alias_moonraker, args.no_alias_moonraker) {
+            (true, _) => Some(true),
+            (_, true) => Some(false),
+            _ => None,
+        },
+        log_cleanup: match (args.log_cleanup, args.no_log_cleanup) {
             (true, _) => Some(true),
             (_, true) => Some(false),
             _ => None,
