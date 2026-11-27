@@ -119,6 +119,29 @@ the processors. The first reader's fields win.
 The first version's contract was three paths: the input, the gcode to write, and a folder for
 one picture. The picture folder was an output too, and it held one picture of one size.
 
+## Placing the results
+
+Decided (user, 2026-11-27). A tool never writes where files are kept. Every tool, Orrery's own
+readers inside it included, writes only into its work folder. A short routine of Orrery's, apart
+from every tool, then takes what the result lists and puts it in place: the gcode in the cache,
+thumbnails in `.thumbs`, and metadata in the database. So a tool can later be shut off from the
+rest of the disk, if that's ever needed, and nothing else changes.
+
+The routine trusts nothing in the work folder:
+
+- **Only what the result lists,** at a path inside the work folder. Anything else there is left
+  and removed with the folder.
+- **Only plain files.** A symlink, or anything else, is refused, and files are opened without
+  following links, so a tool can't point Orrery at another file.
+- **Thumbnails are checked:** a PNG, JPEG, or QOI file, whose size in pixels is what the result
+  says. QOI is saved as PNG, as now.
+- **Names are Orrery's.** A result says what a file is, not where it goes, so a tool can't name
+  a place.
+- **Metadata is only fields Orrery knows,** with the types Moonraker gives them.
+
+To shut a tool off fully, it would also need the input without seeing the gcodes folder: a copy
+or a hard link in its work folder, or the open file. That's for when it's needed.
+
 ## Messages
 
 A client cares whether a file is supported, not how. Messages say what's supported and where to
@@ -167,6 +190,9 @@ a byte offset, so it needs the bytes Klipper prints: the cached gcode, after any
 - **Moonraker's API gives the gcode.** `GET /server/files/gcodes/cube.ufp` sends the gcode Klipper
   prints, and Orrery makes it first if it isn't cached. Every Moonraker client takes the gcodes
   folder to hold gcode, and the preview works.
+- **`content` names one of the file's outputs** (user, 2026-11-27), as a reader's result
+  lists them: `gcode`, and `original` for the upload itself. Thumbnails could be named the
+  same way later.
 - **`content` asks for one,** in the query: `?content=gcode` or `?content=original`. Without
   it, Orrery gives the gcode, for now. The user wants the original to be the default someday,
   so a client that knows Orrery asks for each by name, and the default can change without
@@ -277,4 +303,3 @@ A UFP file is a zip with the gcode at `/3D/model.gcode`, and a picture at
 1. **Cheap:** which readers make their gcode on demand, and which keep it? Left until a reader
    that isn't cheap comes (user, 2026-11-27). Taking a file out of a zip is cheap.
 2. **Expiry:** how and when cached files are removed. Later; about 14 days.
-3. **The parameter's name:** `content`, or another? It's Orrery's own, so the name is free.
