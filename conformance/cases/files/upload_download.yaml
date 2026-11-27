@@ -5,6 +5,14 @@ steps:
     expect: {item: {path: plain.gcode, root: gcodes}, action: create_file, print_started: false, print_queued: false}
   - download: gcodes/plain.gcode
     expect_fixture: plain.gcode
+    expect_filename: plain.gcode
+  # Orrery's `content` parameter asks for the gcode or the uploaded file. Moonraker ignores it,
+  # so a client can send it to either, and a plain gcode file is the same both ways
+  # (docs/design/2026-11-27-file-tools.md).
+  - download: gcodes/plain.gcode?content=gcode
+    expect_fixture: plain.gcode
+  - download: gcodes/plain.gcode?content=original
+    expect_fixture: plain.gcode
   # Folders go in the `path` field; Moonraker creates them.
   - upload: other.gcode
     fixture: plain.gcode

@@ -21,6 +21,14 @@
   },
   {
     "step": 3,
+    "call": null
+  },
+  {
+    "step": 4,
+    "call": null
+  },
+  {
+    "step": 5,
     "call": "upload",
     "result": {
       "action": "string",
@@ -36,7 +44,7 @@
     }
   },
   {
-    "step": 4,
+    "step": 6,
     "call": "upload",
     "result": {
       "action": "string",
@@ -50,11 +58,11 @@
     }
   },
   {
-    "step": 5,
+    "step": 7,
     "call": null
   },
   {
-    "step": 6,
+    "step": 8,
     "call": "upload",
     "result": {
       "action": "string",
@@ -70,11 +78,11 @@
     }
   },
   {
-    "step": 7,
+    "step": 9,
     "call": null
   },
   {
-    "step": 8,
+    "step": 10,
     "call": "upload",
     "error": {
       "code": 400

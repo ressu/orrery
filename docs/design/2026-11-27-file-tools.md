@@ -7,6 +7,10 @@ converters: `orrery-convert` with UFP, uploads, and the file watcher
 as uploaded, with the gcode as a cache (A, below). What a download gives is a proposal. Not yet
 tried with Cura on a printer.
 
+Decided so far: readers and processors, with one contract; files stored as uploaded, with the
+gcode as a cache; and a `content` parameter on downloads. Not decided: when cached files expire,
+and which formats are cheap enough to make on demand.
+
 Orrery gets **tools** for files in the gcodes folder. A **reader** knows one format, and tells
 Orrery what to print, what the metadata is, and what the thumbnails are. A **processor**
 changes gcode, such as adding object labels.
@@ -66,6 +70,12 @@ contract below, so moving one out later changes nothing else.
 
 A reader Orrery doesn't have is a program, with the contract below.
 
+**Readers and processors run at a low priority** where they can (user, 2026-11-27). An upload,
+or a preview of an older file, while a print runs, must not take the CPU from Klipper. A
+program runs with `nice` 19, in the idle I/O class. A reader inside Orrery runs on its own
+thread, which Linux lets have its own priority (`setpriority` with the thread's id). They run
+one at a time, as metadata does now (`parse_lock`). Klipper's own process isn't touched.
+
 ## The contract
 
 ```
@@ -87,6 +97,8 @@ prints one JSON object on standard output that says what it made:
 }
 ```
 
+- **Processors use the same contract** where they can (user, 2026-11-27): the gcode is the
+  input, and the new gcode is `gcode`.
 - **Every field is optional.** A reader gives what its format has. A processor gives `gcode`,
   and may give `metadata`, such as better print times.
 - **No `gcode` from a reader means the input is the gcode,** as for a plain gcode file.
@@ -145,7 +157,8 @@ Either way, a file is read once when it arrives, for its metadata.
 
 ### What clients get
 
-Proposal. Clients can't say which they want, the upload or the gcode. Fluidd fetches
+Decided (user, 2026-11-27): Orrery's existing API, with a parameter that works on Moonraker too.
+Clients can't say which they want, the upload or the gcode. Fluidd fetches
 `/server/files/gcodes/<name>` for its gcode preview, its Download button, and its editor alike
 (`fluidd/src/mixins/files.ts:175`), and lists `.ufp` files as gcode files
 (`src/store/files/getters.ts:136`). Its preview follows a print by `virtual_sdcard.file_position`,
@@ -154,9 +167,16 @@ a byte offset, so it needs the bytes Klipper prints: the cached gcode, after any
 - **Moonraker's API gives the gcode.** `GET /server/files/gcodes/cube.ufp` sends the gcode Klipper
   prints, and Orrery makes it first if it isn't cached. Every Moonraker client takes the gcodes
   folder to hold gcode, and the preview works.
-- **The upload is asked for:** an Orrery-only parameter, such as
-  `GET /server/files/gcodes/cube.ufp?original=true`. A client that knows Orrery adds it to its
-  Download button.
+- **`content` asks for one,** in the query: `?content=gcode` or `?content=original`. Without
+  it, Orrery gives the gcode, for now. The user wants the original to be the default someday,
+  so a client that knows Orrery asks for each by name, and the default can change without
+  breaking it: Fluidd's preview would ask for `gcode`, and its Download button for
+  `original`.
+- **It's harmless on Moonraker.** Moonraker's download reads only the path and `Range`
+  (`moonraker/components/application.py:806`), and its login reads `token`, so it ignores
+  `content` and sends the file it has, which is gcode: it removes a UFP once it's unpacked. The
+  same request works on both. `files/upload_download` checks both servers with it.
+- **For a gcode file, both are the file.**
 - **The metadata says the format,** such as `"format": "ufp"`, so a client knows there's an
   original to offer. Moonraker's clients ignore fields they don't know.
 - **The list shows the upload,** with its size. A download's `Content-Length` is the gcode's.
@@ -172,7 +192,8 @@ One place, where Orrery talks to Klipper:
 - **Klipper's status** has `print_stats.filename` and `virtual_sdcard.file_path` mapped back to
   `cube.ufp`, in subscriptions and queries alike.
 - **History and the job queue** store only `cube.ufp`, so they need nothing.
-- **A cached gcode stays while it's printed.**
+- **A cached gcode stays while it's printed.** Cached files expire after a time, such as 14
+  days (user, 2026-11-27). That's for later: for now they stay.
 - **What leaks:** Klipper's console line `File opened:.cache/cube.gcode`, and a macro's
   `SDCARD_PRINT_FILE FILENAME=cube.ufp`, which Klipper refuses, since it doesn't see the file.
   That's a regression to list.
@@ -228,9 +249,7 @@ A UFP file is a zip with the gcode at `/3D/model.gcode`, and a picture at
 
 ## Open questions
 
-1. **The original:** a parameter on the same path, as above, or a path of its own?
-2. **The cache:** when does a cached gcode go: after the print, after some days, or when the
-   disk is low?
-3. **Cheap:** which readers make their gcode on demand, and which keep it? Taking a file out of
-   a zip is cheap. A processor, or a slow decoder, may not be.
-4. **Processors:** the same contract, with the gcode as the input and the new gcode as `gcode`?
+1. **Cheap:** which readers make their gcode on demand, and which keep it? Left until a reader
+   that isn't cheap comes (user, 2026-11-27). Taking a file out of a zip is cheap.
+2. **Expiry:** how and when cached files are removed. Later; about 14 days.
+3. **The parameter's name:** `content`, or another? It's Orrery's own, so the name is free.
