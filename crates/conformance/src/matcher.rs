@@ -1,7 +1,8 @@
 //! Partial JSON matching for `expect` blocks.
 //!
 //! An expected value matches an actual value when:
-//! - objects: every expected key matches (extra actual keys are fine, unless `"$exact": true`);
+//! - objects: every expected key matches (extra actual keys are fine, unless `"$exact": true`,
+//!   which still allows orrery's [`ADDITIONS`]);
 //! - arrays: same length and every element matches, unless the expected array is wrapped as
 //!   `{"$contains": [...]}`, which only needs each expected element to match some actual one, or
 //!   `{"$excludes": [...]}`, which needs each expected element to match no actual one;
@@ -16,6 +17,14 @@
 
 use regex::Regex;
 use serde_json::Value;
+
+/// Keys orrery adds to Moonraker's replies and notifications on purpose. `$exact` and the
+/// snapshot check allow them wherever they appear; cases that target orrery check what's in
+/// them.
+pub const ADDITIONS: &[&str] = &[
+    // docs/design/2026-11-27-file-info.md
+    "file_info",
+];
 
 /// Returns one line per mismatch, each naming its JSON path. Empty means the values match.
 pub fn mismatches(expected: &Value, actual: &Value) -> Vec<String> {
@@ -67,7 +76,7 @@ fn check(expected: &Value, actual: Option<&Value>, path: &str, out: &mut Vec<Str
                 check(v, act.get(k), &format!("{path}.{k}"), out);
             }
             if exact {
-                for k in act.keys().filter(|k| !exp.contains_key(*k)) {
+                for k in act.keys().filter(|k| !exp.contains_key(*k) && !ADDITIONS.contains(&k.as_str())) {
                     out.push(format!("{path}.{k}: unexpected key"));
                 }
             }

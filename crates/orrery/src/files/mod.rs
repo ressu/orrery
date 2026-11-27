@@ -34,6 +34,33 @@ pub const VALID_GCODE_EXTS: &[&str] = &[".gcode", ".g", ".gco", ".ufp", ".nc"];
 /// The store's internal namespace for gcode metadata. Clients can't reach it.
 const METADATA_NAMESPACE: &str = "gcode_metadata";
 
+/// The stored metadata's key for why a file's reader couldn't read it. Clients don't get it as
+/// metadata; `file_info` says it as the `reason` the file can't be printed.
+const READ_ERROR: &str = "_read_error";
+
+/// What a URL path segment keeps unescaped: RFC 3986's unreserved characters.
+const SEGMENT: &percent_encoding::AsciiSet =
+    &percent_encoding::NON_ALPHANUMERIC.remove(b'-').remove(b'.').remove(b'_').remove(b'~');
+
+/// One thing a download of a file can give, named as `content=` names it
+/// (docs/design/2026-11-27-file-info.md).
+pub struct Stream {
+    /// `gcode`, `original`, or `thumbnail`.
+    pub kind: &'static str,
+    /// The value of `content=`: `gcode`, `original`, or `thumbnail-<width>x<height>`.
+    pub name: String,
+    /// A thumbnail's file, with its width, height, and size.
+    pub thumbnail: Option<(PathBuf, Value, Value, Value)>,
+}
+
+/// A file's streams, and whether it can be printed, with the reason when it can't.
+pub struct Streams {
+    pub printable: bool,
+    pub format: Option<String>,
+    pub reason: Option<String>,
+    pub list: Vec<Stream>,
+}
+
 pub struct Root {
     pub name: String,
     pub path: PathBuf,
@@ -313,7 +340,145 @@ impl FileManager {
     // *** Metadata ***
 
     pub fn get_metadata(&self, rel: &str) -> Option<Map<String, Value>> {
+        self.stored_metadata(rel).map(client_metadata)
+    }
+
+    /// The stored metadata as it's kept, with Orrery's own keys, such as [`READ_ERROR`].
+    fn stored_metadata(&self, rel: &str) -> Option<Map<String, Value>> {
         self.metadata.lock().expect("metadata lock").get(rel).map(StoredMetadata::parse)
+    }
+
+    /// What a download of `rel` in `root` can give, from what's known already: the readers
+    /// and the stored metadata. The file isn't read.
+    pub fn content_streams(&self, root: &str, rel: &str) -> Streams {
+        let stored = if root == "gcodes" { self.stored_metadata(rel) } else { None };
+        self.content_streams_with(root, rel, stored.as_ref())
+    }
+
+    /// [`content_streams`](Self::content_streams) from stored metadata the caller has already
+    /// read, so a listing reads each file's once.
+    fn content_streams_with(&self, root: &str, rel: &str, stored: Option<&Map<String, Value>>) -> Streams {
+        // A reader first: `.ufp` is in Moonraker's gcode extensions, and is the ufp reader's.
+        let format = if root != "gcodes" {
+            None
+        } else if let Some(r) = self.readers.for_path(rel) {
+            Some(r.name.clone())
+        } else {
+            is_gcode(rel).then(|| "gcode".to_owned())
+        };
+        let reason = format
+            .as_deref()
+            .filter(|f| *f != "gcode")
+            .and_then(|_| stored?.get(READ_ERROR)?.as_str().map(str::to_owned));
+        let printable = format.is_some() && reason.is_none();
+        let mut list = Vec::new();
+        if printable {
+            list.push(Stream { kind: "gcode", name: "gcode".into(), thumbnail: None });
+        }
+        list.push(Stream { kind: "original", name: "original".into(), thumbnail: None });
+        if root == "gcodes"
+            && let Some(md) = stored
+        {
+            let folder = self.gcodes_dir().join(rel);
+            let folder = folder.parent().unwrap_or(self.gcodes_dir()).to_path_buf();
+            for t in md.get("thumbnails").and_then(Value::as_array).into_iter().flatten() {
+                let (Some(w), Some(h), Some(path)) =
+                    (t.get("width"), t.get("height"), t.get("relative_path").and_then(Value::as_str))
+                else {
+                    continue;
+                };
+                let name = format!("thumbnail-{w}x{h}");
+                // Two of one size, such as a PNG and a JPEG: the first is the one.
+                if list.iter().any(|s| s.name == name) {
+                    continue;
+                }
+                let size = t.get("size").cloned().unwrap_or(Value::Null);
+                list.push(Stream {
+                    kind: "thumbnail",
+                    name,
+                    thumbnail: Some((folder.join(path), w.clone(), h.clone(), size)),
+                });
+            }
+        }
+        Streams { printable, format, reason, list }
+    }
+
+    /// `file_info` for a file: whether it can be printed, as which format, its URL, a reference
+    /// to resolve against the API's base URL, and its streams, each with a URL to resolve against
+    /// the file's (docs/design/2026-11-27-file-info.md).
+    pub fn file_info(&self, root: &str, rel: &str) -> Value {
+        let stored = if root == "gcodes" { self.stored_metadata(rel) } else { None };
+        self.file_info_with(root, rel, stored.as_ref())
+    }
+
+    /// [`file_info`](Self::file_info) from stored metadata the caller has already read.
+    fn file_info_with(&self, root: &str, rel: &str, stored: Option<&Map<String, Value>>) -> Value {
+        let streams = self.content_streams_with(root, rel, stored);
+        let path: Vec<String> = std::iter::once(root)
+            .chain(rel.split('/'))
+            .map(|s| percent_encoding::utf8_percent_encode(s, SEGMENT).to_string())
+            .collect();
+        let base = format!("server/files/{}", path.join("/"));
+        let content: Vec<Value> = streams
+            .list
+            .iter()
+            .map(|s| {
+                let mut m = Map::new();
+                m.insert("kind".into(), json!(s.kind));
+                m.insert("name".into(), json!(s.name));
+                if let Some((_, w, h, size)) = &s.thumbnail {
+                    m.insert("width".into(), w.clone());
+                    m.insert("height".into(), h.clone());
+                    m.insert("size".into(), size.clone());
+                }
+                m.insert("url".into(), json!(format!("?content={}", s.name)));
+                Value::Object(m)
+            })
+            .collect();
+        let mut info = Map::new();
+        info.insert("printable".into(), json!(streams.printable));
+        if let Some(reason) = streams.reason {
+            info.insert("reason".into(), json!(reason));
+        }
+        if let Some(format) = streams.format {
+            info.insert("format".into(), json!(format));
+        }
+        info.insert("url".into(), json!(base));
+        info.insert("content".into(), Value::Array(content));
+        Value::Object(info)
+    }
+
+    /// `file_info` for each file in the gcodes folder that `names` names, once each, keyed by
+    /// the name: for a list that names files, such as history or the job queue, where one file
+    /// can be named many times. A file that isn't there gets only `printable: false`.
+    pub fn file_info_map<'a>(&self, names: impl IntoIterator<Item = &'a str>) -> Value {
+        let mut map = Map::new();
+        for name in names {
+            if map.contains_key(name) {
+                continue;
+            }
+            let info = if self.gcodes_dir().join(name).is_file() {
+                self.file_info("gcodes", name)
+            } else {
+                json!({"printable": false, "reason": "the file doesn't exist any more"})
+            };
+            map.insert(name.to_owned(), info);
+        }
+        Value::Object(map)
+    }
+
+    /// Adds `file_info`, a [`file_info_map`](Self::file_info_map), to `result` for the files
+    /// its list `key` names by their `filename`.
+    pub fn add_file_info(&self, result: &mut Value, key: &str) {
+        let names: Vec<String> = result[key]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|j| j.get("filename").and_then(Value::as_str).map(str::to_owned))
+            .collect();
+        if let Value::Object(m) = result {
+            m.insert("file_info".into(), self.file_info_map(names.iter().map(String::as_str)));
+        }
     }
 
     /// Records the latest job for a file, as Moonraker's history does with `print_start_time`
@@ -594,7 +759,10 @@ pub(crate) async fn read_file(app: &Arc<App>, full: &Path) -> Result<(), String>
             md.extend(found);
             Ok(())
         }
-        Err(e) => Err(e),
+        Err(e) => {
+            md.insert(READ_ERROR.into(), json!(e));
+            Err(e)
+        }
     };
     md.insert("print_start_time".into(), Value::Null);
     md.insert("job_id".into(), Value::Null);
@@ -717,6 +885,9 @@ pub fn changed_event(
     let mut item = fm.path_info_or_empty(full, root);
     item.insert("path".into(), json!(fm.relative_path(root, full)));
     item.insert("root".into(), json!(root));
+    if full.is_file() {
+        item.insert("file_info".into(), fm.file_info(root, &fm.relative_path(root, full)));
+    }
     let mut info = Map::new();
     info.insert("action".into(), json!(action));
     info.insert("item".into(), Value::Object(item));
@@ -805,8 +976,15 @@ pub fn register_endpoints(app: &Arc<App>) {
     r.register("/server/files/delete_file", &[RequestType::Delete], Transports::WebsocketOnly, handler(delete_request));
 }
 
+/// Stored metadata without Orrery's own keys, which start with `_`: what clients get.
+fn client_metadata(mut md: Map<String, Value>) -> Map<String, Value> {
+    md.retain(|k, _| !k.starts_with('_'));
+    md
+}
+
 async fn file_list(app: Arc<App>, req: Request) -> ApiResult {
     let root = req.args.opt_str("root")?.unwrap_or_else(|| "gcodes".into());
+    let with_file_info = req.args.opt_bool("file_info")?.unwrap_or(false);
     let fm = &app.files;
     let Some(r) = fm.root(&root).filter(|r| r.path.is_dir()) else {
         return Err(ApiError::bad_request(format!("Failed to build file list, invalid path: {root}: None")));
@@ -846,6 +1024,9 @@ async fn file_list(app: Arc<App>, req: Request) -> ApiResult {
             let mut m = Map::new();
             m.insert("path".into(), json!(path));
             m.extend(info);
+            if with_file_info {
+                m.insert("file_info".into(), fm.file_info(&root, &path));
+            }
             Value::Object(m)
         })
         .collect();
@@ -867,6 +1048,7 @@ async fn file_metadata(app: Arc<App>, req: Request) -> ApiResult {
         .get_metadata(&filename)
         .ok_or_else(|| ApiError::not_found(format!("Metadata not available for <{filename}>")))?;
     md.insert("filename".into(), json!(filename));
+    md.insert("file_info".into(), app.files.file_info("gcodes", &filename));
     Ok(Value::Object(md))
 }
 
@@ -887,6 +1069,7 @@ async fn metascan(app: Arc<App>, req: Request) -> ApiResult {
         .get_metadata(&filename)
         .ok_or_else(|| ApiError::new(500, format!("Failed to parse metadata for file '{filename}'")))?;
     md.insert("filename".into(), json!(filename));
+    md.insert("file_info".into(), app.files.file_info("gcodes", &filename));
     Ok(Value::Object(md))
 }
 
@@ -931,7 +1114,10 @@ fn disk_usage(path: &Path) -> Value {
     }
 }
 
-fn list_directory(app: &App, path: &Path, root: &str, extended: bool) -> ApiResult {
+/// A folder's listing. `with_file_info` adds each file's `file_info`, which a listing has only
+/// when the client asks: in a long folder it's much of the reply, and clients written for
+/// Moonraker don't read it (docs/design/2026-11-27-file-info.md).
+fn list_directory(app: &App, path: &Path, root: &str, extended: bool, with_file_info: bool) -> ApiResult {
     let fm = &app.files;
     if !path.is_dir() {
         return Err(ApiError::bad_request(format!("Directory does not exist ({})", path.display())));
@@ -953,12 +1139,17 @@ fn list_directory(app: &App, path: &Path, root: &str, extended: bool) -> ApiResu
             dirs.push(Value::Object(info));
         } else if full.is_file() {
             info.insert("filename".into(), json!(name));
-            if root == "gcodes"
+            let rel = fm.relative_path(root, &full);
+            // Read once, for both.
+            let stored = if root == "gcodes" && (extended || with_file_info) { fm.stored_metadata(&rel) } else { None };
+            if extended
                 && fm.is_printable(&name)
-                && extended
-                && let Some(md) = fm.get_metadata(&fm.relative_path(root, &full))
+                && let Some(md) = &stored
             {
-                info.extend(md);
+                info.extend(client_metadata(md.clone()));
+            }
+            if with_file_info {
+                info.insert("file_info".into(), fm.file_info_with(root, &rel, stored.as_ref()));
             }
             files.push(Value::Object(info));
         }
@@ -976,7 +1167,8 @@ async fn directory(app: Arc<App>, req: Request) -> ApiResult {
     let (root, dir_path) = app.files.convert_request_path(&directory)?;
     if req.kind == RequestType::Get {
         let extended = req.args.opt_bool("extended")?.unwrap_or(false);
-        return list_directory(&app, &dir_path, &root, extended);
+        let with_file_info = req.args.opt_bool("file_info")?.unwrap_or(false);
+        return list_directory(&app, &dir_path, &root, extended, with_file_info);
     }
     let fm = &app.files;
     let _guard = fm.op_lock.lock().await;

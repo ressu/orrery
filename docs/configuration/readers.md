@@ -69,8 +69,9 @@ A download of `cube.ufp` gives the gcode Klipper prints, so a client's gcode pre
 /server/files/gcodes/cube.ufp?content=original
 ```
 
-`content=gcode` asks for the gcode by name. Moonraker ignores `content`, so a client can send it
-to either. The gcode is saved as `cube.gcode`, so a program that goes by the extension opens it
+`content=gcode` asks for the gcode by name, and `content=thumbnail-32x32` a thumbnail by its
+size. Each file's `file_info` lists the names it has, with a URL for each. Moonraker ignores
+`content`, so a client can send it to either. The gcode is saved as `cube.gcode`, so a program that goes by the extension opens it
 as gcode. Until Fluidd asks for the original, its Download button saves the gcode.
 
 Fluidd's editor shows the gcode too, but its Save can't replace `cube.ufp` with the edited

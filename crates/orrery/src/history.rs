@@ -353,7 +353,9 @@ fn totals_rows(totals: &Map<String, Value>) -> Vec<TotalsRow> {
 
 fn send_history_event(app: &Arc<App>, action: &str, job: &PrinterJob, id: u64) {
     let job = prep_job(app, job.stats(), id);
-    app.notify("history_changed", vec![json!({"action": action, "job": job})]);
+    let filename = job.get("filename").and_then(Value::as_str).unwrap_or_default().to_owned();
+    let file_info = app.files.file_info_map([filename.as_str()]);
+    app.notify("history_changed", vec![json!({"action": action, "job": job, "file_info": file_info})]);
 }
 
 /// Moonraker's `_prep_requested_job`: adds `exists` and the hex `job_id`.
@@ -399,7 +401,10 @@ async fn job_request(app: Arc<App>, req: Request) -> ApiResult {
         let id = parse_uid(&uid)?;
         let row = app.database.history_get(id).map_err(db_error)?;
         let row = row.ok_or_else(|| ApiError::not_found(format!("Invalid job uid: {uid}")))?;
-        return Ok(json!({"job": row_job(&app, id, row)}));
+        let job = row_job(&app, id, row);
+        let filename = job.get("filename").and_then(Value::as_str).unwrap_or_default().to_owned();
+        let file_info = app.files.file_info_map([filename.as_str()]);
+        return Ok(json!({"job": job, "file_info": file_info}));
     }
     if req.args.opt_bool("all")?.unwrap_or(false) {
         let ids = app.database.history_delete_all().map_err(db_error)?;
@@ -446,7 +451,9 @@ async fn jobs_list(app: Arc<App>, req: Request) -> ApiResult {
     for (id, row) in matched {
         jobs.push(Value::Object(row_job(&app, id, row)));
     }
-    Ok(json!({"count": jobs.len(), "jobs": jobs}))
+    let mut result = json!({"count": jobs.len(), "jobs": jobs});
+    app.files.add_file_info(&mut result, "jobs");
+    Ok(result)
 }
 
 async fn job_totals(app: Arc<App>, _req: Request) -> ApiResult {

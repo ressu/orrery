@@ -115,6 +115,12 @@ impl JobQueue {
     }
 }
 
+/// The queue's reply, with `file_info` for its files (docs/design/2026-11-27-file-info.md).
+fn with_file_info(app: &App, mut status: Value) -> Value {
+    app.files.add_file_info(&mut status, "queued_jobs");
+    status
+}
+
 fn job_list(st: &State) -> Value {
     let now = now();
     Value::Array(st.jobs.iter().map(|j| j.as_dict(now)).collect())
@@ -138,8 +144,11 @@ pub fn start(app: &Arc<App>) {
     if let Some(mut rx) = app.job_queue.notify_rx.lock().expect("job queue lock").take() {
         let app = app.clone();
         tokio::spawn(async move {
-            while let Some((at, params)) = rx.recv().await {
+            while let Some((at, mut params)) = rx.recv().await {
                 tokio::time::sleep_until(at).await;
+                if params["updated_queue"].is_array() {
+                    app.files.add_file_info(&mut params, "updated_queue");
+                }
                 app.notify("job_queue_changed", vec![params]);
             }
         });
@@ -359,21 +368,21 @@ async fn job_request(app: Arc<App>, req: Request) -> ApiResult {
         }
         RequestType::Get => return Err(ApiError::bad_request("Invalid request type: GET")),
     }
-    Ok(app.job_queue.status())
+    Ok(with_file_info(&app, app.job_queue.status()))
 }
 
 async fn pause_request(app: Arc<App>) -> ApiResult {
     pause_queue(app.clone()).await;
-    Ok(app.job_queue.status())
+    Ok(with_file_info(&app, app.job_queue.status()))
 }
 
 async fn start_request(app: Arc<App>) -> ApiResult {
     start_queue(app.clone()).await;
-    Ok(app.job_queue.status())
+    Ok(with_file_info(&app, app.job_queue.status()))
 }
 
 async fn status_request(app: Arc<App>) -> ApiResult {
-    Ok(app.job_queue.status())
+    Ok(with_file_info(&app, app.job_queue.status()))
 }
 
 async fn jump(app: Arc<App>, req: Request) -> ApiResult {
@@ -387,7 +396,7 @@ async fn jump(app: Arc<App>, req: Request) -> ApiResult {
     let job = st.jobs.remove(pos);
     st.jobs.insert(0, job);
     drop(st);
-    Ok(q.status())
+    Ok(with_file_info(&app, q.status()))
 }
 
 /// Stops a pending job start when orrery exits.

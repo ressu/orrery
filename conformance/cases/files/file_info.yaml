@@ -1,0 +1,69 @@
+name: each file says whether Orrery prints it, as which format, and what a download gives
+description: >
+  orrery only (docs/design/2026-11-27-file-info.md). file_info is on each file in metadata, in
+  a change's item, and in listings that ask for it, so a client doesn't go by the file's
+  extension. The file's URL resolves against the API's base URL, and each stream's against the
+  file's; a stream's name is what content= takes, thumbnails too.
+targets: [orrery]
+transports: [ws]
+steps:
+  # The upload's reply has the block, with the thumbnails already read.
+  - upload: cube.bgcode
+    fixture: prusaslicer_cube.bgcode
+    expect:
+      item:
+        path: cube.bgcode
+        file_info:
+          printable: true
+          format: bgcode
+          url: server/files/gcodes/cube.bgcode
+          content:
+            - {kind: gcode, name: gcode, url: "?content=gcode"}
+            - {kind: original, name: original, url: "?content=original"}
+            - {kind: thumbnail, name: thumbnail-32x18, width: 32, height: 18, size: $type:number, url: "?content=thumbnail-32x18"}
+            - {kind: thumbnail, name: thumbnail-16x16, width: 16, height: 16, size: $type:number, url: "?content=thumbnail-16x16"}
+            - {kind: thumbnail, name: thumbnail-48x27, width: 48, height: 27, size: $type:number, url: "?content=thumbnail-48x27"}
+  - download: gcodes/cube.bgcode?content=thumbnail-48x27
+    expect_content_type: image/png
+    expect_filename: cube.bgcode-48x27.png
+  - call: server.files.metadata
+    params: {filename: cube.bgcode}
+    expect: {file_info: {printable: true, format: bgcode}}
+  # A name with a space and a folder: each part of the URL is percent-encoded.
+  - upload: my cube.gcode
+    fixture: plain.gcode
+    form: {path: a b}
+    expect: {item: {file_info: {printable: true, format: gcode, url: server/files/gcodes/a%20b/my%20cube.gcode, content: [{name: gcode, url: "?content=gcode"}, {name: original}]}}}
+  # A .ufp is in Moonraker's gcode extensions, but its format is the reader's.
+  - upload: cube.ufp
+    fixture: cura_cube.ufp
+    expect: {item: {file_info: {printable: true, format: ufp}}}
+  # A file Orrery can't print gives only itself, and content=gcode is refused.
+  - upload: notes.txt
+    content: "hello\n"
+    expect: {item: {file_info: {printable: false, format: $absent, content: [{kind: original, name: original}]}}}
+  - download: gcodes/notes.txt?content=gcode
+    expect_status: 400
+  - download: gcodes/notes.txt
+    expect_body: "hello\n"
+  # A binary gcode copied in that can't be read: not printable, with the reason, then and in
+  # listings.
+  - disk: [{write: gcodes/broken.bgcode, content: "G28\n"}]
+  - expect_notification: notify_filelist_changed
+    match: [{action: create_file, item: {path: broken.bgcode, file_info: {printable: false, format: bgcode, reason: "it isn't a binary gcode file"}}}]
+    within_ms: 10000
+  # Listings have it only when asked: in a long folder it's much of the reply.
+  - call: server.files.get_directory
+    params: {path: gcodes, extended: true, file_info: true}
+    expect:
+      files: {$contains: [{filename: broken.bgcode, file_info: {printable: false, reason: "it isn't a binary gcode file", content: [{name: original}]}}]}
+  - call: server.files.get_directory
+    params: {path: gcodes, extended: true}
+    expect:
+      files: {$contains: [{filename: cube.bgcode, estimated_time: $type:number, file_info: $absent}]}
+  - call: server.files.list
+    params: {root: gcodes, file_info: true}
+    expect: {$contains: [{path: cube.bgcode, file_info: {printable: true, format: bgcode}}]}
+  - call: server.files.list
+    params: {root: gcodes}
+    expect: {$contains: [{path: cube.bgcode, file_info: $absent}]}

@@ -122,6 +122,21 @@ filed, add its link; when it's fixed upstream, remove the entry.
   removing it.
 - **Upstream:** not filed yet.
 
+### fluidd-extensions: Fluidd decides from the extension which files can be printed
+
+- **Frontend:** Fluidd 1.37.5, from its source, 2026-11-27; seen on bluev2 with a `.gcode.3mf`.
+- **What happens:** a sliced 3MF (`cube.gcode.3mf`) or a binary gcode (`cube.bgcode`) has no
+  Print button, and right after an upload it shows no thumbnail or details until a reload.
+- **Cause:** Fluidd's list of printable extensions is fixed, `.gcode .g .gc .gco .ufp .nc`
+  (`src/store/files/getters.ts:136`), and it takes the part of the name after the last dot
+  (`src/store/files/getters.ts:75`). It asks for a new file's metadata only for those
+  (`src/store/files/actions.ts:116`). Orrery prints more formats, and `orrery.toml` can add
+  readers.
+- **Fix:** use the file's `file_info` (`docs/design/2026-11-27-file-info.md`): `printable`
+  for the Print button and for asking for metadata, and the streams' URLs for thumbnails and
+  downloads. Keep the extension list for servers that don't send `file_info`.
+- **Upstream:** not filed yet.
+
 ### fluidd-viewer: Fluidd offers a viewer actions it can't take
 
 - **Frontend:** Fluidd 1.38.1, with orrery on bluev2, 2026-11-21.

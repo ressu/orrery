@@ -13,6 +13,7 @@ use anyhow::{Context, Result};
 use serde_json::{Map, Value, json};
 
 use crate::case::{Case, Transport};
+use crate::matcher::ADDITIONS;
 use crate::target::Paths;
 
 pub fn path(paths: &Paths, case: &Case, transport: Transport) -> PathBuf {
@@ -125,7 +126,7 @@ fn diff_at(rec: &Value, act: &Value, path: &str, out: &mut Vec<String>) {
                     None => out.push(format!("{path}.{k}: missing (reference has {})", describe(rv))),
                 }
             }
-            for k in a.keys().filter(|k| !r.contains_key(*k)) {
+            for k in a.keys().filter(|k| !r.contains_key(*k) && !ADDITIONS.contains(&k.as_str())) {
                 out.push(format!("{path}.{k}: not in reference"));
             }
         }

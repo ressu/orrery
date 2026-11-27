@@ -397,11 +397,6 @@ async fn download(
     headers: &HeaderMap,
     head_only: bool,
 ) -> Response {
-    let original = match content {
-        None | Some("gcode") => false,
-        Some("original") => true,
-        Some(other) => return error_response(400, &format!("content: expected gcode or original, got {other:?}")),
-    };
     let (root, full) = match app.files.convert_request_path(request) {
         Ok(p) => p,
         Err(_) => return error_response(404, "Not Found"),
@@ -413,8 +408,18 @@ async fn download(
         return api_error(e);
     }
     let rel = app.files.relative_path(&root, &full);
-    if root == "gcodes"
-        && !original
+    // What `content` may name is what the file's `file_info` lists. Without it, a file that
+    // can be printed gives its gcode, and any other gives itself.
+    let streams = app.files.content_streams(&root, &rel);
+    let want = content.unwrap_or(if streams.printable { "gcode" } else { "original" });
+    let Some(stream) = streams.list.iter().find(|s| s.name == want) else {
+        let names: Vec<&str> = streams.list.iter().map(|s| s.name.as_str()).collect();
+        return error_response(400, &format!("{rel} has no content {want:?}. It has: {}.", names.join(", ")));
+    };
+    if let Some((path, ..)) = &stream.thumbnail {
+        return send_file(path, None, headers, head_only).await;
+    }
+    if stream.kind == "gcode"
         && let Some(reader) = app.files.readers.for_path(&rel)
     {
         // The gcode of `cube.ufp` is saved as `cube.gcode`, the name Moonraker would give it,

@@ -1,0 +1,44 @@
+name: history and the job queue give file_info once for each file they name
+description: >
+  orrery only (docs/design/2026-11-27-file-info.md). A list that names files, where one file can
+  be named many times, has a file_info map keyed by the file's name, next to the list. A file
+  that isn't there any more is printable: false.
+targets: [orrery]
+transports: [ws]
+files:
+  gcodes/a.gcode: "G28\n"
+  gcodes/b.gcode: "G28\n"
+ignore: [result.job.start_time, result.job.end_time, result.jobs.*.start_time, result.jobs.*.end_time]
+steps:
+  - call: server.job_queue.pause
+    expect: {queued_jobs: [], file_info: {$exact: true}}
+  - call: server.job_queue.post_job
+    params: {filenames: [a.gcode, a.gcode, b.gcode]}
+    expect:
+      queued_jobs: [{filename: a.gcode}, {filename: a.gcode}, {filename: b.gcode}]
+      file_info:
+        $exact: true
+        a.gcode: {printable: true, format: gcode, url: server/files/gcodes/a.gcode}
+        b.gcode: {printable: true, format: gcode}
+  - expect_notification: notify_job_queue_changed
+    match: [{action: jobs_added, file_info: {a.gcode: {printable: true}, b.gcode: {printable: true}}}]
+  - call: server.job_queue.status
+    expect: {file_info: {$exact: true, a.gcode: {printable: true}, b.gcode: {printable: true}}}
+  # History: a print of a.gcode, which the notifications and the list carry.
+  - klippy: {update: {print_stats: {state: printing, filename: a.gcode}}}
+  - expect_notification: notify_history_changed
+    match: [{action: added, job: {filename: a.gcode}, file_info: {a.gcode: {printable: true}}}]
+  - klippy: {update: {print_stats: {state: complete, print_duration: 1.0, total_duration: 1.0}}}
+  - call: server.history.list
+    expect:
+      jobs: [{filename: a.gcode}]
+      file_info: {$exact: true, a.gcode: {printable: true, format: gcode}}
+    save: {job: jobs.0.job_id}
+  # Once the file is gone, history says so.
+  - call: server.files.delete_file
+    params: {path: gcodes/a.gcode}
+  - call: server.history.get_job
+    params: {uid: "${job}"}
+    expect:
+      job: {filename: a.gcode, exists: false}
+      file_info: {a.gcode: {$exact: true, printable: false, reason: "the file doesn't exist any more"}}
