@@ -296,6 +296,12 @@ A UFP file is a zip with the gcode at `/3D/model.gcode`, and a picture at
 
 ## Not now
 
+- **Fewer magic names.** `.cache` and `.thumbs` are names with a meaning in the user's own
+  gcodes folder. Each one is a name a user can stumble on, such as a folder of their own called
+  `.cache`, and the more there are, the likelier that is (user, 2026-11-27). Good enough for
+  now. What limits a fix: Klipper prints only files under its gcodes folder, so the gcode it
+  prints has to be in there somewhere; and `.thumbs` is Moonraker's, which clients may expect,
+  though they read each thumbnail's `relative_path`.
 - **An object processor.** preprocess_cancellation is a Python package. Orrery could run it
   when it's installed, or get its own processor later.
 - **klipper_estimator and `[analysis]`.** It fits as a processor, but it isn't in scope.
