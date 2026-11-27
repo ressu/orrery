@@ -1,9 +1,11 @@
 # File tools: converters and processors
 
-**Status (2026-11-27):** decided with the user. The first step is built: the contract,
-`orrery-convert` with UFP, uploads, and the file watcher (`crates/orrery/src/files/convert.rs`,
-`crates/orrery/src/bin/orrery-convert.rs`, the case `files/ufp`). Processors are designed, not
-built. Not yet tried with Cura on a printer.
+**Status (2026-11-27):** a first version is built: `orrery-convert` with UFP, uploads, and the
+file watcher (`crates/orrery/src/files/convert.rs`, `crates/orrery/src/bin/orrery-convert.rs`,
+the case `files/ufp`). Its contract, below, is being redesigned with the user, together with how
+gcode files are stored: [A contract for every tool](#a-contract-for-every-tool) and
+[Storing the original file](#storing-the-original-file) are proposals, with open questions.
+Not yet tried with Cura on a printer.
 
 Orrery gets **tools** for gcode files: programs it runs on one file, which then exit. A
 **converter** turns another format into gcode, such as Cura's `.ufp`. A **processor** changes a
@@ -50,19 +52,107 @@ logged, and the file goes on without it, as in Moonraker. Each tool has a timeou
 appears in the gcodes folder by itself, through the file watcher, goes through the same steps:
 a `.ufp` copied in is converted, and then removed.
 
-## The contract
+## The first version's contract
 
-A tool is a command, run as Orrery's user, in the data folder. Its output goes to Orrery's log.
+Built, and to be replaced by the one below. A converter gets three paths: the file to read, the
+gcode file to write, and a folder where it may write `thumbnail.png`. A processor would get one:
+the gcode file to change. The picture folder is an output too, and it takes one picture of one
+size. Metadata, with several thumbnails, didn't fit (user, 2026-11-27).
 
-- **A converter** gets three arguments: the file to read, the gcode file to write, and a folder
-  for the file's picture. It may write the picture there as `thumbnail.png`, and Orrery moves
-  it to `.thumbs/<name>.png` next to the gcode. It exits with 0 when the gcode is complete.
-- **A processor** gets one argument: the gcode file to change. It exits with 0 when it's done,
-  whether or not it changed anything. It must recognize a file it processed already, as
-  preprocess_cancellation does, since a file can be uploaded again.
+## A contract for every tool
 
-Orrery passes the paths, so a tool never guesses where to write, and never sees the folder
-while a print reads from it.
+Proposal. Converters, processors, and metadata readers are the same kind of program: one file
+in, some results out. They get one contract:
+
+```
+<command> <input> <work folder>
+```
+
+The tool reads `<input>`, which it must not change, writes its files into `<work folder>`, and
+prints one JSON object on standard output that says what it made:
+
+```json
+{
+  "version": 1,
+  "gcode": "model.gcode",
+  "thumbnails": [
+    {"file": "small.png", "width": 32, "height": 32},
+    {"file": "large.png", "width": 300, "height": 300}
+  ],
+  "metadata": {"slicer": "Cura", "slicer_version": "5.6.0", "estimated_time": 930}
+}
+```
+
+- **Every field is optional,** and what a tool must give depends on its kind: a converter and a
+  processor give `gcode`, and a metadata reader gives `metadata`, `thumbnails`, or both. A
+  converter may give the rest too, when its format has them: a UFP has a picture, and
+  PrusaSlicer's binary gcode has thumbnails in several sizes and its own metadata blocks.
+- **Paths are inside the work folder.** Orrery refuses a path that leaves it. Orrery creates the
+  folder and removes it afterwards.
+- **`metadata` uses Moonraker's field names,** as `server.files.metadata` answers them. Orrery
+  keeps the fields it knows and logs the others.
+- **Orrery places the results:** the gcode where it's printed, and thumbnails at
+  `.thumbs/<name>-<width>x<height>.<ext>`, the names its metadata reader uses now. Clients read
+  each thumbnail's `relative_path`, so the names are Orrery's to choose. That replaces the first
+  version's `.thumbs/<name>.png`, which copied Moonraker.
+- **Exit status 0 means the output is complete.** Standard error goes to Orrery's log, and is
+  the reason given when the tool fails.
+- **`version`** lets the contract change later without breaking older tools.
+
+Orrery's own metadata reader is in the server, not a separate program. It returns the same
+result inside Orrery, so a file's metadata comes from one place: a converter's results first,
+then the metadata reader's on the gcode, filling in what's missing.
+
+Moonraker's `metadata.py` works the same way: a separate process, given a file, that prints one
+JSON object (`moonraker/components/file_manager/metadata.py`, `main`).
+
+## Messages
+
+A client cares whether a file is supported, not how. Messages say what's supported and where to
+change it, never "converted" (user, 2026-11-27): "UFP files aren't supported on this printer:
+[converter.ufp] in orrery.toml has enabled = false. See docs/configuration/converters.md." A
+file the tool can't read "can't be printed", with the tool's reason.
+
+## Storing the original file
+
+Proposal (user, 2026-11-27). Orrery keeps the uploaded file as it was, and makes the gcode from
+it when it's needed, if that's cheap, as it is for UFP. The gcode is a cache.
+
+What Klipper allows decides a lot of it. Klipper prints only `.gcode`, `.g`, and `.gco` files
+under its gcodes folder (`klippy/extras/virtual_sdcard.py`, `get_file_list`), and reports the
+name it was given in `print_stats.filename`, which clients compare against file names. It finds
+a file in a hidden folder, such as `.cache`, since it looks through every folder for
+`SDCARD_PRINT_FILE`. There are two ways to do it:
+
+| | A: the original is the file | B: the gcode is the file |
+|---|---|---|
+| Clients list | `cube.ufp` | `cube.gcode` |
+| The original | `gcodes/cube.ufp` | `gcodes/.originals/cube.ufp` |
+| The gcode | `gcodes/.cache/cube.gcode`, made before a print, removed when it's old | `gcodes/cube.gcode`, made when the file arrives |
+| Klipper prints | `.cache/cube.gcode`, and Orrery reports `cube.ufp` in `print_stats`, `virtual_sdcard`, history, and the job queue | `cube.gcode`, as now |
+| `SDCARD_PRINT_FILE FILENAME=cube.ufp` in a macro | Fails: Klipper doesn't know the file | Works with `cube.gcode` |
+| Disk | The original, and the gcode while it's cached | Both, always |
+| Download | The original | The gcode, and the original with a new path |
+
+A matches "store the original" best, and saves the most space. It needs Orrery to translate the
+cached file's name back everywhere Klipper reports it, which is many places for a client to see
+the wrong name, and macros can't start the file by its own name. B keeps everything as now, but
+the gcode is always there, so it isn't on demand.
+
+Metadata needs the gcode either way, so the file is converted once when it arrives. With A, the
+gcode can then be dropped and made again before a print.
+
+## Open questions
+
+1. **The contract:** one `<input> <work folder>`, with the JSON result, for converters,
+   processors, and metadata readers? Or do processors keep changing a file in place?
+2. **Storage:** A, B, or something else? With A, when is a cached gcode removed: after the
+   print, after some days, or when the disk is low?
+3. **Cheap:** which formats are made on demand? UFP is a zip, and fast. A format that's slow to
+   convert, or a processor such as object labels, could be kept as gcode instead. Should a
+   converter say which it is, such as `cache = true`?
+4. **Downloads:** with A, does a download give the original, the gcode, or either, by a
+   parameter?
 
 ## Config
 
