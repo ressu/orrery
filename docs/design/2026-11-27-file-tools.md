@@ -1,15 +1,14 @@
 # File tools: readers and processors
 
-**Status (2026-11-27):** being redesigned with the user. A first version is built, with
-converters: `orrery-convert` with UFP, uploads, and the file watcher
-(`crates/orrery/src/files/convert.rs`, `crates/orrery/src/bin/orrery-convert.rs`, the case
-`files/ufp`). It isn't pushed, and it will be reworked into readers, below. Files are stored
-as uploaded, with the gcode as a cache (A, below). What a download gives is a proposal. Not yet
-tried with Cura on a printer.
+**Status (2026-11-27):** decided with the user, and built for readers: the UFP reader inside
+Orrery, programs as readers, the placing routine, the gcode cache, the name mapping, `content`
+on downloads, and work folders in the data folder (`crates/orrery/src/files/readers.rs`,
+`place.rs`, `work.rs`, `map_printed_names` in `crates/orrery/src/klippy.rs`, and the case
+`files/ufp`). Processors, cache expiry, and thumbnails made on request are designed, not built.
+Not yet tried with Cura on a printer.
 
-Decided so far: readers and processors, with one contract; files stored as uploaded, with the
-gcode as a cache; and a `content` parameter on downloads. Not decided: when cached files expire,
-and which formats are cheap enough to make on demand.
+A first version, with converters and an `orrery-convert` program, was built and replaced before
+it was pushed.
 
 Orrery gets **tools** for files in the gcodes folder. A **reader** knows one format, and tells
 Orrery what to print, what the metadata is, and what the thumbnails are. A **processor**
@@ -147,8 +146,8 @@ don't.
 
 **Work folders are on the data folder's filesystem,** not in `/tmp`, so the hard link and the
 moves into place are renames, not copies. `/tmp` is often in memory on a printer computer, and a
-gcode file can be hundreds of megabytes. Uploads go there today
-(`crates/orrery/src/files/http.rs`, `std::env::temp_dir()`), and would move too.
+gcode file can be hundreds of megabytes. Uploads land there too: `.orrery-work` in the data
+folder, which Orrery empties of what stopped processes left when it starts.
 
 ## Messages
 
