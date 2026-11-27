@@ -317,7 +317,8 @@ async fn run_step(ctx: &mut Ctx, step: &Step, index: usize, result: &mut RunResu
                 other => other.to_string(),
             };
             let headers: Vec<(String, String)> = d.headers.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-            let (status, content_type, body) = ctx.http.download(&path, &headers).await?;
+            let crate::client::Download { status, content_type, filename, body } =
+                ctx.http.download(&path, &headers).await?;
             result.transcript.push(json!({"step": index + 1, "download": d.download, "status": status}));
             if status != d.expect_status {
                 return Err(anyhow!("download {}: expected status {}, got {status}", d.download, d.expect_status));
@@ -326,6 +327,11 @@ async fn run_step(ctx: &mut Ctx, step: &Step, index: usize, result: &mut RunResu
                 && *expected != content_type
             {
                 return Err(anyhow!("download {}: expected Content-Type {expected}, got {content_type}", d.download));
+            }
+            if let Some(expected) = &d.expect_filename
+                && Some(expected) != filename.as_ref()
+            {
+                return Err(anyhow!("download {}: expected the file name {expected}, got {filename:?}", d.download));
             }
             let expected = match (&d.expect_body, &d.expect_fixture) {
                 (Some(text), _) => Some(text.clone().into_bytes()),

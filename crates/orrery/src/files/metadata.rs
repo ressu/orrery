@@ -14,6 +14,8 @@ use anyhow::{Context, Result};
 use regex::Regex;
 use serde_json::{Map, Value, json};
 
+use super::readers::{Output, Thumbnail};
+
 /// Moonraker reads the first and last MiB of a file.
 const READ_SIZE: usize = 1024 * 1024;
 const THUMB_FORMATS: &[&str] = &["png", "jpg", "qoi"];
@@ -133,7 +135,8 @@ fn identify(header: &str) -> (Kind, String, String) {
 
 struct Parser<'a> {
     kind: Kind,
-    path: &'a Path,
+    /// Where the thumbnails are written, for [`super::place`] to put in place.
+    out_dir: &'a Path,
     size: u64,
     data: String,
     header_end: usize,
@@ -204,7 +207,6 @@ impl Parser<'_> {
             };
             put(field, v);
         }
-        put("thumbnails", self.thumbnails().map(Value::Array));
         out
     }
 
@@ -393,20 +395,14 @@ impl Parser<'_> {
         (!weights.is_empty()).then_some(weights)
     }
 
-    /// Writes the embedded thumbnails to `.thumbs` next to the file, and makes a 32x32 one if
-    /// the slicer didn't.
-    fn thumbnails(&self) -> Option<Vec<Value>> {
+    /// Writes the embedded thumbnails to the work folder, and makes a 32x32 one if the slicer
+    /// didn't. They're listed with the smallest first, as Moonraker lists them.
+    fn thumbnails(&self) -> Vec<Thumbnail> {
         if matches!(self.kind, Kind::Slic3r | Kind::Slic3rPe) {
-            return None;
+            return Vec::new();
         }
-        let dir = self.path.parent()?.join(".thumbs");
-        if !dir.exists() && fs::create_dir(&dir).is_err() {
-            tracing::info!("Unable to create thumb dir: {}", dir.display());
-            return None;
-        }
-        let base = self.path.file_stem()?.to_string_lossy().into_owned();
-        let mut found: Vec<(i64, i64, u64, String)> = Vec::new();
-        for (tag, body) in thumbnail_blocks(&self.data) {
+        let mut found: Vec<(Thumbnail, u64)> = Vec::new();
+        for (n, (tag, body)) in thumbnail_blocks(&self.data).into_iter().enumerate() {
             let ext = tag.split_once('_').map(|(_, e)| e.to_lowercase()).unwrap_or_else(|| "png".into());
             if !THUMB_FORMATS.contains(&ext.as_str()) {
                 tracing::info!("Unsupported thumbnail extension: {ext}");
@@ -420,9 +416,10 @@ impl Parser<'_> {
                 tracing::info!("MetadataError: Error parsing thumbnail header: {}", lines[0]);
                 continue;
             }
+            let (Ok(width), Ok(height)) = (u32::try_from(info[0]), u32::try_from(info[1])) else { continue };
             let dest_ext = if ext == "qoi" { "png" } else { ext.as_str() };
-            let name = format!("{base}-{}x{}.{dest_ext}", info[0], info[1]);
-            let path = dir.join(&name);
+            let file = format!("thumbnail-{n}.{dest_ext}");
+            let path = self.out_dir.join(&file);
             let Ok(bytes) = base64_decode(&data) else { continue };
             let written = if dest_ext != ext {
                 image::load_from_memory(&bytes).ok().and_then(|im| im.save(&path).ok())
@@ -433,29 +430,17 @@ impl Parser<'_> {
                 continue;
             }
             let size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-            found.push((info[0], info[1], size, format!(".thumbs/{name}")));
+            found.push((Thumbnail { file, width, height }, size));
         }
-        if found.is_empty() {
-            return None;
-        }
-        if !found.iter().any(|t| t.0 == 32 && t.1 == 32) {
-            let largest = found.iter().reduce(|a, b| if b.2 > a.2 { b } else { a }).expect("not empty");
-            let source = dir.join(largest.3.trim_start_matches(".thumbs/"));
-            let small = dir.join(format!("{base}-32x32.png"));
-            match make_miniature(&source, &small) {
-                Ok((w, h)) => {
-                    let size = fs::metadata(&small).map(|m| m.len()).unwrap_or(0);
-                    found.insert(0, (w as i64, h as i64, size, format!(".thumbs/{base}-32x32.png")));
-                }
+        if !found.is_empty() && !found.iter().any(|(t, _)| t.width == 32 && t.height == 32) {
+            let largest = found.iter().reduce(|a, b| if b.1 > a.1 { b } else { a }).expect("not empty");
+            let source = self.out_dir.join(&largest.0.file);
+            match make_miniature(&source, &self.out_dir.join("small.png")) {
+                Ok((width, height)) => found.insert(0, (Thumbnail { file: "small.png".into(), width, height }, 0)),
                 Err(e) => tracing::info!("{e}"),
             }
         }
-        Some(
-            found
-                .into_iter()
-                .map(|(w, h, size, rel)| json!({"width": w, "height": h, "size": size, "relative_path": rel}))
-                .collect(),
-        )
+        found.into_iter().map(|(t, _)| t).collect()
     }
 }
 
@@ -509,7 +494,7 @@ fn base64_decode(text: &str) -> Result<Vec<u8>> {
 }
 
 /// Scales an image to fit in 32x32, keeping its shape, as Pillow's `thumbnail` does.
-fn make_miniature(source: &Path, dest: &Path) -> Result<(u32, u32)> {
+pub(super) fn make_miniature(source: &Path, dest: &Path) -> Result<(u32, u32)> {
     let im = image::open(source).with_context(|| format!("can't read thumbnail {}", source.display()))?;
     let (w, h) = (im.width(), im.height());
     let (nw, nh) = if w <= 32 && h <= 32 {
@@ -524,8 +509,9 @@ fn make_miniature(source: &Path, dest: &Path) -> Result<(u32, u32)> {
     Ok((nw, nh))
 }
 
-/// Reads a gcode file's metadata. Thumbnails are written next to it.
-pub fn extract(path: &Path) -> Result<Map<String, Value>> {
+/// Reads a gcode file's metadata, the gcode reader's part of a file's [`Output`]. Thumbnails
+/// are written to `out_dir`, and listed.
+pub fn extract(path: &Path, out_dir: &Path) -> Result<Output> {
     let mut f = fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let meta = f.metadata()?;
     let size = meta.len();
@@ -545,7 +531,7 @@ pub fn extract(path: &Path) -> Result<Map<String, Value>> {
     let data = header + &tail;
     let header_end = first_chars(&data, READ_SIZE).len();
     let footer_start = data.len() - last_chars(&data, READ_SIZE).len();
-    let mut parser = Parser { kind, path, size, data, header_end, footer_start, layer_height: None };
+    let mut parser = Parser { kind, out_dir, size, data, header_end, footer_start, layer_height: None };
     let modified = meta.modified()?.duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or_default();
     let mut out = Map::new();
     out.insert("size".into(), json!(size));
@@ -555,7 +541,8 @@ pub fn extract(path: &Path) -> Result<Map<String, Value>> {
     out.insert("slicer".into(), json!(name));
     out.insert("slicer_version".into(), json!(version));
     out.extend(parser.run());
-    Ok(out)
+    let thumbnails = parser.thumbnails();
+    Ok(Output { version: Some(super::readers::OUTPUT_VERSION), gcode: None, thumbnails, metadata: out })
 }
 
 #[cfg(test)]
@@ -566,19 +553,18 @@ mod tests {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance/fixtures/files").join(name)
     }
 
-    fn extract_copy(name: &str) -> Map<String, Value> {
+    fn extract_copy(name: &str) -> (Map<String, Value>, Vec<Thumbnail>) {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(name);
-        fs::copy(fixture(name), &path).unwrap();
-        let md = extract(&path).unwrap();
-        // Keep the folder until the thumbnails were checked.
-        std::mem::forget(dir);
-        md
+        let out = extract(&fixture(name), dir.path()).unwrap();
+        for t in &out.thumbnails {
+            assert_eq!(image::image_dimensions(dir.path().join(&t.file)).unwrap(), (t.width, t.height));
+        }
+        (out.metadata, out.thumbnails)
     }
 
     #[test]
     fn prusaslicer() {
-        let md = extract_copy("prusaslicer_cube.gcode");
+        let (md, thumbs) = extract_copy("prusaslicer_cube.gcode");
         assert_eq!(md["slicer"], "PrusaSlicer");
         assert_eq!(md["slicer_version"], "2.7.1+linux-x64-GTK3");
         assert_eq!(md["layer_height"], json!(0.2));
@@ -587,18 +573,17 @@ mod tests {
         assert_eq!(md["filament_total"], json!(1234.56));
         assert_eq!(md["filament_type"], "PLA");
         assert_eq!(md["filament_name"], "Generic PLA");
-        let thumbs = md["thumbnails"].as_array().unwrap();
-        assert_eq!(thumbs.len(), 2);
-        assert_eq!(thumbs[0]["relative_path"], ".thumbs/prusaslicer_cube-32x32.png");
+        let sizes: Vec<(u32, u32)> = thumbs.iter().map(|t| (t.width, t.height)).collect();
+        assert_eq!(sizes, [(32, 32), (300, 300)]);
     }
 
     #[test]
     fn plain() {
-        let md = extract_copy("plain.gcode");
+        let (md, thumbs) = extract_copy("plain.gcode");
         assert_eq!(md["slicer"], "Unknown");
         assert_eq!(md["size"], json!(27));
         assert_eq!(md["object_height"], json!(5.0));
-        assert!(md.get("thumbnails").is_none());
+        assert!(thumbs.is_empty());
         assert!(md.get("gcode_start_byte").is_some());
     }
 

@@ -225,7 +225,7 @@ impl App {
         warnings.extend(action_warnings);
         let compat = crate::compat::MoonrakerCompat::new(&config)?;
         compat.log_settings();
-        let (octoprint, octoprint_warnings) = crate::octoprint::OctoPrint::new(&config)?;
+        let (octoprint, octoprint_warnings) = crate::octoprint::OctoPrint::new(&config, files.readers.reads(".ufp"))?;
         for w in &octoprint_warnings {
             tracing::warn!("{w}");
         }

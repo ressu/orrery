@@ -7,7 +7,10 @@
 
 pub mod http;
 mod metadata;
+pub mod place;
+pub mod readers;
 mod watch;
+pub mod work;
 
 use std::collections::{BTreeMap, HashSet};
 use std::io;
@@ -55,6 +58,8 @@ pub struct FileManager {
     /// Paths the API is changing, for the watcher to leave out.
     own_changes: Mutex<Vec<watch::OwnChange>>,
     next_own_change: AtomicU64,
+    /// `[reader.<name>]`: the formats other than gcode that Orrery prints.
+    pub readers: readers::Readers,
 }
 
 /// The file extension, lowercase and with its dot, as Python's `os.path.splitext` gives it.
@@ -142,10 +147,14 @@ impl FileManager {
             ("backup", paths.data.join("backup"), false),
             ("secrets", paths.data.join("moonraker.secrets"), false),
             ("allowed_services", paths.data.join("moonraker.asvc"), false),
+            // Klipper prints from it; clients reach its files only through the files they're for.
+            ("gcode_cache", paths.gcodes_dir().join(readers::CACHE_DIR), false),
         ]
         .into_iter()
         .map(|(n, p, r)| (n.to_owned(), resolve(&p), r))
         .collect();
+        let readers = readers::Readers::new(config)?;
+        work::clean(&paths.data);
         Ok(Self {
             roots,
             reserved,
@@ -158,7 +167,18 @@ impl FileManager {
             observer_warnings,
             own_changes: Mutex::new(Vec::new()),
             next_own_change: AtomicU64::new(0),
+            readers,
         })
+    }
+
+    /// Whether a file in the gcodes folder can be printed: gcode, or a format a reader reads.
+    pub fn is_printable(&self, name: &str) -> bool {
+        is_gcode(name) || self.readers.reads(&extension(name))
+    }
+
+    /// Where the gcode a reader made for `rel` is kept, for Klipper to print.
+    pub fn cache_path(&self, rel: &str) -> PathBuf {
+        self.gcodes_dir().join(readers::cache_name(rel))
     }
 
     pub fn root_names(&self) -> Vec<&str> {
@@ -326,8 +346,12 @@ impl FileManager {
         })
     }
 
+    /// Removes what was made from each file: its thumbnails, and its cached gcode.
     fn remove_thumbs(&self, records: &[(String, Map<String, Value>)]) {
         for (rel, md) in records {
+            if self.readers.for_path(rel).is_some() {
+                let _ = std::fs::remove_file(self.cache_path(rel));
+            }
             let dir = self.gcodes_dir().join(rel);
             let dir = dir.parent().unwrap_or(self.gcodes_dir());
             for thumb in md.get("thumbnails").and_then(Value::as_array).into_iter().flatten() {
@@ -375,6 +399,8 @@ impl FileManager {
                 })
                 .collect()
         };
+        // Cached gcode is made again when it's needed, under the new name.
+        let _ = std::fs::remove_dir_all(self.gcodes_dir().join(readers::CACHE_DIR).join(prev));
         if !moved.is_empty() {
             self.forget_metadata(db, &moved.iter().map(|m| m.0.clone()).collect::<Vec<_>>());
             for (_, n, v) in moved {
@@ -395,6 +421,8 @@ impl FileManager {
             return false;
         };
         self.forget_metadata(db, &[prev.to_owned()]);
+        // Cached gcode is made again when it's needed, under the new name.
+        let _ = std::fs::remove_file(self.cache_path(prev));
         let gc = self.gcodes_dir();
         let prev_dir = gc.join(prev).parent().map(Path::to_path_buf).unwrap_or_else(|| gc.to_path_buf());
         let new_dir = gc.join(new).parent().map(Path::to_path_buf).unwrap_or_else(|| gc.to_path_buf());
@@ -527,46 +555,124 @@ pub fn start(app: &Arc<App>) {
     watch::start(&app_for_watch);
 }
 
-/// Parses a gcode file's metadata unless the stored copy is still current.
+/// Reads a file's metadata unless the stored copy is still current. A file a reader can't
+/// read gets only its size and times, and the reason is logged.
 pub async fn parse_metadata(app: &Arc<App>, full: &Path) {
+    if let Err(e) = read_file(app, full).await {
+        tracing::info!("Unable to read {}: {e}", app.files.relative_path("gcodes", full));
+    }
+}
+
+/// Reads a printable file in the gcodes folder, with its reader if it has one, and the gcode
+/// reader, then stores what they found. Returns the reader's reason when the file can't be
+/// read, after storing its size and times.
+pub(crate) async fn read_file(app: &Arc<App>, full: &Path) -> Result<(), String> {
     let fm = &app.files;
     let rel = fm.relative_path("gcodes", full);
-    let Ok(info) = fm.path_info(full, "gcodes") else { return };
-    if !is_gcode(&rel) || info.get("size").and_then(Value::as_u64) == Some(0) {
-        return;
+    let Ok(info) = fm.path_info(full, "gcodes") else { return Ok(()) };
+    if !fm.is_printable(&rel) || info.get("size").and_then(Value::as_u64) == Some(0) {
+        return Ok(());
     }
     let _guard = fm.parse_lock.lock().await;
     if fm.has_valid_metadata(&rel, &info) {
-        return;
+        return Ok(());
     }
     // The thumbnails go into `.thumbs` next to the file. Moonraker announces them too, but
     // clients hide that folder.
-    let thumbs = full.parent().map(|p| p.join(".thumbs"));
-    let _own = thumbs.as_deref().map(|t| fm.own_change(&[t]));
-    let path = full.to_path_buf();
-    let mut result = Err(anyhow::anyhow!("not run"));
-    for _ in 0..3 {
-        let p = path.clone();
-        result = tokio::task::spawn_blocking(move || metadata::extract(&p))
-            .await
-            .unwrap_or_else(|e| Err(anyhow::anyhow!("metadata task failed: {e}")));
-        if result.is_ok() {
-            break;
+    let folder = full.parent().unwrap_or(full).to_path_buf();
+    let thumbs = folder.join(".thumbs");
+    let _own = fm.own_change(&[&thumbs]);
+    let mut md = Map::new();
+    md.insert("size".into(), info.get("size").cloned().unwrap_or(json!(0)));
+    md.insert("modified".into(), info.get("modified").cloned().unwrap_or(json!(0)));
+    let result = read_and_place(app, full, &rel, &folder).await;
+    let outcome = match result {
+        Ok(found) => {
+            md.insert("uuid".into(), json!(uuid::Uuid::new_v4().to_string()));
+            md.insert("file_processors".into(), json!([]));
+            md.extend(found);
+            Ok(())
         }
-    }
-    let mut md = match result {
-        Ok(md) => md,
-        Err(e) => {
-            tracing::info!("Unable to extract metadata from file: {rel}: {e:#}");
-            let mut md = Map::new();
-            md.insert("size".into(), info.get("size").cloned().unwrap_or(json!(0)));
-            md.insert("modified".into(), info.get("modified").cloned().unwrap_or(json!(0)));
-            md
-        }
+        Err(e) => Err(e),
     };
     md.insert("print_start_time".into(), Value::Null);
     md.insert("job_id".into(), Value::Null);
     fm.store_metadata(&app.database, &rel, md);
+    outcome
+}
+
+/// Runs the file's reader, if it has one, and the gcode reader on the gcode, and places what
+/// they made. The reader's fields win, and its thumbnails, if it has any.
+async fn read_and_place(app: &Arc<App>, full: &Path, rel: &str, folder: &Path) -> Result<Map<String, Value>, String> {
+    let fm = &app.files;
+    let reader = fm.readers.for_path(rel).cloned();
+    let name = |p: Option<&std::ffi::OsStr>| p.map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    // A gcode file's thumbnails are named as Moonraker names them, `cube-32x32.png`. Another
+    // format's keep its extension, `cube.ufp-32x32.png`, so the two don't meet.
+    let base = if reader.is_some() { name(full.file_name()) } else { name(full.file_stem()) };
+    let mut found = Map::new();
+    let mut thumbnails = Vec::new();
+    let gcode = match &reader {
+        Some(r) => {
+            let work = work::WorkDir::new(&app.paths.data).map_err(|e| format!("can't make a work folder: {e}"))?;
+            let output = r.read(full, &work, &app.paths.data).await?;
+            let cache = fm.cache_path(rel);
+            let placed = place::place(output, &work.dir, Some(&cache), folder, &base)?;
+            found = placed.metadata;
+            thumbnails = placed.thumbnails;
+            cache
+        }
+        None => full.to_path_buf(),
+    };
+    let work = work::WorkDir::new(&app.paths.data).map_err(|e| format!("can't make a work folder: {e}"))?;
+    let mut result = Err("not run".to_owned());
+    for _ in 0..3 {
+        let (g, dir) = (gcode.clone(), work.dir.clone());
+        result = work::low_priority(move || metadata::extract(&g, &dir).map_err(|e| format!("{e:#}")))
+            .await
+            .unwrap_or_else(|| Err("the metadata reader stopped".into()));
+        if result.is_ok() {
+            break;
+        }
+    }
+    let mut output = result?;
+    if !thumbnails.is_empty() {
+        output.thumbnails.clear();
+    }
+    let placed = place::place(output, &work.dir, None, folder, &base)?;
+    for (k, v) in placed.metadata {
+        found.entry(k).or_insert(v);
+    }
+    thumbnails.extend(placed.thumbnails);
+    if !thumbnails.is_empty() {
+        found.insert("thumbnails".into(), Value::Array(thumbnails));
+    }
+    Ok(found)
+}
+
+/// The gcode Klipper prints for a file in the gcodes folder: the file itself, or for a format
+/// a reader reads, its cached gcode, made again if it's gone.
+pub async fn printable_gcode(app: &Arc<App>, rel: &str) -> Result<PathBuf, String> {
+    let fm = &app.files;
+    let full = fm.gcodes_dir().join(rel);
+    let Some(reader) = fm.readers.for_path(rel).cloned() else { return Ok(full) };
+    let cache = fm.cache_path(rel);
+    if cache.is_file() {
+        return Ok(cache);
+    }
+    let _guard = fm.parse_lock.lock().await;
+    if cache.is_file() {
+        return Ok(cache);
+    }
+    let work = work::WorkDir::new(&app.paths.data).map_err(|e| format!("can't make a work folder: {e}"))?;
+    let mut output = reader.read(&full, &work, &app.paths.data).await?;
+    // The thumbnails and metadata are stored already.
+    output.thumbnails.clear();
+    output.metadata.clear();
+    let folder = full.parent().unwrap_or(&full).to_path_buf();
+    place::place(output, &work.dir, Some(&cache), &folder, "")?;
+    tracing::info!("Made the gcode for {rel} again");
+    Ok(cache)
 }
 
 /// Parses every gcode file below `start`. Returns how many it found.
@@ -583,12 +689,11 @@ async fn scan_directory_metadata(app: &Arc<App>, start: &Path) -> usize {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
-                stack.push(path);
-            } else if path.is_file()
-                && path
-                    .extension()
-                    .is_some_and(|e| VALID_GCODE_EXTS.contains(&format!(".{}", e.to_string_lossy()).as_str()))
-            {
+                // Not the cache: its gcode belongs to other files.
+                if app.files.is_reserved(&path, false).is_none() {
+                    stack.push(path);
+                }
+            } else if path.is_file() && app.files.is_printable(&path.to_string_lossy()) {
                 files.push(path);
             }
         }
@@ -652,7 +757,7 @@ async fn after_move(app: &Arc<App>, src_root: &str, dest_root: &str, src: &Path,
     if needs_scan {
         if is_dir {
             scan_directory_metadata(app, dest).await;
-        } else if dest.is_file() && is_gcode(&dest.to_string_lossy()) {
+        } else if dest.is_file() && fm.is_printable(&dest.to_string_lossy()) {
             parse_metadata(app, dest).await;
         }
     }
@@ -662,7 +767,7 @@ async fn after_copy(app: &Arc<App>, root: &str, path: &Path) {
     if root != "gcodes" {
         return;
     }
-    if path.is_file() && is_gcode(&path.to_string_lossy()) {
+    if path.is_file() && app.files.is_printable(&path.to_string_lossy()) {
         parse_metadata(app, path).await;
     } else if path.is_dir() {
         scan_directory_metadata(app, path).await;
@@ -724,7 +829,7 @@ async fn file_list(app: Arc<App>, req: Request) -> ApiResult {
                 continue;
             }
             let name = entry.file_name().to_string_lossy().into_owned();
-            if root == "gcodes" && !is_gcode(&name) {
+            if root == "gcodes" && !fm.is_printable(&name) {
                 continue;
             }
             let rel = path.strip_prefix(&base).map(|p| p.to_string_lossy().into_owned()).unwrap_or(name);
@@ -771,7 +876,7 @@ async fn metascan(app: Arc<App>, req: Request) -> ApiResult {
     if !path.is_file() {
         return Err(ApiError::not_found(format!("File '{filename}' does not exist")));
     }
-    if !path.extension().is_some_and(|e| VALID_GCODE_EXTS.contains(&format!(".{}", e.to_string_lossy()).as_str())) {
+    if !app.files.is_printable(&filename) {
         return Err(ApiError::bad_request(format!("File {} is not a valid gcode file", path.display())));
     }
     app.files.remove_file_metadata(&app.database, &filename);
@@ -836,6 +941,11 @@ fn list_directory(app: &App, path: &Path, root: &str, extended: bool) -> ApiResu
     for entry in std::fs::read_dir(path).map_err(io_error)?.flatten() {
         let full = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
+        // What no client can read, such as the gcode cache, isn't listed: it would only answer
+        // that it's forbidden. Moonraker's reserved paths aren't in the folders clients browse.
+        if fm.is_reserved(&full, false).is_some() {
+            continue;
+        }
         let Ok(mut info) = fm.path_info(&full, root) else { continue };
         if full.is_dir() {
             info.insert("dirname".into(), json!(name));
@@ -843,7 +953,7 @@ fn list_directory(app: &App, path: &Path, root: &str, extended: bool) -> ApiResu
         } else if full.is_file() {
             info.insert("filename".into(), json!(name));
             if root == "gcodes"
-                && is_gcode(&name)
+                && fm.is_printable(&name)
                 && extended
                 && let Some(md) = fm.get_metadata(&fm.relative_path(root, &full))
             {

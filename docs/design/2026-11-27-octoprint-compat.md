@@ -48,7 +48,7 @@ Moonraker. Each path gets a role, as Orrery's own paths do
 | `GET /api/version` | `{"server": "1.5.0", "api": "0.1", "text": "OctoPrint (Orrery <version>)"}` | `viewer` |
 | `GET /api/server` | OctoPrint's version, and `safemode` while Klipper isn't ready | `viewer` |
 | `POST /api/login`, `GET /api/currentuser` | The caller (below) | `viewer` |
-| `GET /api/settings` | No SD card, no webcam, and no UFP plugin (below) | `viewer` |
+| `GET /api/settings` | No SD card, no webcam (below), and the UFP plugin | `viewer` |
 | `GET /api/job` | Only the state, as Moonraker's: `Operational`, `Printing`, `Paused`, `Error`, or `Offline` | `viewer` |
 | `GET /api/printer` | The state, its flags, and the temperatures of the bed and each extruder | `viewer` |
 | `GET /api/printerprofiles` | One default profile, with a heated bed if Klipper has `heater_bed` | `viewer` |
@@ -78,12 +78,11 @@ as everywhere else.
 - **No webcam.** `/api/settings` says the webcam is off, and Moonraker's webcam options are
   ignored, with a warning when one is set (user, 2026-11-27). A client that shows a modern
   printer's webcam uses Moonraker's API.
-- **No UFP plugin.** Moonraker's `enable_ufp`, on by default, says OctoPrint's UFP plugin is
-  installed, and Cura then uploads `.ufp` files. Orrery can't unpack them yet
-  (`docs/regressions.md`, `partial-metadata`), so it doesn't claim the plugin, and Cura uploads
-  plain gcode. `enable_ufp = true`, set in a config, gets a warning in `server.info`. When
-  Orrery unpacks UFP, `enable_ufp` works as in Moonraker. That's a change to uploads, for every
-  client, not to this module.
+- **The UFP plugin, as in Moonraker.** `enable_ufp`, on by default, says OctoPrint's UFP plugin
+  is installed, and Cura then uploads `.ufp` files, which Orrery reads
+  (`2026-11-27-file-tools.md`). With `[reader.ufp] enabled = false`, the plugin isn't
+  reported, and `enable_ufp = true`, set in a config, gets a warning in `server.info`. Until
+  the reader was built, the plugin wasn't reported at all.
 - **A gcode command that fails is logged.** Moonraker logs it too, and answers `{}`, as
   OctoPrint does. Orrery does the same, and each command gets an audit line, as
   `printer.gcode.script` does.
@@ -95,7 +94,7 @@ options:
 
 | Option | Default | What it does |
 |---|---|---|
-| `enable_ufp` | `true` | Whether Orrery says the UFP plugin is installed. Ignored until Orrery unpacks UFP, with a warning when it's `true` |
+| `enable_ufp` | `true` | Whether Orrery says the UFP plugin is installed. Ignored when `[reader.ufp]` is off, with a warning when it's `true` |
 
 Moonraker's webcam options, `flip_h`, `flip_v`, `rotate_90`, `stream_url`, and `webcam_enabled`,
 are ignored, with a warning that names them.

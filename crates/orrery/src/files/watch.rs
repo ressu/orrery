@@ -484,7 +484,9 @@ impl Watcher {
                     self.app.files.is_own_change(src) || self.app.files.is_own_change(path)
                 }
                 Change::RootUpdate { .. } => false,
-                c => self.app.files.is_own_change(c.path()),
+                // What no client can read, such as the gcode cache, isn't listed, so it isn't
+                // announced either.
+                c => self.app.files.is_own_change(c.path()) || self.app.files.is_reserved(c.path(), false).is_some(),
             };
             if !own {
                 let _ = self.announce.send(c);

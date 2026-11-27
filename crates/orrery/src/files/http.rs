@@ -5,7 +5,6 @@
 use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use axum::body::Body;
 use std::net::SocketAddr;
@@ -18,7 +17,7 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
-use super::{changed_event, delete_file, is_gcode, parse_metadata};
+use super::{changed_event, delete_file, parse_metadata};
 use crate::api::ApiError;
 use crate::server::App;
 use crate::web::error_response;
@@ -33,8 +32,6 @@ fn json_response(status: StatusCode, body: &Value) -> Response {
 fn api_error(e: ApiError) -> Response {
     error_response(e.status, &e.message)
 }
-
-static UPLOAD_COUNT: AtomicU64 = AtomicU64::new(0);
 
 /// A temp file that's removed unless it was moved into place.
 struct TempUpload(PathBuf);
@@ -88,8 +85,9 @@ async fn upload_at(
         app.auth.log_refusal(&access, "POST /server/files/upload", &e);
         return api_error(e);
     }
-    let n = UPLOAD_COUNT.fetch_add(1, Ordering::Relaxed);
-    let temp = TempUpload(std::env::temp_dir().join(format!("orrery.upload-{}-{n}.mru", std::process::id())));
+    // In the data folder, so the upload moves into place with a rename (super::work).
+    let temp = TempUpload(super::work::unique(&app.paths.data, "upload"));
+    let _ = std::fs::create_dir_all(super::work::root(&app.paths.data));
     let mut fields: Map<String, Value> = Map::new();
     let mut filename: Option<String> = None;
     let mut digest = Sha256::new();
@@ -202,6 +200,14 @@ async fn finalize_upload(
     if !dir_path.is_empty() {
         name = Path::new(&dir_path).join(&name).to_string_lossy().into_owned();
     }
+    // A file a reader reads, such as `cube.ufp`, is kept as it is.
+    let has_reader = root == "gcodes" && fm.readers.for_path(&name).is_some();
+    if root == "gcodes" && !has_reader && super::extension(&name) == ".ufp" {
+        return Err(ApiError::bad_request(
+            "UFP files aren't supported on this printer: [reader.ufp] in orrery.toml has enabled = false. \
+             See docs/configuration/readers.md.",
+        ));
+    }
     let dest = super::normalize(&root_path.join(&name));
     if !dest.starts_with(&root_path) {
         return Err(ApiError::bad_request(format!("Cannot write to path: {}", dest.display())));
@@ -211,10 +217,7 @@ async fn finalize_upload(
     if !fm.full_access(&root) {
         return Err(ApiError::bad_request(format!("Invalid root request: {root}")));
     }
-    let is_gcode_upload = root == "gcodes" && is_gcode(&name);
-    if super::extension(&name) == ".ufp" {
-        return Err(ApiError::bad_request("UFP uploads aren't supported by orrery yet"));
-    }
+    let is_gcode_upload = root == "gcodes" && fm.is_printable(&name);
     let mut can_start = false;
     if is_gcode_upload {
         match fm.operation_check(app, &dest) {
@@ -239,7 +242,17 @@ async fn finalize_upload(
     if !is_gcode_upload {
         return Ok(changed_event(app, "create_file", &root, &dest, None));
     }
-    parse_metadata(app, &dest).await;
+    if has_reader {
+        // A file its reader can't read isn't kept: it can't be printed.
+        if let Err(e) = super::read_file(app, &dest).await {
+            tracing::info!("The upload {filename} can't be read: {e}");
+            let _ = std::fs::remove_file(&target);
+            super::clear_metadata(app, "gcodes", &dest, false);
+            return Err(ApiError::bad_request(format!("{filename} can't be printed: {e}")));
+        }
+    } else {
+        parse_metadata(app, &dest).await;
+    }
     let mut started = false;
     if start_print && can_start {
         let rel = fm.relative_path("gcodes", &dest);
@@ -316,7 +329,17 @@ fn parse_range(header: &str, size: u64) -> Option<Result<(u64, u64), ()>> {
 
 /// Serves `GET` and `DELETE` on `/server/files/<root>/<path>`. Returns `None` when the path
 /// isn't in a root.
-pub async fn file_request(app: &Arc<App>, method: &Method, path: &str, headers: &HeaderMap) -> Option<Response> {
+/// `content` in the query picks what a download of a file in the gcodes folder gives:
+/// `gcode`, what Klipper prints, or `original`, the file as it was uploaded. Without it, the
+/// gcode. Moonraker ignores it, so a client can send it to either
+/// (docs/design/2026-11-27-file-tools.md).
+pub async fn file_request(
+    app: &Arc<App>,
+    method: &Method,
+    path: &str,
+    query: Option<&str>,
+    headers: &HeaderMap,
+) -> Option<Response> {
     let rest = path.strip_prefix("/server/files/")?;
     let rest = percent_decode_str(rest).decode_utf8_lossy().into_owned();
     // Moonraker serves these two log files at fixed addresses, outside the roots.
@@ -332,7 +355,7 @@ pub async fn file_request(app: &Arc<App>, method: &Method, path: &str, headers: 
         if !path.is_file() {
             return Some(error_response(404, "Not Found"));
         }
-        return Some(send_file(&path, headers, method == Method::HEAD).await);
+        return Some(send_file(&path, None, headers, method == Method::HEAD).await);
     }
     let root = rest.split('/').next().unwrap_or_default();
     app.files.root(root)?;
@@ -345,11 +368,24 @@ pub async fn file_request(app: &Arc<App>, method: &Method, path: &str, headers: 
     if method != Method::GET && method != Method::HEAD {
         return Some(error_response(405, "Method Not Allowed"));
     }
-    Some(download(app, &rest, headers, method == Method::HEAD).await)
+    let content = query.into_iter().flat_map(|q| q.split('&')).find_map(|p| p.strip_prefix("content="));
+    let content = content.map(|c| percent_decode_str(c).decode_utf8_lossy().into_owned());
+    Some(download(app, &rest, content.as_deref(), headers, method == Method::HEAD).await)
 }
 
-async fn download(app: &Arc<App>, request: &str, headers: &HeaderMap, head_only: bool) -> Response {
-    let (_, full) = match app.files.convert_request_path(request) {
+async fn download(
+    app: &Arc<App>,
+    request: &str,
+    content: Option<&str>,
+    headers: &HeaderMap,
+    head_only: bool,
+) -> Response {
+    let original = match content {
+        None | Some("gcode") => false,
+        Some("original") => true,
+        Some(other) => return error_response(400, &format!("content: expected gcode or original, got {other:?}")),
+    };
+    let (root, full) = match app.files.convert_request_path(request) {
         Ok(p) => p,
         Err(_) => return error_response(404, "Not Found"),
     };
@@ -359,11 +395,22 @@ async fn download(app: &Arc<App>, request: &str, headers: &HeaderMap, head_only:
     if let Err(e) = app.files.check_reserved(&full, false) {
         return api_error(e);
     }
-    send_file(&full, headers, head_only).await
+    let rel = app.files.relative_path(&root, &full);
+    if root == "gcodes" && !original && app.files.readers.for_path(&rel).is_some() {
+        // The gcode of `cube.ufp` is saved as `cube.gcode`, the name Moonraker would give it,
+        // since programs go by the extension. The header wins over a link's `download` name.
+        let stem = full.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        return match super::printable_gcode(app, &rel).await {
+            Ok(gcode) => send_file(&gcode, Some(&format!("{stem}.gcode")), headers, head_only).await,
+            Err(e) => error_response(400, &format!("{rel} can't be printed: {e}")),
+        };
+    }
+    send_file(&full, None, headers, head_only).await
 }
 
-/// Streams a file, or the single byte range the request asks for.
-async fn send_file(full: &Path, headers: &HeaderMap, head_only: bool) -> Response {
+/// Streams a file, or the single byte range the request asks for. `name` is what a browser
+/// saves it as, the file's own name without it.
+async fn send_file(full: &Path, name: Option<&str>, headers: &HeaderMap, head_only: bool) -> Response {
     let Ok(mut file) = tokio::fs::File::open(full).await else {
         return error_response(404, "Not Found");
     };
@@ -385,7 +432,7 @@ async fn send_file(full: &Path, headers: &HeaderMap, head_only: bool) -> Respons
         .header(header::CONTENT_TYPE, content_type(full))
         .header(header::CONTENT_LENGTH, end - start)
         .header(header::ACCEPT_RANGES, "bytes")
-        .header(header::CONTENT_DISPOSITION, content_disposition(full));
+        .header(header::CONTENT_DISPOSITION, content_disposition(name.map_or(full, Path::new)));
     if status == StatusCode::PARTIAL_CONTENT {
         builder = builder.header(header::CONTENT_RANGE, format!("bytes {start}-{}/{size}", end - 1));
     }

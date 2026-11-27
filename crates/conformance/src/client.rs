@@ -232,6 +232,15 @@ pub struct Route {
     pub path: Option<String>,
 }
 
+/// A downloaded file, as [`HttpClient::download`] returns it.
+pub struct Download {
+    pub status: u16,
+    pub content_type: String,
+    /// The plain file name in `Content-Disposition`.
+    pub filename: Option<String>,
+    pub body: Vec<u8>,
+}
+
 /// Sends JSON-RPC-style calls as HTTP requests, using the route table dumped from the reference.
 pub struct HttpClient {
     base: String,
@@ -315,8 +324,9 @@ impl HttpClient {
     }
 
     /// Downloads a file. Returns the status and body.
-    /// Returns the status, the `Content-Type` header, and the body.
-    pub async fn download(&self, path: &str, headers: &[(String, String)]) -> Result<(u16, String, Vec<u8>)> {
+    /// Returns the status, the `Content-Type` header, the file name in `Content-Disposition`,
+    /// and the body.
+    pub async fn download(&self, path: &str, headers: &[(String, String)]) -> Result<Download> {
         let url = format!("{}/server/files/{path}", self.base);
         let mut req = self.client.get(url).timeout(CALL_TIMEOUT);
         for (name, value) in headers {
@@ -330,7 +340,14 @@ impl HttpClient {
             .and_then(|h| h.to_str().ok())
             .unwrap_or_default()
             .to_owned();
-        Ok((status, content_type, resp.bytes().await?.to_vec()))
+        // `attachment; filename="cube.gcode"; filename*=UTF-8''cube.gcode`: the plain name.
+        let filename = resp
+            .headers()
+            .get(reqwest::header::CONTENT_DISPOSITION)
+            .and_then(|h| h.to_str().ok())
+            .and_then(|h| h.split(';').find_map(|p| p.trim().strip_prefix("filename=")))
+            .map(|n| n.trim_matches('"').to_owned());
+        Ok(Download { status, content_type, filename, body: resp.bytes().await?.to_vec() })
     }
 
     async fn send(&self, req: reqwest::RequestBuilder) -> Result<Outcome> {

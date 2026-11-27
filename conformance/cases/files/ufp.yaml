@@ -1,0 +1,71 @@
+name: a UFP file is kept as it was, and printed from its gcode
+description: >
+  orrery only. Cura sends UFP files: zips with the gcode and a picture. Moonraker unpacks one
+  into a gcode file and removes it. Orrery keeps cube.ufp, and Klipper prints its gcode from
+  the cache, .cache/cube.ufp.gcode, under the file's own name. See ufp-kept in
+  docs/regressions.md, and docs/design/2026-11-27-file-tools.md.
+targets: [orrery]
+transports: [ws]
+steps:
+  - upload: cube.ufp
+    fixture: cura_cube.ufp
+    expect: {item: {path: cube.ufp, root: gcodes}, action: create_file, print_started: false, print_queued: false}
+  - call: server.files.metadata
+    params: {filename: cube.ufp}
+    retry_ms: 5000
+    expect:
+      filename: cube.ufp
+      slicer: Cura
+      slicer_version: 5.6.0
+      layer_height: 0.2
+      object_height: 2.0
+      estimated_time: 930
+      first_layer_bed_temp: 60
+      first_layer_extr_temp: 215
+      thumbnails:
+        - {width: 32, height: 24, size: $type:number, relative_path: ".thumbs/cube.ufp-32x24.png"}
+        - {width: 64, height: 48, size: $type:number, relative_path: ".thumbs/cube.ufp-64x48.png"}
+  - download: gcodes/.thumbs/cube.ufp-64x48.png
+  # A download gives the gcode, unless it asks for the file as it was. The gcode is saved as
+  # cube.gcode, since programs go by the extension.
+  - download: gcodes/cube.ufp
+    expect_fixture: cura_cube.gcode
+    expect_filename: cube.gcode
+  - download: gcodes/cube.ufp?content=gcode
+    expect_fixture: cura_cube.gcode
+    expect_filename: cube.gcode
+  - download: gcodes/cube.ufp?content=original
+    expect_fixture: cura_cube.ufp
+    expect_filename: cube.ufp
+  - download: gcodes/cube.ufp?content=picture
+    expect_status: 400
+  # Clients reach the cache only through the file it's for.
+  - download: gcodes/.cache/cube.ufp.gcode
+    expect_status: 403
+  - call: server.files.list
+    params: {root: gcodes}
+    expect: [{path: cube.ufp}]
+  # Klipper prints the cached gcode, and reports it under the file's name.
+  - call: printer.print.start
+    params: {filename: cube.ufp}
+  - expect_klippy_request: {method: gcode/script, params: {script: 'SDCARD_PRINT_FILE FILENAME=".cache/cube.ufp.gcode"'}}
+  - klippy: {update: {print_stats: {state: printing, filename: .cache/cube.ufp.gcode}}}
+  - call: printer.objects.query
+    params: {objects: {print_stats: [filename]}}
+    retry_ms: 2000
+    expect: {status: {print_stats: {filename: cube.ufp}}}
+  # One copied in is read too, and announced as it is.
+  - disk: [{write: gcodes/copied.ufp, fixture: cura_cube.ufp}]
+  - expect_notification: notify_filelist_changed
+    match: [{action: create_file, item: {path: copied.ufp, root: gcodes}}]
+    within_ms: 10000
+  - call: server.files.metadata
+    params: {filename: copied.ufp}
+    retry_ms: 5000
+    expect: {filename: copied.ufp, slicer: Cura}
+  # A file that isn't a UFP file isn't kept.
+  - upload: broken.ufp
+    content: "G28\n"
+    expect_error: {code: 400, message: $type:string}
+  - download: gcodes/broken.ufp
+    expect_status: 404

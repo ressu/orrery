@@ -415,7 +415,27 @@ pub async fn register_remote_method(app: &Arc<App>, method: &str) {
     }
 }
 
-fn handle_message(app: &Arc<App>, msg: Value) {
+/// Klipper prints a file a reader reads from the cache, and reports the cache's name. Every
+/// message from Klipper passes here first, so the rest of Orrery, and every client, sees the
+/// file's own name: `print_stats.filename` and `virtual_sdcard.file_path`.
+fn map_printed_names(app: &App, msg: &mut Value) {
+    let status = if msg.get("method").and_then(Value::as_str) == Some("process_status_update") {
+        msg.get_mut("params").and_then(|p| p.get_mut("status"))
+    } else {
+        msg.get_mut("result").and_then(|r| r.get_mut("status"))
+    };
+    let Some(Value::Object(status)) = status else { return };
+    for (object, field) in [("print_stats", "filename"), ("virtual_sdcard", "file_path")] {
+        let Some(value) = status.get_mut(object).and_then(|o| o.get_mut(field)) else { continue };
+        if let Some(name) = value.as_str().and_then(|n| crate::files::readers::file_for_printed(n, &app.files.readers))
+        {
+            *value = Value::String(name);
+        }
+    }
+}
+
+fn handle_message(app: &Arc<App>, mut msg: Value) {
+    map_printed_names(app, &mut msg);
     if let Some(method) = msg.get("method").and_then(Value::as_str) {
         let params = msg.get("params").cloned().unwrap_or_default();
         match method {
@@ -654,7 +674,18 @@ async fn print_start(app: Arc<App>, req: Request) -> ApiResult {
 
 /// Starts printing a file from the gcodes folder.
 pub async fn start_print(app: &Arc<App>, filename: &str) -> ApiResult {
-    let name = filename.strip_prefix('/').unwrap_or(filename).replace('"', "\\\"");
+    let filename = filename.strip_prefix('/').unwrap_or(filename);
+    // A format a reader reads is printed from its cached gcode, which Klipper reports under
+    // the file's own name (map_printed_names).
+    let printed = if app.files.readers.for_path(filename).is_some() {
+        crate::files::printable_gcode(app, filename)
+            .await
+            .map_err(|e| ApiError::bad_request(format!("{filename} can't be printed: {e}")))?;
+        crate::files::readers::cache_name(filename)
+    } else {
+        filename.to_owned()
+    };
+    let name = printed.replace('"', "\\\"");
     tracing::info!("Requesting Job Start, filename = {name}");
     let result = run_gcode(app, &format!("SDCARD_PRINT_FILE FILENAME=\"{name}\"")).await;
     // Every client is trusted until orrery has authorization.

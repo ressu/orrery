@@ -47,6 +47,12 @@ with that network's role.
 
 Moonraker lets any client with access use every path. In Orrery, each path needs a role.
 
+Cura's plugin hears that OctoPrint's UFP plugin is installed, as with Moonraker, and sends UFP
+files, which Orrery prints, with their picture as the thumbnail. See
+[Readers](readers.md). UFP files follow their reader, as every format does: to have Cura send
+gcode instead, turn the reader off with `[reader.ufp]` `enabled = false` in `orrery.toml`.
+Moonraker's `enable_ufp` is ignored, with a warning when it asks for the other.
+
 ## How it differs from Moonraker
 
 - **The version says Orrery.** `/api/version` answers `OctoPrint (Orrery <version>)`, where
@@ -58,5 +64,3 @@ Moonraker lets any client with access use every path. In Orrery, each path needs
 - **No webcam.** `/api/settings` reports the webcam as off. A client that shows the printer's
   webcam uses Moonraker's API instead. Moonraker's webcam options, `flip_h`, `flip_v`,
   `rotate_90`, `stream_url`, and `webcam_enabled`, are ignored, with a warning.
-- **No UFP.** Orrery can't unpack UFP files yet, so it doesn't tell Cura that it can, and Cura
-  uploads gcode. `enable_ufp = true` is ignored, with a warning.

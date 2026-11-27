@@ -10,8 +10,12 @@ Fluidd and Mainsail link to the release page on GitHub, which shows the same not
 
 - OctoPrint's API, with `[octoprint_compat]`, as in Moonraker: PrusaSlicer, OrcaSlicer, and
   Cura's OctoPrint plugin can upload and print again. It says it's Orrery, and reports no
-  webcam and no UFP plugin, so Cura uploads gcode. See
-  [OctoPrint's API](docs/configuration/octoprint.md).
+  webcam. See [OctoPrint's API](docs/configuration/octoprint.md).
+
+- Cura's UFP files can be uploaded, or copied into the gcodes folder, and printed, with their
+  picture as the thumbnail. A UFP file stays as it was, under its own name, where Moonraker
+  turns it into a gcode file. A program can read other formats too, with `[reader.<name>]` in
+  `orrery.toml`. See [Readers](docs/configuration/readers.md).
 
 - `orrery setup` can remove old logs, with `[setup] log_cleanup = true` in `orrery.toml` or
   `setup --log-cleanup`. Once a day, the printer's user then removes the files in

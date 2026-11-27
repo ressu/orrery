@@ -15,9 +15,12 @@ difference the conformance cases check. What's missing here is also the list to 
 - **LDAP logins.** `[ldap]` is ignored, and LDAP users can't log in yet.
 - **Slicer metadata.** Full metadata comes from PrusaSlicer and its forks, Slic3r, BambuStudio,
   and Cura. Files from other slicers get only the size, times, and layer and object heights.
-  No `.ufp` uploads, gcode file processors, or object processing.
-- **OctoPrint's API.** Slicers upload and print through it as before, but it reports no webcam
-  and no UFP plugin, so Cura uploads gcode. See [OctoPrint's API](configuration/octoprint.md).
+  No gcode file processors, or object processing.
+- **OctoPrint's API.** Slicers upload and print through it as before, but it reports no webcam.
+- **UFP files stay UFP files.** Cura's `cube.ufp` is listed and printed as `cube.ufp`, where
+  Moonraker turns it into `cube.gcode`. A macro can't print it. See
+  [Readers](configuration/readers.md).
+  See [OctoPrint's API](configuration/octoprint.md).
 - **File roots.** No `config_examples` or `docs` roots; frontends work without them.
 - **Update manager entries.** No `web`, `zip`, or `python` entries, and no `moonraker` entry:
   Orrery updates itself instead. Debian packages need PackageKit; there's no `sudo apt-get`

@@ -7,7 +7,9 @@
 //! ([`crate::auth`]). The upload is Orrery's own, in [`crate::files::http`].
 //!
 //! It differs from Moonraker's in three ways: the version says Orrery, `/api/currentuser` names
-//! the caller and its role, and there's no webcam and no UFP plugin.
+//! the caller and its role, and there's no webcam. The UFP plugin is reported when Orrery
+//! reads UFP files ([`crate::files::readers`]), as any format follows its reader, so
+//! Moonraker's `enable_ufp` does nothing (user, 2026-11-27).
 
 use std::sync::Arc;
 
@@ -29,13 +31,17 @@ const OCTO_VERSION: &str = "1.5.0";
 /// Moonraker's webcam options, which Orrery doesn't use.
 const WEBCAM_OPTIONS: &[&str] = &["flip_h", "flip_v", "rotate_90", "stream_url", "webcam_enabled"];
 
-/// OctoPrint compatibility, turned on by `[octoprint_compat]`. It has no settings of its own yet.
+/// OctoPrint compatibility, turned on by `[octoprint_compat]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OctoPrint;
+pub struct OctoPrint {
+    /// Whether Cura hears that OctoPrint's UFP plugin is installed, and then sends `.ufp` files.
+    ufp: bool,
+}
 
 impl OctoPrint {
     /// `None` without `[octoprint_compat]`, and warnings for the options Orrery ignores.
-    pub fn new(config: &Config) -> anyhow::Result<(Option<Self>, Vec<String>)> {
+    /// `reads_ufp` is whether Orrery prints `.ufp` files.
+    pub fn new(config: &Config, reads_ufp: bool) -> anyhow::Result<(Option<Self>, Vec<String>)> {
         if config.section_json("octoprint_compat").is_none() {
             return Ok((None, Vec::new()));
         }
@@ -49,12 +55,18 @@ impl OctoPrint {
         }
         section.get_str("stream_url", "/webcam/?action=stream");
         section.get_bool("webcam_enabled", true)?;
-        if section.has("enable_ufp") && ufp {
-            warnings.push(
-                "[octoprint_compat] enable_ufp: Orrery can't unpack UFP files yet, so it doesn't tell Cura that it can. \
-                 Cura uploads gcode instead."
-                    .to_owned(),
-            );
+        // Only when it asks for what doesn't happen: set as Orrery does it anyway, it's harmless.
+        if section.has("enable_ufp") && enable_ufp != reads_ufp {
+            warnings.push(if reads_ufp {
+                "[octoprint_compat] enable_ufp: ignored, so Cura still sends UFP files, which Orrery prints. UFP \
+                 files follow their reader: for gcode from Cura, turn the reader off with [reader.ufp] enabled = \
+                 false in orrery.toml."
+                    .to_owned()
+            } else {
+                "[octoprint_compat] enable_ufp: ignored, since [reader.ufp] in orrery.toml has enabled = false, so \
+                 Orrery doesn't tell Cura that it takes UFP files. Cura uploads gcode instead."
+                    .to_owned()
+            });
         }
         if !set.is_empty() {
             warnings.push(format!(
@@ -63,7 +75,7 @@ impl OctoPrint {
                 if set.len() == 1 { "it's" } else { "they're" }
             ));
         }
-        Ok((Some(Self), warnings))
+        Ok((Some(Self { ufp: reads_ufp }), warnings))
     }
 }
 
@@ -131,10 +143,25 @@ fn user_json(access: &crate::auth::Access) -> Value {
     })
 }
 
-/// No SD card, no webcam, and no plugins: without UFP, Cura uploads gcode.
-async fn settings(_app: Arc<App>, _req: Request) -> ApiResult {
+/// No SD card and no webcam. The UFP plugin, as Moonraker reports it, has Cura send `.ufp`
+/// files, for their picture.
+async fn settings(app: Arc<App>, _req: Request) -> ApiResult {
+    let plugins = if app.octoprint.as_ref().is_some_and(|o| o.ufp) {
+        json!({"UltimakerFormatPackage": {
+            "align_inline_thumbnail": false,
+            "inline_thumbnail": false,
+            "inline_thumbnail_align_value": "left",
+            "inline_thumbnail_scale_value": "50",
+            "installed": true,
+            "installed_version": "0.2.2",
+            "scale_inline_thumbnail": false,
+            "state_panel_thumbnail": true,
+        }})
+    } else {
+        json!({})
+    };
     Ok(json!({
-        "plugins": {},
+        "plugins": plugins,
         "feature": {"sdSupport": false, "temperatureGraph": false},
         "webcam": {"flipH": false, "flipV": false, "rotate90": false, "streamUrl": "", "webcamEnabled": false},
     }))
@@ -328,17 +355,32 @@ mod tests {
 
     #[test]
     fn the_section_turns_it_on_and_ignored_options_warn() {
-        assert_eq!(OctoPrint::new(&config("[server]\n")).unwrap(), (None, vec![]));
-        assert_eq!(OctoPrint::new(&config("[octoprint_compat]\n")).unwrap(), (Some(OctoPrint), vec![]));
+        assert_eq!(OctoPrint::new(&config("[server]\n"), true).unwrap(), (None, vec![]));
+        assert_eq!(
+            OctoPrint::new(&config("[octoprint_compat]\n"), true).unwrap(),
+            (Some(OctoPrint { ufp: true }), vec![])
+        );
+        // With UFP files turned off, the plugin isn't reported, and asking for it warns.
+        assert_eq!(
+            OctoPrint::new(&config("[octoprint_compat]\n"), false).unwrap(),
+            (Some(OctoPrint { ufp: false }), vec![])
+        );
         let (on, warnings) =
-            OctoPrint::new(&config("[octoprint_compat]\nenable_ufp: True\nstream_url: /cam\nflip_h: True\n")).unwrap();
-        assert!(on.is_some());
+            OctoPrint::new(&config("[octoprint_compat]\nenable_ufp: True\nstream_url: /cam\nflip_h: True\n"), false)
+                .unwrap();
+        assert_eq!(on, Some(OctoPrint { ufp: false }));
         assert_eq!(warnings.len(), 2, "{warnings:?}");
         assert!(warnings[0].contains("enable_ufp"));
         assert!(warnings[1].starts_with("[octoprint_compat] flip_h, stream_url:"), "{}", warnings[1]);
-        // Turning UFP off needs no warning: that's what Orrery does.
-        assert_eq!(OctoPrint::new(&config("[octoprint_compat]\nenable_ufp: False\n")).unwrap().1, Vec::<String>::new());
-        assert!(OctoPrint::new(&config("[octoprint_compat]\nenable_ufp: maybe\n")).is_err());
+        // enable_ufp is ignored: the reader decides, and setting it otherwise warns.
+        let (on, warnings) = OctoPrint::new(&config("[octoprint_compat]\nenable_ufp: False\n"), true).unwrap();
+        assert_eq!(on, Some(OctoPrint { ufp: true }));
+        assert!(warnings[0].contains("[reader.ufp] enabled = false"), "{warnings:?}");
+        assert_eq!(
+            OctoPrint::new(&config("[octoprint_compat]\nenable_ufp: True\n"), true).unwrap(),
+            (Some(OctoPrint { ufp: true }), vec![])
+        );
+        assert!(OctoPrint::new(&config("[octoprint_compat]\nenable_ufp: maybe\n"), true).is_err());
     }
 
     #[test]

@@ -295,7 +295,7 @@ async fn http_request(
                 return error_response(e.status, &e.message);
             }
         }
-        if let Some(resp) = crate::files::http::file_request(&app, &method, uri.path(), &headers).await {
+        if let Some(resp) = crate::files::http::file_request(&app, &method, uri.path(), uri.query(), &headers).await {
             if method == Method::DELETE
                 && let Some(rest) = uri.path().strip_prefix("/server/files/")
             {

@@ -1,6 +1,9 @@
 # File tools: converters and processors
 
-**Status (2026-11-27):** proposal, for the user to review. Nothing is built.
+**Status (2026-11-27):** decided with the user. The first step is built: the contract,
+`orrery-convert` with UFP, uploads, and the file watcher (`crates/orrery/src/files/convert.rs`,
+`crates/orrery/src/bin/orrery-convert.rs`, the case `files/ufp`). Processors are designed, not
+built. Not yet tried with Cura on a printer.
 
 Orrery gets **tools** for gcode files: programs it runs on one file, which then exit. A
 **converter** turns another format into gcode, such as Cura's `.ufp`. A **processor** changes a
@@ -51,8 +54,9 @@ a `.ufp` copied in is converted, and then removed.
 
 A tool is a command, run as Orrery's user, in the data folder. Its output goes to Orrery's log.
 
-- **A converter** gets two arguments: the file to read, and the gcode file to write. It exits
-  with 0 when the gcode is complete.
+- **A converter** gets three arguments: the file to read, the gcode file to write, and a folder
+  for the file's picture. It may write the picture there as `thumbnail.png`, and Orrery moves
+  it to `.thumbs/<name>.png` next to the gcode. It exits with 0 when the gcode is complete.
 - **A processor** gets one argument: the gcode file to change. It exits with 0 when it's done,
   whether or not it changed anything. It must recognize a file it processed already, as
   preprocess_cancellation does, since a file can be uploaded again.
@@ -83,15 +87,17 @@ timeout = 300
   gcodes folder holds other files too, such as `.stl`. The command defaults to
   `orrery-convert <name>`.
 - `[processor.<name>]` takes `command`, `timeout`, and `enabled`.
-- Orrery's own converters, UFP for now, are built in, as its agents are. A table of the same name changes
-  them one option at a time, and `enabled = false` turns one off.
+- Orrery's own converters, UFP for now, are built in, as its agents are. A table of the same
+  name changes them one option at a time, and `enabled = false` turns one off. An upload of a
+  `.ufp` with UFP turned off is refused.
 - `moonraker.conf` has no tools, since Moonraker has no such options.
   `enable_object_processing` turns on the built-in object processor, once there is one.
 
 ## `orrery-convert`
 
 Converters are a program of their own, `orrery-convert`, next to `orrery` (user, 2026-11-27).
-`orrery-convert <format> <input> <output>` converts the formats it has itself, UFP for now.
+`orrery-convert <format> <input> <output> <pictures>` converts the formats it has itself, UFP
+for now.
 For any other format, it runs `orrery-convert-<format>` with the same paths, from its own folder
 first, then from `PATH`, as git runs `git-<command>`. A complex converter, in any language, plugs
 in by that name. A converter by any other name gets its own `command`.
@@ -105,18 +111,13 @@ and that the naming lets converters be added without changing Orrery.
 ## UFP
 
 A UFP file is a zip with the gcode at `/3D/model.gcode`, and a picture at
-`/Metadata/thumbnail.png`. `orrery-convert ufp <input> <output>` writes the gcode, and puts
-the picture in the gcode's header as a thumbnail block, the way PrusaSlicer writes thumbnails:
+`/Metadata/thumbnail.png`. `orrery-convert ufp <input> <output> <pictures>` writes the gcode,
+and the picture as `thumbnail.png`.
 
-```
-; thumbnail begin 300x300 <length>
-; <base64>
-; thumbnail end
-```
-
-Orrery's metadata already reads those blocks, so the thumbnail shows in Fluidd and Mainsail
-like any other, and the converter writes one file. Moonraker instead writes the picture to
-`.thumbs/<name>.png` and finds it there when it parses a Cura file.
+Orrery puts the picture at `.thumbs/<name>.png`, as Moonraker does, and its metadata finds it
+there for a Cura file, with a 32x32 copy, as Moonraker's does (user, 2026-11-27: good enough for
+now; where pictures go isn't fully explored). Putting it in the gcode's header, as PrusaSlicer
+writes thumbnails, was the other choice.
 
 ## Not now
 
@@ -124,14 +125,13 @@ like any other, and the converter writes one file. Moonraker instead writes the 
   when it's installed, or get its own processor later. Either way, it's a tool.
 - **klipper_estimator and `[analysis]`.** It fits as a processor, but it isn't in scope.
 - **Other formats,** such as PrusaSlicer's binary gcode, once there's a converter for them.
+- **Processors.** They follow the converters' pattern: `orrery-process <name> <file>`, which
+  runs `orrery-process-<name>` for the ones it doesn't have (user, 2026-11-27).
 
-## Open questions
+## Decided
 
-1. **The UFP thumbnail:** in the gcode's header, as above, or as Moonraker does, in
-   `.thumbs/<name>.png`?
-2. **Processors:** the same pattern, `orrery-process` and `orrery-process-<name>`?
-3. **The config:** `[converter.<name>]` and `[processor.<name>]`, or one `[tool.<name>]` with a
-   `kind`?
-4. **The first step:** the contract, the UFP converter, and the file watcher, with processors
-   designed but built with the first processor? Or processors too, so that
-   `enable_object_processing` can run preprocess_cancellation when it's installed?
+- **Programs:** `orrery-convert`, and later `orrery-process`, with git's naming for more. There's
+  no strict need for a separate program: it's for adding converters easily, and may be more than
+  needed (user, 2026-11-27).
+- **Config:** `[converter.<name>]` and `[processor.<name>]`, as a first try. One `[tool.<name>]`
+  table would suit them, but each kind needs too many options of its own (user, 2026-11-27).

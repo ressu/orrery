@@ -333,6 +333,9 @@ pub struct DownloadStep {
     /// The `Content-Type` header to expect.
     #[serde(default)]
     pub expect_content_type: Option<String>,
+    /// The file name to expect in `Content-Disposition`, which browsers save the file as.
+    #[serde(default)]
+    pub expect_filename: Option<String>,
 }
 
 fn default_status() -> u16 {

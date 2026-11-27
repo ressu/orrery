@@ -157,10 +157,26 @@ checks is described there only.
   gcode file processors, and can add object definitions (`enable_object_processing`).
 - **orrery:** reads PrusaSlicer and its forks (SuperSlicer, OrcaSlicer, and others), Slic3r,
   Slic3r PE, BambuStudio, and Cura. A file from another slicer gets only the size, times, first
-  layer height, and object height. orrery refuses `.ufp` uploads, and it has no file processors
-  or object processing.
+  layer height, and object height. orrery reads `.ufp` files, but it has no file processors
+  or object processing yet (docs/design/2026-11-27-file-tools.md).
 - **Why:** these are the slicers most printers use. The others can be ported one at a time.
 - **Cases:** `files/metadata`, `files/metadata_plain`, `files/metascan`.
+
+### ufp-kept: a UFP file stays a UFP file, which a macro can't print
+
+- **Area:** files
+- **Moonraker:** unpacks an uploaded `.ufp` into `cube.gcode`, with its picture, and removes
+  the UFP file. A macro can print it with `SDCARD_PRINT_FILE FILENAME=cube.gcode`.
+- **orrery:** keeps `cube.ufp`, and lists it under that name. Klipper prints its gcode from the
+  cache, `.cache/cube.ufp.gcode`, which orrery reports as `cube.ufp`. There's no `cube.gcode`,
+  so the macro fails, and `SDCARD_PRINT_FILE FILENAME=cube.ufp` does too: Klipper doesn't see
+  the file. Klipper's console shows `File opened:.cache/cube.ufp.gcode`. Fluidd's Download
+  button saves the gcode, as `cube.gcode`, not the UFP file.
+- **Why:** orrery keeps an upload as it was, and makes the gcode from it (user, 2026-11-27).
+  A macro that prints a file by name, not through orrery, is rare enough to leave (user,
+  2026-11-27).
+  See docs/design/2026-11-27-file-tools.md.
+- **Cases:** `files/ufp` (orrery only).
 
 ### log-file: orrery's log is `orrery.log`
 
@@ -217,17 +233,15 @@ checks is described there only.
 - **Why:** there's no true value to give.
 - **Cases:** `machine/system_info`.
 
-### octoprint-partial: OctoPrint's settings report no webcam and no UFP plugin
+### octoprint-partial: OctoPrint's settings report no webcam
 
 - **Area:** API
 - **Moonraker:** `/api/settings` reports a webcam from `[octoprint_compat]`'s `stream_url`,
-  `flip_h`, `flip_v`, `rotate_90`, and `webcam_enabled`, and, with `enable_ufp`, on by default,
-  OctoPrint's UFP plugin, so Cura uploads `.ufp` files.
-- **orrery:** reports the webcam as off, and no plugins, so Cura uploads gcode. The webcam
-  options, and `enable_ufp = true`, are ignored with a warning in `server.info`.
+  `flip_h`, `flip_v`, `rotate_90`, and `webcam_enabled`.
+- **orrery:** reports the webcam as off. The webcam options are ignored with a warning in
+  `server.info`.
 - **Why:** a client that shows a modern printer's webcam uses Moonraker's API (user,
-  2026-11-27), and orrery can't unpack UFP files yet (`partial-metadata`). See
-  docs/design/2026-11-27-octoprint-compat.md.
+  2026-11-27). See docs/design/2026-11-27-octoprint-compat.md.
 - **Cases:** `octoprint/settings`.
 
 ### no-service-control: no systemd_cli or supervisord_cli provider

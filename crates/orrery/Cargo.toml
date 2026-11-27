@@ -24,7 +24,7 @@ pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"] }
 percent-encoding = "2.3.2"
 redb = "4"
 regex.workspace = true
-rustix = { workspace = true, features = ["fs", "param", "rand", "system", "termios", "time"] }
+rustix = { workspace = true, features = ["fs", "param", "rand", "system", "termios", "thread", "time"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

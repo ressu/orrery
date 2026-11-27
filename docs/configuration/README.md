@@ -25,6 +25,7 @@ sudo systemctl restart orrery
 | [Agents](agents.md) | Programs that add features to Orrery, and how Orrery starts them |
 | [Buttons](buttons.md) | Buttons on the printer computer's GPIO lines |
 | [OctoPrint's API](octoprint.md) | Uploading and printing from PrusaSlicer and other slicers |
+| [Readers](readers.md) | Printing Cura's UFP files, and other formats |
 | [Spoolman](spoolman.md) | Connecting Orrery to a Spoolman server |
 | [The update manager](update-manager.md) | Updates for Klipper, Orrery, and other software, from Fluidd and Mainsail |
 
@@ -156,6 +157,7 @@ These work only in `orrery.toml`:
 | `[moonraker_compat]` | [Moonraker compatibility](access.md#moonraker-compatibility) |
 | `[agent.<name>]` | [Agents](agents.md) |
 | `[action.<name>]` | [Actions](actions.md) |
+| `[reader.<name>]` | [Readers](readers.md) |
 | `[setup]` | What `sudo orrery setup` sets up besides the service: [Removing old logs](../install.md#removing-old-logs) |
 
 ## Command-line options
