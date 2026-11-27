@@ -1,0 +1,17 @@
+name: Mobileraker is told a Moonraker version, so it uses the webcam API
+description: >
+  orrery only. Mobileraker reads cameras from Moonraker's webcam API only from v0.8.0-80, and
+  can't parse orrery-v0.2.0 (mobileraker/common/lib/data/repository/webcam_info_repository.dart).
+  [moonraker_compat] moonraker_version, unset, gives v0.9.0-0-orrery-<version> to a client that
+  identifies as Mobileraker-<os>, as Mobileraker does before it asks for server.info, and
+  Orrery's own version to the others.
+targets: [orrery]
+transports: [ws]
+steps:
+  - call: server.info
+    expect: {moonraker_version: "$regex:^orrery-v"}
+  - call: server.connection.identify
+    params: {client_name: Mobileraker-android, version: "2.9.0-1", type: mobile, url: www.mobileraker.com}
+    expect: {connection_id: $type:number}
+  - call: server.info
+    expect: {moonraker_version: "$regex:^v0\\.9\\.0-0-orrery-v[0-9]"}

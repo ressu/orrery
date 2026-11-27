@@ -29,6 +29,11 @@ Fluidd and Mainsail link to the release page on GitHub, which shows the same not
 
 ### Fixed
 
+- Mobileraker shows the printer's cameras again. It uses Moonraker's webcam API only from
+  Moonraker v0.8.0, and it couldn't read Orrery's version, so Orrery now tells it v0.9.0.
+  `[moonraker_compat] moonraker_version` sets the version for every client; see
+  [Moonraker compatibility](docs/configuration/access.md#moonraker-compatibility).
+
 - A macro's `CLEAR_ACTIVE_SPOOL`, as Moonraker's docs write it, clears the active spool again.
   It sends `spool_id=None`, which Orrery refused.
 

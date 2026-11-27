@@ -193,6 +193,7 @@ user_source_fix = true
 service_alias = true
 remote_methods = true
 klipper_shutdown = true
+moonraker_version = "v0.9.0-0-orrery"
 ```
 
 | Option | Default | What it does |
@@ -203,6 +204,12 @@ klipper_shutdown = true
 | `service_alias` | `true` | Makes `sudo orrery setup` make `moonraker.service` another name for Orrery's service |
 | `remote_methods` | `true` | Offers Moonraker's remote methods to Klipper's macros, such as `shutdown_machine`; see [Actions](actions.md#moonrakers-remote-methods) |
 | `klipper_shutdown` | `true` | Runs `shutdown_machine` and `reboot_machine` from Klipper as an admin, as Moonraker does. With `false`, Klipper's macros can't shut down or reboot the printer's computer |
+| `moonraker_version` | Unset: Mobileraker's only | The Moonraker version `server.info` reports. Unset, Mobileraker gets `v0.9.0-0-orrery-` and Orrery's version, and other clients get Orrery's version, such as `orrery-v0.2.0`. Set, every client gets it as written. With `false`, every client gets Orrery's version |
+
+Mobileraker shows the cameras only when it thinks Moonraker is v0.8.0 or later, and it can't
+read Orrery's own version. It identifies itself as `Mobileraker-android` or `Mobileraker-ios`,
+so Orrery tells it a Moonraker version. Set `moonraker_version` for another client that checks
+the version.
 
 Without `legacy_api_key`, Moonraker's `enable_api_key` decides whether the `moonraker` key
 exists. In `orrery.toml`, use `legacy_api_key` instead of `enable_api_key`. Once every program

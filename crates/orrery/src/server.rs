@@ -679,7 +679,7 @@ async fn server_info(app: Arc<App>, req: Request) -> ApiResult {
         "registered_directories": app.files.root_names(),
         "warnings": warnings,
         "websocket_count": app.client_count(),
-        "moonraker_version": format!("orrery-{}", orrery_build::VERSION),
+        "moonraker_version": app.compat.moonraker_version(req.conn.and_then(|c| app.client_name(c)).as_deref()),
         "missing_klippy_requirements": app.klippy.missing_requirements(),
         "api_version": API_VERSION,
         "api_version_string": API_VERSION.map(|v| v.to_string()).join("."),

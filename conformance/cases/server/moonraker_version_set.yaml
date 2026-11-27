@@ -1,0 +1,13 @@
+name: a moonraker_version that's set goes to every client
+description: >
+  orrery only. [moonraker_compat] moonraker_version, set, is what server.info reports to every
+  client, as written.
+targets: [orrery]
+transports: [ws]
+files:
+  config/orrery.toml: |
+    [moonraker_compat]
+    moonraker_version = "v0.11.0-0-gabcdef0"
+steps:
+  - call: server.info
+    expect: {moonraker_version: v0.11.0-0-gabcdef0}

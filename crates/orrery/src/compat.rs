@@ -10,6 +10,7 @@
 //! service_alias = true      # `orrery setup` makes moonraker.service a name for orrery.service
 //! remote_methods = true     # Moonraker's remote methods for Klipper's macros, as actions
 //! klipper_shutdown = true   # shutdown_machine and reboot_machine run as admin from Klipper
+//! moonraker_version = "v0.9.0"  # every client's moonraker_version; unset: Mobileraker's only
 //! ```
 //!
 //! OctoPrint's compatibility will get a section of its own.
@@ -27,6 +28,24 @@ pub const LOCAL_SOURCE: &str = "local";
 /// password (`fluidd/src/components/settings/auth/AuthSettings.vue:61`).
 const MOONRAKER_SOURCE: &str = "moonraker";
 
+/// The Moonraker version Orrery tells Mobileraker it is. Mobileraker reads cameras from
+/// Moonraker's webcam API only from v0.8.0-80, and reads `orrery-v0.2.0` as 0.0.0
+/// (`mobileraker/common/lib/data/repository/webcam_info_repository.dart`). Orrery's own
+/// version follows, so Mobileraker's parser keeps the first three parts (user, 2026-11-27).
+const MOBILERAKER_VERSION: &str = "v0.9.0-0-orrery";
+
+/// What `server.info` reports as `moonraker_version`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ReportedVersion {
+    /// Orrery's own version to every client.
+    Orrery,
+    /// A Moonraker version to Mobileraker, which identifies as `Mobileraker-<os>`, and
+    /// Orrery's own to the others.
+    Mobileraker,
+    /// This, as written, to every client.
+    Always(String),
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct MoonrakerCompat {
     pub enabled: bool,
@@ -43,6 +62,8 @@ pub struct MoonrakerCompat {
     /// `shutdown_machine` and `reboot_machine` from Klipper run as `admin`, as in Moonraker,
     /// where any macro may call them.
     pub klipper_shutdown: bool,
+    /// The `moonraker_version` that `server.info` reports.
+    pub moonraker_version: ReportedVersion,
 }
 
 impl MoonrakerCompat {
@@ -67,6 +88,7 @@ impl MoonrakerCompat {
                 service_alias: false,
                 remote_methods: false,
                 klipper_shutdown: false,
+                moonraker_version: ReportedVersion::Orrery,
             });
         }
         let api_key = match table.as_ref().and_then(|t| t.get("legacy_api_key")) {
@@ -89,7 +111,17 @@ impl MoonrakerCompat {
             Some(Value::Bool(on)) => Ok(*on),
             Some(other) => Err(anyhow::anyhow!("[moonraker_compat] {key}: {other} isn't true or false")),
         };
+        let moonraker_version = match table.as_ref().and_then(|t| t.get("moonraker_version")) {
+            None | Some(Value::Bool(true)) => ReportedVersion::Mobileraker,
+            Some(Value::Bool(false)) => ReportedVersion::Orrery,
+            Some(Value::String(v)) if !v.trim().is_empty() => ReportedVersion::Always(v.clone()),
+            Some(other) => bail!(
+                "[moonraker_compat] moonraker_version: {other} isn't a version. Use one such as \"v0.9.0-0-orrery\", \
+                 or false for Orrery's own"
+            ),
+        };
         Ok(Self {
+            moonraker_version,
             enabled,
             api_key,
             user_source_fix: flag("user_source_fix")?,
@@ -97,6 +129,19 @@ impl MoonrakerCompat {
             remote_methods: flag("remote_methods")?,
             klipper_shutdown: flag("klipper_shutdown")?,
         })
+    }
+
+    /// `server.info`'s `moonraker_version` for a client that identified as `client` in
+    /// `server.connection.identify`.
+    pub fn moonraker_version(&self, client: Option<&str>) -> String {
+        let own = || format!("orrery-{}", orrery_build::VERSION);
+        match &self.moonraker_version {
+            ReportedVersion::Always(v) => v.clone(),
+            ReportedVersion::Mobileraker if client.is_some_and(is_mobileraker) => {
+                format!("{MOBILERAKER_VERSION}-{}", orrery_build::VERSION)
+            }
+            _ => own(),
+        }
     }
 
     /// The name of a user's source in Moonraker's replies.
@@ -124,6 +169,12 @@ impl MoonrakerCompat {
             self.source_name(LOCAL_SOURCE)
         );
     }
+}
+
+/// Mobileraker's app names itself `Mobileraker-android`, `Mobileraker-ios`, and so on
+/// (`mobileraker/common/lib/network/json_rpc_client.dart`).
+fn is_mobileraker(client: &str) -> bool {
+    client.get(..11).is_some_and(|p| p.eq_ignore_ascii_case("mobileraker"))
 }
 
 #[cfg(test)]
@@ -164,11 +215,34 @@ mod tests {
         assert!(compat(Some(""), "").unwrap().service_alias);
         assert!(!compat(Some(""), "[moonraker_compat]\nservice_alias = false\n").unwrap().service_alias);
         assert_eq!(compat(Some(""), "").unwrap().source_name(LOCAL_SOURCE), "moonraker");
+        // Mobileraker gets a Moonraker version, unless one is set for everyone, or none.
+        let own = format!("orrery-{}", orrery_build::VERSION);
+        let c = compat(Some(""), "").unwrap();
+        assert_eq!(
+            c.moonraker_version(Some("Mobileraker-android")),
+            format!("v0.9.0-0-orrery-{}", orrery_build::VERSION)
+        );
+        assert_eq!((c.moonraker_version(Some("Fluidd")), c.moonraker_version(None)), (own.clone(), own.clone()));
+        let c = compat(Some(""), "[moonraker_compat]\nmoonraker_version = \"v0.11.0-0-g1\"\n").unwrap();
+        assert_eq!(
+            (c.moonraker_version(Some("Fluidd")), c.moonraker_version(None)),
+            ("v0.11.0-0-g1".into(), "v0.11.0-0-g1".into())
+        );
+        let c = compat(Some(""), "[moonraker_compat]\nmoonraker_version = false\n").unwrap();
+        assert_eq!(c.moonraker_version(Some("Mobileraker-ios")), own);
+        assert_eq!(
+            compat(Some(""), "[moonraker_compat]\nenabled = false\n")
+                .unwrap()
+                .moonraker_version(Some("Mobileraker-ios")),
+            own
+        );
         for bad in [
             "[moonraker_compat]\nlegacy_api_key = \"owner\"\n",
             "[moonraker_compat]\nlegacy_api_key = true\n",
             "[moonraker_compat]\nuser_source_fix = \"moonraker\"\n",
             "[moonraker_compat]\nservice_alias = \"yes\"\n",
+            "[moonraker_compat]\nmoonraker_version = \"\"\n",
+            "[moonraker_compat]\nmoonraker_version = 9\n",
             "[authorization]\nenable_api_key = false\n",
         ] {
             assert!(compat(Some(""), bad).is_err(), "{bad}");
