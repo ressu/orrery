@@ -346,7 +346,8 @@ fn action(app: &App, endpoint: &str, kind: RequestType, args: &Args) -> String {
         ("/printer/restart" | "gcode/restart", _) => Some("restart Klipper".to_owned()),
         ("/printer/firmware_restart" | "gcode/firmware_restart", _) => Some("restart Klipper's firmware".to_owned()),
         ("/printer/emergency_stop" | "emergency_stop", _) => Some("use the emergency stop".to_owned()),
-        ("/printer/gcode/script" | "gcode/script", _) => Some("send gcode".to_owned()),
+        ("/printer/gcode/script" | "gcode/script" | "/api/printer/command", _) => Some("send gcode".to_owned()),
+        ("/api/files/moonraker", _) => Some("start a print".to_owned()),
         ("/printer/print/start", _) => Some("start a print".to_owned()),
         ("/printer/print/pause" | "pause_resume/pause", _) => Some("pause the print".to_owned()),
         ("/printer/print/resume" | "pause_resume/resume", _) => Some("resume the print".to_owned()),
@@ -427,6 +428,17 @@ fn need(app: &App, endpoint: &str, kind: RequestType, args: &Args) -> Need {
         | "/printer/restart"
         | "/printer/firmware_restart" => Operator,
         e if e.starts_with("/server/job_queue/") => Operator,
+        // OctoPrint's paths (docs/design/2026-11-27-octoprint-compat.md). Its upload is
+        // `/server/files/upload`'s, with that path's role.
+        "/api/version"
+        | "/api/server"
+        | "/api/login"
+        | "/api/currentuser"
+        | "/api/settings"
+        | "/api/job"
+        | "/api/printer"
+        | "/api/printerprofiles" => Viewer,
+        "/api/printer/command" | "/api/files/moonraker" => Operator,
         // An agent's own calls. What they reach is the agent's own, or checked again: history
         // fields against the agent's table.
         "/connection/register_remote_method" | "/connection/send_event" => Viewer,

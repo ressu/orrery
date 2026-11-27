@@ -1,0 +1,20 @@
+name: OctoPrint's upload stores the file, and prints it as PrusaSlicer's upload and print does
+config: |
+  [octoprint_compat]
+transports: [http]
+steps:
+  # PrusaSlicer's fields: print, path (empty for the gcodes folder), and file.
+  - upload: cube.gcode
+    to: /api/files/local
+    fixture: plain.gcode
+    form: {print: "false", path: ""}
+    expect: {action: create_file, print_started: false, print_queued: false, item: {root: gcodes, path: cube.gcode}}
+  - upload: cube.gcode
+    to: /api/files/local
+    fixture: plain.gcode
+    form: {print: "true", path: "prints"}
+    expect: {print_started: true, item: {path: prints/cube.gcode}}
+  - expect_klippy_request: {method: gcode/script, params: {script: 'SDCARD_PRINT_FILE FILENAME="prints/cube.gcode"'}}
+  - call: server.files.list
+    params: {root: gcodes}
+    expect: {$contains: [{path: cube.gcode}, {path: prints/cube.gcode}]}

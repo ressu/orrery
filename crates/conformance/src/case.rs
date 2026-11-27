@@ -286,8 +286,8 @@ pub struct RawStep {
     pub expect: Option<Value>,
 }
 
-/// Uploads a file with a multipart `POST /server/files/upload`, as frontends do. It goes over
-/// HTTP on both transports.
+/// Uploads a file with a multipart `POST /server/files/upload`, as frontends do, or to `to`. It
+/// goes over HTTP on both transports.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UploadStep {
@@ -302,6 +302,9 @@ pub struct UploadStep {
     /// Other form fields, such as `root`, `path`, `print`, or `checksum`.
     #[serde(default)]
     pub form: Map<String, Value>,
+    /// The path to upload to, such as OctoPrint's `/api/files/local`.
+    #[serde(default = "default_upload_path")]
+    pub to: String,
     #[serde(default)]
     pub expect: Option<Value>,
     #[serde(default)]
@@ -408,4 +411,8 @@ fn load(path: &Path, area: &str) -> Result<Case> {
         bail!("{}: no steps", path.display());
     }
     Ok(case)
+}
+
+fn default_upload_path() -> String {
+    "/server/files/upload".to_owned()
 }

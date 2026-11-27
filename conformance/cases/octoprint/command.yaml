@@ -1,0 +1,10 @@
+name: OctoPrint's gcode commands run one after another
+config: |
+  [octoprint_compat]
+transports: [http]
+steps:
+  - call: octoprint.command
+    http: {verb: POST, path: /api/printer/command, body: {commands: [G28, M105]}}
+    expect: {$exact: true}
+  - expect_klippy_request: {method: gcode/script, params: {script: G28}}
+  - expect_klippy_request: {method: gcode/script, params: {script: M105}}

@@ -1,0 +1,47 @@
+name: OctoPrint's printer, job, and profiles follow Klipper
+config: |
+  [octoprint_compat]
+transports: [http]
+steps:
+  - call: octoprint.printer
+    http: {verb: GET, path: /api/printer}
+    expect:
+      temperature:
+        $exact: true
+        tool0: {$exact: true, actual: $type:number, offset: 0, target: $type:number}
+        bed: {$exact: true, actual: $type:number, offset: 0, target: $type:number}
+      state:
+        text: Operational
+        flags: {operational: true, paused: false, printing: false, cancelling: false, pausing: false, error: false, ready: true, closedOrError: false}
+  - call: octoprint.job
+    http: {verb: GET, path: /api/job}
+    expect:
+      job: {file: {name: null}, estimatedPrintTime: null, filament: {length: null}, user: null}
+      progress: {completion: null, filepos: null, printTime: null, printTimeLeft: null, printTimeOrigin: null}
+      state: Operational
+  - call: octoprint.printerprofiles
+    http: {verb: GET, path: /api/printerprofiles}
+    expect:
+      profiles:
+        _default:
+          id: _default
+          current: true
+          heatedBed: true
+          heatedChamber: false
+          axes: {x: {speed: 6000, inverted: false}, e: {speed: 300, inverted: false}}
+  - klippy: {update: {print_stats: {state: printing}}}
+  - call: octoprint.printer
+    http: {verb: GET, path: /api/printer}
+    retry_ms: 2000
+    expect: {state: {text: Printing, flags: {printing: true, ready: false, operational: true}}}
+  - klippy: {update: {print_stats: {state: paused}}}
+  - call: octoprint.job
+    http: {verb: GET, path: /api/job}
+    retry_ms: 2000
+    expect: {state: Paused}
+  # Moonraker calls a cancelled print an error.
+  - klippy: {update: {print_stats: {state: cancelled}}}
+  - call: octoprint.job
+    http: {verb: GET, path: /api/job}
+    retry_ms: 2000
+    expect: {state: Error}

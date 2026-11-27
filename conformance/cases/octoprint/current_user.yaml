@@ -1,0 +1,14 @@
+name: OctoPrint's current user and login answer for a trusted network's admin
+config: |
+  [octoprint_compat]
+transports: [http]
+# Moonraker answers that everyone is "_api", logged in with an API key. Orrery names the caller:
+# on a trusted network, by its own address, logged in as OctoPrint's autologin.
+ignore: [result._login_mechanism]
+steps:
+  - call: octoprint.currentuser
+    http: {verb: GET, path: /api/currentuser}
+    expect: {active: true, user: true, admin: true, apikey: null, permissions: [], groups: [admins, users], name: $type:string}
+  - call: octoprint.login
+    http: {verb: POST, path: /api/login, body: {}}
+    expect: {active: true, admin: true, groups: [admins, users]}

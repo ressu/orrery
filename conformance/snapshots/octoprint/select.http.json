@@ -1,0 +1,69 @@
+[
+  {
+    "step": 1,
+    "call": "upload",
+    "result": {
+      "action": "string",
+      "item": {
+        "modified": "number",
+        "size": "number",
+        "permissions": "string",
+        "path": "string",
+        "root": "string"
+      },
+      "print_started": "bool",
+      "print_queued": "bool"
+    }
+  },
+  {
+    "step": 2,
+    "call": "octoprint.select",
+    "result": "null"
+  },
+  {
+    "step": 3,
+    "call": "octoprint.select",
+    "result": "null"
+  },
+  {
+    "step": 6,
+    "call": "octoprint.select",
+    "result": "null"
+  },
+  {
+    "step": 7,
+    "call": "server.job_queue.status",
+    "result": {
+      "queued_jobs": [
+        {
+          "filename": "string",
+          "job_id": "string",
+          "time_added": "number",
+          "time_in_queue": "number"
+        }
+      ],
+      "queue_state": "string"
+    }
+  },
+  {
+    "step": 8,
+    "call": "octoprint.select",
+    "error": {
+      "code": 400
+    }
+  },
+  {
+    "step": 9,
+    "call": "octoprint.select",
+    "error": {
+      "code": 400
+    }
+  },
+  {
+    "step": 10,
+    "call": "octoprint.select",
+    "error": {
+      "code": 400
+    }
+  }
+]

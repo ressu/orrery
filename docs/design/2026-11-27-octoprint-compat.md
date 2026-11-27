@@ -1,6 +1,8 @@
 # OctoPrint compatibility
 
-**Status (2026-11-27):** proposal. Nothing is built.
+**Status (2026-11-27):** decided with the user, who answered the open questions, and built:
+`crates/orrery/src/octoprint.rs`, with the cases in `conformance/cases/octoprint/`. Not yet
+tried with PrusaSlicer on a printer.
 
 Orrery gets Moonraker's `[octoprint_compat]`: the small part of OctoPrint's API that slicers use
 to send a print. It's built into Orrery (user, 2026-11-27).
@@ -46,7 +48,7 @@ Moonraker. Each path gets a role, as Orrery's own paths do
 | `GET /api/version` | `{"server": "1.5.0", "api": "0.1", "text": "OctoPrint (Orrery <version>)"}` | `viewer` |
 | `GET /api/server` | OctoPrint's version, and `safemode` while Klipper isn't ready | `viewer` |
 | `POST /api/login`, `GET /api/currentuser` | The caller (below) | `viewer` |
-| `GET /api/settings` | No SD card, the webcam from the config, and no UFP plugin (below) | `viewer` |
+| `GET /api/settings` | No SD card, no webcam, and no UFP plugin (below) | `viewer` |
 | `GET /api/job` | Only the state, as Moonraker's: `Operational`, `Printing`, `Paused`, `Error`, or `Offline` | `viewer` |
 | `GET /api/printer` | The state, its flags, and the temperatures of the bed and each extruder | `viewer` |
 | `GET /api/printerprofiles` | One default profile, with a heated bed if Klipper has `heater_bed` | `viewer` |
@@ -65,10 +67,17 @@ as everywhere else.
 
 ### Where it differs
 
+- **The version says Orrery:** `OctoPrint (Orrery <version>)`, not Moonraker's `OctoPrint
+  (Moonraker <version>)` (user, 2026-11-27: honesty is the best policy). PrusaSlicer reads only
+  the start.
 - **`/api/currentuser` and `/api/login` tell the truth.** Moonraker answers that every caller is
-  `_api`, an admin. Orrery names the caller: the user, or the key's name, and `admin: true` only
-  for the `admin` role. PrusaSlicer calls neither. Whether Cura's plugin reads `admin` is still
-  to be checked in its source.
+  `_api`, an admin. Orrery names the caller: the user, the key's name, or on a trusted network,
+  the caller's own address, which tells it nothing it doesn't know (user, 2026-11-27). The
+  answer has `admin: true` only for the `admin` role. PrusaSlicer calls neither. Cura's plugin
+  posts to `/api/login` while it has no user name, so the name is never `null`.
+- **No webcam.** `/api/settings` says the webcam is off, and Moonraker's webcam options are
+  ignored, with a warning when one is set (user, 2026-11-27). A client that shows a modern
+  printer's webcam uses Moonraker's API.
 - **No UFP plugin.** Moonraker's `enable_ufp`, on by default, says OctoPrint's UFP plugin is
   installed, and Cura then uploads `.ufp` files. Orrery can't unpack them yet
   (`docs/regressions.md`, `partial-metadata`), so it doesn't claim the plugin, and Cura uploads
@@ -86,10 +95,10 @@ options:
 
 | Option | Default | What it does |
 |---|---|---|
-| `enable_ufp` | `true` | Whether Orrery says the UFP plugin is installed. Ignored until Orrery unpacks UFP, with a warning when it's set |
-| `flip_h`, `flip_v`, `rotate_90` | `false` | The webcam's picture, as `/api/settings` reports it |
-| `stream_url` | `/webcam/?action=stream` | The webcam's stream |
-| `webcam_enabled` | `true` | Whether `/api/settings` has a webcam |
+| `enable_ufp` | `true` | Whether Orrery says the UFP plugin is installed. Ignored until Orrery unpacks UFP, with a warning when it's `true` |
+
+Moonraker's webcam options, `flip_h`, `flip_v`, `rotate_90`, `stream_url`, and `webcam_enabled`,
+are ignored, with a warning that names them.
 
 ## Tests
 
@@ -99,11 +108,3 @@ options:
   (`2026-11-25-conformance-and-integration-tests.md`).
 - **On a printer:** PrusaSlicer's "Test" and "Upload and print" against bluev2 and pink-0, with
   a key that has `operator`.
-
-## Open questions
-
-1. **`/api/currentuser`:** the truth, as above, or Moonraker's admin `_api`?
-2. **The webcam:** Moonraker's options, as above. Or, the Orrery way, name one of the configured
-   webcams, `webcam = "<name>"`, and take its stream, flips, and rotation from there?
-3. **The version text:** `OctoPrint (Orrery <version>)`, or Moonraker's `OctoPrint (Moonraker
-   <version>)`? PrusaSlicer reads only the start.

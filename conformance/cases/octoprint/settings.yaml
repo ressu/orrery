@@ -1,0 +1,13 @@
+name: OctoPrint's settings say there's no SD card
+config: |
+  [octoprint_compat]
+transports: [http]
+# Moonraker reports the UFP plugin and a webcam. Orrery reports neither.
+known_regression: octoprint-partial
+steps:
+  - call: octoprint.settings
+    http: {verb: GET, path: /api/settings}
+    expect:
+      feature: {sdSupport: false, temperatureGraph: false}
+      plugins: {UltimakerFormatPackage: $any}
+      webcam: {webcamEnabled: true, streamUrl: /webcam/?action=stream}

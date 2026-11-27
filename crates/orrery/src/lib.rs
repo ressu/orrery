@@ -24,6 +24,7 @@ mod keys;
 mod klippy;
 pub mod logfile;
 mod machine;
+mod octoprint;
 pub mod preflight;
 mod proc_stats;
 pub mod server;

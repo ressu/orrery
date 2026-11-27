@@ -8,6 +8,11 @@ Fluidd and Mainsail link to the release page on GitHub, which shows the same not
 
 ### New
 
+- OctoPrint's API, with `[octoprint_compat]`, as in Moonraker: PrusaSlicer, OrcaSlicer, and
+  Cura's OctoPrint plugin can upload and print again. It says it's Orrery, and reports no
+  webcam and no UFP plugin, so Cura uploads gcode. See
+  [OctoPrint's API](docs/configuration/octoprint.md).
+
 - `orrery setup` can remove old logs, with `[setup] log_cleanup = true` in `orrery.toml` or
   `setup --log-cleanup`. Once a day, the printer's user then removes the files in
   `~/printer_data/logs` that nothing has written, read, or renamed for 14 days, whichever

@@ -50,7 +50,32 @@ pub async fn upload(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     axum::extract::RawQuery(query): axum::extract::RawQuery,
+    form: Multipart,
+) -> Response {
+    upload_at(app, peer, headers, query, form, "server/files").await
+}
+
+/// OctoPrint's upload, `POST /api/files/local`: the same upload, with a `Location` where
+/// OctoPrint's clients can start the print (docs/design/2026-11-27-octoprint-compat.md).
+pub async fn octoprint_upload(
+    State(app): State<Arc<App>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    axum::extract::RawQuery(query): axum::extract::RawQuery,
+    form: Multipart,
+) -> Response {
+    upload_at(app, peer, headers, query, form, crate::octoprint::FILES_PREFIX.trim_matches('/')).await
+}
+
+/// An upload, with its `Location` under `location_prefix`, as Moonraker's
+/// `register_upload_handler`.
+async fn upload_at(
+    app: Arc<App>,
+    peer: SocketAddr,
+    headers: HeaderMap,
+    query: Option<String>,
     mut form: Multipart,
+    location_prefix: &str,
 ) -> Response {
     // A client with no rights at all is turned away before it sends the file. The root is
     // checked once its field has arrived.
@@ -144,7 +169,7 @@ pub async fn upload(
     let item = &result["item"];
     if let (Some(root), Some(path)) = (item["root"].as_str(), item["path"].as_str()) {
         let host = headers.get(header::HOST).and_then(|h| h.to_str().ok()).unwrap_or("localhost");
-        let location = format!("http://{host}/server/files/{root}/{}", utf8_percent_encode(path, QUOTE));
+        let location = format!("http://{host}/{location_prefix}/{root}/{}", utf8_percent_encode(path, QUOTE));
         if let Ok(v) = HeaderValue::from_str(&location) {
             resp.headers_mut().insert(header::LOCATION, v);
         }

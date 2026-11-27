@@ -16,6 +16,8 @@ difference the conformance cases check. What's missing here is also the list to 
 - **Slicer metadata.** Full metadata comes from PrusaSlicer and its forks, Slic3r, BambuStudio,
   and Cura. Files from other slicers get only the size, times, and layer and object heights.
   No `.ufp` uploads, gcode file processors, or object processing.
+- **OctoPrint's API.** Slicers upload and print through it as before, but it reports no webcam
+  and no UFP plugin, so Cura uploads gcode. See [OctoPrint's API](configuration/octoprint.md).
 - **File roots.** No `config_examples` or `docs` roots; frontends work without them.
 - **Update manager entries.** No `web`, `zip`, or `python` entries, and no `moonraker` entry:
   Orrery updates itself instead. Debian packages need PackageKit; there's no `sudo apt-get`

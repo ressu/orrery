@@ -22,12 +22,16 @@ use crate::server::App;
 
 pub fn router(app: Arc<App>) -> Router {
     let upload_limit = app.files.max_upload_size;
-    Router::new()
+    let mut router = Router::new()
         .route("/websocket", get(websocket))
-        .route("/server/files/upload", post(crate::files::http::upload).layer(DefaultBodyLimit::max(upload_limit)))
-        .fallback(http_request)
-        .layer(axum::middleware::from_fn_with_state(app.clone(), cors))
-        .with_state(app)
+        .route("/server/files/upload", post(crate::files::http::upload).layer(DefaultBodyLimit::max(upload_limit)));
+    if app.octoprint.is_some() {
+        router = router.route(
+            "/api/files/local",
+            post(crate::files::http::octoprint_upload).layer(DefaultBodyLimit::max(upload_limit)),
+        );
+    }
+    router.fallback(http_request).layer(axum::middleware::from_fn_with_state(app.clone(), cors)).with_state(app)
 }
 
 /// Adds CORS headers for allowed origins and answers their preflight requests, as Moonraker's
@@ -270,7 +274,17 @@ async fn http_request(
             return error_response(e.status, &e.message);
         }
     };
-    let found = app.find_path(uri.path()).await;
+    // OctoPrint's file paths carry the file in the path, as Moonraker's pattern
+    // `/api/files/moonraker/(?P<relative_path>.+)` does.
+    let octoprint_file = uri
+        .path()
+        .strip_prefix(crate::octoprint::FILES_PREFIX)
+        .filter(|rest| !rest.is_empty() && app.octoprint.is_some())
+        .map(|rest| percent_encoding::percent_decode_str(rest).decode_utf8_lossy().into_owned());
+    let found = match &octoprint_file {
+        Some(_) => app.find_path(crate::octoprint::FILES_ENDPOINT).await,
+        None => app.find_path(uri.path()).await,
+    };
     let Some(endpoint) = found.filter(|e| e.http) else {
         if let Some(rest) = uri.path().strip_prefix("/server/files/") {
             let kind = if method == Method::DELETE { RequestType::Delete } else { RequestType::Get };
@@ -316,6 +330,9 @@ async fn http_request(
     if is_json && let Ok(Value::Object(body)) = serde_json::from_slice::<Value>(&body) {
         args.extend(body);
     }
+    if let Some(file) = octoprint_file {
+        args.insert("relative_path".into(), json!(file));
+    }
     let args = Args(args);
     if let Err(e) = crate::auth::authorize(&app, &access, &endpoint.endpoint, kind, &args) {
         app.auth.log_refusal(&access, &format!("{method} {}", uri.path()), &e);
@@ -330,6 +347,11 @@ async fn http_request(
         crate::auth::audit(&app, &access, &endpoint.endpoint, kind, &args, outcome);
     }
     match result {
+        // As Moonraker's `wrap_result=False`: nothing is 204, and the rest is sent as it is.
+        Ok(Value::Null) if endpoint.bare => StatusCode::NO_CONTENT.into_response(),
+        Ok(result) if endpoint.bare => {
+            ([(header::CONTENT_TYPE, "application/json; charset=UTF-8")], result.to_string()).into_response()
+        }
         Ok(result) => {
             let body = json!({"result": result});
             ([(header::CONTENT_TYPE, "application/json; charset=UTF-8")], body.to_string()).into_response()

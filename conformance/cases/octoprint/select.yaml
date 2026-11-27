@@ -1,0 +1,35 @@
+name: Selecting an uploaded file through OctoPrint's API prints it, or queues it while printing
+config: |
+  [octoprint_compat]
+
+  [file_manager]
+  queue_gcode_uploads: True
+transports: [http]
+steps:
+  - upload: cube.gcode
+    to: /api/files/local
+    fixture: plain.gcode
+    expect: {print_started: false}
+  # Selecting without printing does nothing: Moonraker has no selected file.
+  - call: octoprint.select
+    http: {verb: POST, path: /api/files/moonraker/gcodes/cube.gcode, body: {command: select}}
+    expect: null
+  - call: octoprint.select
+    http: {verb: POST, path: /api/files/moonraker/gcodes/cube.gcode, body: {command: select, print: true}}
+    expect: null
+  - expect_klippy_request: {method: gcode/script, params: {script: 'SDCARD_PRINT_FILE FILENAME="cube.gcode"'}}
+  - klippy: {update: {print_stats: {state: printing}}}
+  - call: octoprint.select
+    http: {verb: POST, path: /api/files/moonraker/gcodes/cube.gcode, body: {command: select, print: true}}
+    expect: null
+  - call: server.job_queue.status
+    expect: {queued_jobs: [{filename: cube.gcode}]}
+  - call: octoprint.select
+    http: {verb: POST, path: /api/files/moonraker/gcodes/missing.gcode, body: {command: select, print: true}}
+    expect_error: {code: 400, message: File does not exist}
+  - call: octoprint.select
+    http: {verb: POST, path: /api/files/moonraker/config/printer.cfg, body: {command: select, print: true}}
+    expect_error: {code: 400, message: "File must be located in the 'gcodes' root"}
+  - call: octoprint.select
+    http: {verb: POST, path: /api/files/moonraker/gcodes/cube.gcode, body: {command: delete}}
+    expect_error: {code: 400, message: "Unsupported Command: delete"}

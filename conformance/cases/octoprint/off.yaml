@@ -1,0 +1,6 @@
+name: Without octoprint_compat, OctoPrint's paths aren't there
+transports: [http]
+steps:
+  - call: octoprint.version
+    http: {verb: GET, path: /api/version}
+    expect_error: {code: 404}

@@ -1,0 +1,31 @@
+[
+  {
+    "step": 1,
+    "call": "octoprint.settings",
+    "result": {
+      "plugins": {
+        "UltimakerFormatPackage": {
+          "align_inline_thumbnail": "bool",
+          "inline_thumbnail": "bool",
+          "inline_thumbnail_align_value": "string",
+          "inline_thumbnail_scale_value": "string",
+          "installed": "bool",
+          "installed_version": "string",
+          "scale_inline_thumbnail": "bool",
+          "state_panel_thumbnail": "bool"
+        }
+      },
+      "feature": {
+        "sdSupport": "bool",
+        "temperatureGraph": "bool"
+      },
+      "webcam": {
+        "flipH": "bool",
+        "flipV": "bool",
+        "rotate90": "bool",
+        "streamUrl": "string",
+        "webcamEnabled": "bool"
+      }
+    }
+  }
+]

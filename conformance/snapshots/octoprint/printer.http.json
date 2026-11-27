@@ -1,0 +1,172 @@
+[
+  {
+    "step": 1,
+    "call": "octoprint.printer",
+    "result": {
+      "temperature": {
+        "bed": {
+          "actual": "number",
+          "offset": "number",
+          "target": "number"
+        },
+        "tool0": {
+          "actual": "number",
+          "offset": "number",
+          "target": "number"
+        }
+      },
+      "state": {
+        "text": "string",
+        "flags": {
+          "operational": "bool",
+          "paused": "bool",
+          "printing": "bool",
+          "cancelling": "bool",
+          "pausing": "bool",
+          "error": "bool",
+          "ready": "bool",
+          "closedOrError": "bool"
+        }
+      }
+    }
+  },
+  {
+    "step": 2,
+    "call": "octoprint.job",
+    "result": {
+      "job": {
+        "file": {
+          "name": "null"
+        },
+        "estimatedPrintTime": "null",
+        "filament": {
+          "length": "null"
+        },
+        "user": "null"
+      },
+      "progress": {
+        "completion": "null",
+        "filepos": "null",
+        "printTime": "null",
+        "printTimeLeft": "null",
+        "printTimeOrigin": "null"
+      },
+      "state": "string"
+    }
+  },
+  {
+    "step": 3,
+    "call": "octoprint.printerprofiles",
+    "result": {
+      "profiles": {
+        "_default": {
+          "id": "string",
+          "name": "string",
+          "color": "string",
+          "model": "string",
+          "default": "bool",
+          "current": "bool",
+          "heatedBed": "bool",
+          "heatedChamber": "bool",
+          "axes": {
+            "x": {
+              "speed": "number",
+              "inverted": "bool"
+            },
+            "y": {
+              "speed": "number",
+              "inverted": "bool"
+            },
+            "z": {
+              "speed": "number",
+              "inverted": "bool"
+            },
+            "e": {
+              "speed": "number",
+              "inverted": "bool"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "step": 5,
+    "call": "octoprint.printer",
+    "result": {
+      "temperature": {
+        "bed": {
+          "actual": "number",
+          "offset": "number",
+          "target": "number"
+        },
+        "tool0": {
+          "actual": "number",
+          "offset": "number",
+          "target": "number"
+        }
+      },
+      "state": {
+        "text": "string",
+        "flags": {
+          "operational": "bool",
+          "paused": "bool",
+          "printing": "bool",
+          "cancelling": "bool",
+          "pausing": "bool",
+          "error": "bool",
+          "ready": "bool",
+          "closedOrError": "bool"
+        }
+      }
+    }
+  },
+  {
+    "step": 7,
+    "call": "octoprint.job",
+    "result": {
+      "job": {
+        "file": {
+          "name": "null"
+        },
+        "estimatedPrintTime": "null",
+        "filament": {
+          "length": "null"
+        },
+        "user": "null"
+      },
+      "progress": {
+        "completion": "null",
+        "filepos": "null",
+        "printTime": "null",
+        "printTimeLeft": "null",
+        "printTimeOrigin": "null"
+      },
+      "state": "string"
+    }
+  },
+  {
+    "step": 9,
+    "call": "octoprint.job",
+    "result": {
+      "job": {
+        "file": {
+          "name": "null"
+        },
+        "estimatedPrintTime": "null",
+        "filament": {
+          "length": "null"
+        },
+        "user": "null"
+      },
+      "progress": {
+        "completion": "null",
+        "filepos": "null",
+        "printTime": "null",
+        "printTimeLeft": "null",
+        "printTimeOrigin": "null"
+      },
+      "state": "string"
+    }
+  }
+]

@@ -217,6 +217,19 @@ checks is described there only.
 - **Why:** there's no true value to give.
 - **Cases:** `machine/system_info`.
 
+### octoprint-partial: OctoPrint's settings report no webcam and no UFP plugin
+
+- **Area:** API
+- **Moonraker:** `/api/settings` reports a webcam from `[octoprint_compat]`'s `stream_url`,
+  `flip_h`, `flip_v`, `rotate_90`, and `webcam_enabled`, and, with `enable_ufp`, on by default,
+  OctoPrint's UFP plugin, so Cura uploads `.ufp` files.
+- **orrery:** reports the webcam as off, and no plugins, so Cura uploads gcode. The webcam
+  options, and `enable_ufp = true`, are ignored with a warning in `server.info`.
+- **Why:** a client that shows a modern printer's webcam uses Moonraker's API (user,
+  2026-11-27), and orrery can't unpack UFP files yet (`partial-metadata`). See
+  docs/design/2026-11-27-octoprint-compat.md.
+- **Cases:** `octoprint/settings`.
+
 ### no-service-control: no systemd_cli or supervisord_cli provider
 
 - **Area:** API

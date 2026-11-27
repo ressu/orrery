@@ -296,8 +296,9 @@ impl HttpClient {
         self.send(req).await
     }
 
-    /// Uploads a file the way frontends do: multipart form data with a `file` part.
-    pub async fn upload(&self, name: &str, content: Vec<u8>, form: &Map<String, Value>) -> Result<Outcome> {
+    /// Uploads a file the way frontends do: multipart form data with a `file` part, to `path`,
+    /// such as `/server/files/upload`.
+    pub async fn upload(&self, path: &str, name: &str, content: Vec<u8>, form: &Map<String, Value>) -> Result<Outcome> {
         let mut multipart = reqwest::multipart::Form::new();
         for (k, v) in form {
             let text = match v {
@@ -309,7 +310,7 @@ impl HttpClient {
         let part =
             reqwest::multipart::Part::bytes(content).file_name(name.to_owned()).mime_str("application/octet-stream")?;
         multipart = multipart.part("file", part);
-        let url = format!("{}/server/files/upload", self.base);
+        let url = format!("{}{path}", self.base);
         self.send(self.client.post(url).multipart(multipart)).await
     }
 
@@ -335,7 +336,13 @@ impl HttpClient {
     async fn send(&self, req: reqwest::RequestBuilder) -> Result<Outcome> {
         let resp = req.timeout(CALL_TIMEOUT).send().await?;
         let status = resp.status();
-        let body: Value = resp.json().await.context("response isn't JSON")?;
+        // An answer with no body, such as a 204, is `null`.
+        let bytes = resp.bytes().await?;
+        let body: Value = if bytes.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_slice(&bytes).context("response isn't JSON")?
+        };
         if status.is_success() {
             return Ok(Ok(body.get("result").cloned().unwrap_or(body)));
         }

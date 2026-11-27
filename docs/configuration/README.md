@@ -24,6 +24,7 @@ sudo systemctl restart orrery
 | [Actions](actions.md) | Named steps that buttons, macros, and clients run |
 | [Agents](agents.md) | Programs that add features to Orrery, and how Orrery starts them |
 | [Buttons](buttons.md) | Buttons on the printer computer's GPIO lines |
+| [OctoPrint's API](octoprint.md) | Uploading and printing from PrusaSlicer and other slicers |
 | [Spoolman](spoolman.md) | Connecting Orrery to a Spoolman server |
 | [The update manager](update-manager.md) | Updates for Klipper, Orrery, and other software, from Fluidd and Mainsail |
 
@@ -139,10 +140,11 @@ Webcams added from Fluidd or Mainsail are kept in Orrery's database, not in a co
 |---|---|---|
 | `database_path` | `~/printer_data/database` | The folder for Orrery's database, `orrery.redb` |
 
-### `[authorization]`, `[button <name>]`, `[spoolman]`, and `[update_manager]`
+### `[authorization]`, `[button <name>]`, `[octoprint_compat]`, `[spoolman]`, and `[update_manager]`
 
 These have pages of their own: [Access and logins](access.md), [Buttons](buttons.md),
-[Spoolman](spoolman.md), and [The update manager](update-manager.md).
+[OctoPrint's API](octoprint.md), [Spoolman](spoolman.md), and
+[The update manager](update-manager.md).
 
 ## Orrery's own sections
 

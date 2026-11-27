@@ -41,7 +41,7 @@ Scope of this step:
 | Mainsail | Not checked: its source isn't on this machine | Probably the same as Fluidd |
 | Home Assistant | API key | `operator`, or `viewer` for a dashboard only |
 | aldis | Moonraker URL over HTTP and the websocket; it reads only | `viewer` |
-| Slicers | OctoPrint's API with `X-Api-Key` | Out of scope: needs `octoprint_compat` |
+| Slicers | OctoPrint's API with `X-Api-Key` | `operator` (2026-11-27: `octoprint_compat`, see `2026-11-27-octoprint-compat.md`) |
 | Agents orrery starts | Unix socket | `agent` |
 | Agents elsewhere | Websocket | `agent`, with the agent's key |
 | `orrery` CLI | Unix socket | `admin`, by its user id |
@@ -65,8 +65,8 @@ What the sources show:
   `query`, and `server.files.roots` (`aldis/src/`). It stops Klipper through systemctl itself,
   not through Moonraker.
 - **PrusaSlicer:** it sends `X-Api-Key` to OctoPrint's `/api/files/local`
-  (`PrusaSlicer/src/slic3r/Utils/OctoPrint.cpp:525`). orrery has no `octoprint_compat`, so
-  slicers can't upload yet, with or without a key.
+  (`PrusaSlicer/src/slic3r/Utils/OctoPrint.cpp:525`). Since 2026-11-27, orrery's
+  `octoprint_compat` answers it.
 
 ## Threat model
 

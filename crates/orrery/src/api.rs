@@ -254,6 +254,8 @@ pub struct Endpoint {
     pub http: bool,
     /// HTTP query args become `objects` (Klippy's `objects/*` endpoints).
     pub object_parser: bool,
+    /// The answer is sent as it is, without Moonraker's `{"result": …}`: OctoPrint's paths.
+    pub bare: bool,
     pub handler: Handler,
 }
 
@@ -306,6 +308,7 @@ fn agent_stub(path: &str, agent: &str) -> Endpoint {
         types: vec![RequestType::Get, RequestType::Post, RequestType::Delete],
         http: true,
         object_parser: false,
+        bare: false,
         handler: handler(move |app: Arc<App>, _req| {
             let agent = agent.clone();
             async move {
@@ -324,13 +327,17 @@ fn agent_stub(path: &str, agent: &str) -> Endpoint {
 pub enum Transports {
     All,
     WebsocketOnly,
+    /// HTTP only, with the answer sent as it is, as Moonraker's `wrap_result=False`. It has no
+    /// JSON-RPC method.
+    HttpBare,
 }
 
 impl Registry {
     pub fn register(&mut self, path: &str, types: &[RequestType], transports: Transports, handler: Handler) {
         let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
         let (last, prefix) = parts.split_last().expect("endpoint paths aren't empty");
-        for &t in types {
+        let bare = matches!(transports, Transports::HttpBare);
+        for &t in types.iter().filter(|_| !bare) {
             let method = if types.len() > 1 {
                 let mut p: Vec<String> = prefix.iter().map(|s| s.to_string()).collect();
                 p.push(format!("{}_{last}", t.as_str()));
@@ -345,8 +352,9 @@ impl Registry {
             Endpoint {
                 endpoint: path.to_owned(),
                 types: types.to_vec(),
-                http: matches!(transports, Transports::All),
+                http: !matches!(transports, Transports::WebsocketOnly),
                 object_parser: false,
+                bare,
                 handler,
             },
         );
@@ -368,6 +376,7 @@ impl Registry {
                 types: vec![RequestType::Get, RequestType::Post],
                 http: true,
                 object_parser: endpoint.starts_with("objects/"),
+                bare: false,
                 handler,
             },
         );

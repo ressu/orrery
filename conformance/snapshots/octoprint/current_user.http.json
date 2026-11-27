@@ -1,0 +1,36 @@
+[
+  {
+    "step": 1,
+    "call": "octoprint.currentuser",
+    "result": {
+      "_is_external_client": "bool",
+      "_login_mechanism": "any",
+      "name": "string",
+      "active": "bool",
+      "user": "bool",
+      "admin": "bool",
+      "apikey": "null",
+      "permissions": [],
+      "groups": [
+        "string"
+      ]
+    }
+  },
+  {
+    "step": 2,
+    "call": "octoprint.login",
+    "result": {
+      "_is_external_client": "bool",
+      "_login_mechanism": "any",
+      "name": "string",
+      "active": "bool",
+      "user": "bool",
+      "admin": "bool",
+      "apikey": "null",
+      "permissions": [],
+      "groups": [
+        "string"
+      ]
+    }
+  }
+]

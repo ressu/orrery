@@ -105,6 +105,8 @@ pub struct App {
     pub keys: crate::keys::Keys,
     pub users: crate::users::Users,
     pub compat: crate::compat::MoonrakerCompat,
+    /// `[octoprint_compat]`, when the config has it.
+    pub octoprint: Option<crate::octoprint::OctoPrint>,
     pub extensions: crate::extensions::Extensions,
     pub agents: crate::agents::Agents,
     pub actions: crate::actions::Actions,
@@ -223,6 +225,11 @@ impl App {
         warnings.extend(action_warnings);
         let compat = crate::compat::MoonrakerCompat::new(&config)?;
         compat.log_settings();
+        let (octoprint, octoprint_warnings) = crate::octoprint::OctoPrint::new(&config)?;
+        for w in &octoprint_warnings {
+            tracing::warn!("{w}");
+        }
+        warnings.extend(octoprint_warnings);
         let keys = crate::keys::Keys::new(&config, &agents, &compat, &database)?;
         keys.log_settings();
         let users = crate::users::Users::new(&config, |name| keys.exists(name), &database)?;
@@ -251,6 +258,7 @@ impl App {
             keys,
             users,
             compat,
+            octoprint,
             extensions: crate::extensions::Extensions::default(),
             agents,
             actions,
@@ -274,6 +282,9 @@ impl App {
         crate::agents::register_endpoints(&app);
         crate::history::register_endpoints(&app);
         crate::actions::register_endpoints(&app);
+        if app.octoprint.is_some() {
+            crate::octoprint::register_endpoints(&app);
+        }
         // Last, so it sees every built-in method when it checks the maps.
         crate::agents::start(&app);
         let action_warnings = app.actions.check(&app.registry.read().expect("registry lock"));
@@ -658,7 +669,12 @@ async fn server_info(app: Arc<App>, req: Request) -> ApiResult {
     Ok(json!({
         "klippy_connected": app.klippy.is_connected(),
         "klippy_state": state.0.as_str(),
-        "components": COMPONENTS.iter().copied().chain(app.agents.components()).collect::<Vec<_>>(),
+        "components": COMPONENTS
+            .iter()
+            .copied()
+            .chain(app.octoprint.as_ref().map(|_| "octoprint_compat"))
+            .chain(app.agents.components())
+            .collect::<Vec<_>>(),
         "failed_components": [],
         "registered_directories": app.files.root_names(),
         "warnings": warnings,

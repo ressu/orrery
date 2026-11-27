@@ -303,7 +303,7 @@ async fn run_step(ctx: &mut Ctx, step: &Step, index: usize, result: &mut RunResu
                 Value::Object(m) => m,
                 _ => unreachable!("substitute keeps the value's type"),
             };
-            let outcome = ctx.http.upload(&u.upload, content, &form).await?;
+            let outcome = ctx.http.upload(&u.to, &u.upload, content, &form).await?;
             result.transcript.push(transcript_entry(index, "upload", &outcome));
             let problems = check_outcome(&outcome, u.expect.as_ref(), u.expect_error.as_ref(), &ctx.vars);
             if !problems.is_empty() {

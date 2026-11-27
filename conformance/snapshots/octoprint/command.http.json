@@ -1,0 +1,7 @@
+[
+  {
+    "step": 1,
+    "call": "octoprint.command",
+    "result": {}
+  }
+]

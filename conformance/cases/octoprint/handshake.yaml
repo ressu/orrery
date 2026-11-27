@@ -1,0 +1,12 @@
+name: OctoPrint's version and server, as PrusaSlicer's connection test reads them
+config: |
+  [octoprint_compat]
+transports: [http]
+steps:
+  - call: octoprint.version
+    http: {verb: GET, path: /api/version}
+    # Orrery says it's Orrery: "OctoPrint (Orrery v0.2.0)". PrusaSlicer checks only the start.
+    expect: {$exact: true, server: "1.5.0", api: "0.1", text: "$regex:^OctoPrint \\("}
+  - call: octoprint.server
+    http: {verb: GET, path: /api/server}
+    expect: {$exact: true, server: "1.5.0", safemode: null}

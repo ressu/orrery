@@ -1,0 +1,19 @@
+[
+  {
+    "step": 1,
+    "call": "octoprint.version",
+    "result": {
+      "server": "string",
+      "api": "string",
+      "text": "string"
+    }
+  },
+  {
+    "step": 2,
+    "call": "octoprint.server",
+    "result": {
+      "server": "string",
+      "safemode": "null"
+    }
+  }
+]

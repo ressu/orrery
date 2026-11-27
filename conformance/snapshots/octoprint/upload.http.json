@@ -1,0 +1,46 @@
+[
+  {
+    "step": 1,
+    "call": "upload",
+    "result": {
+      "action": "string",
+      "item": {
+        "modified": "number",
+        "size": "number",
+        "permissions": "string",
+        "path": "string",
+        "root": "string"
+      },
+      "print_started": "bool",
+      "print_queued": "bool"
+    }
+  },
+  {
+    "step": 2,
+    "call": "upload",
+    "result": {
+      "action": "string",
+      "item": {
+        "modified": "number",
+        "size": "number",
+        "permissions": "string",
+        "path": "string",
+        "root": "string"
+      },
+      "print_started": "bool",
+      "print_queued": "bool"
+    }
+  },
+  {
+    "step": 4,
+    "call": "server.files.list",
+    "result": [
+      {
+        "path": "string",
+        "modified": "number",
+        "size": "number",
+        "permissions": "string"
+      }
+    ]
+  }
+]
