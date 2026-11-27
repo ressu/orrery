@@ -3,8 +3,9 @@
 **Status (2026-11-27):** being redesigned with the user. A first version is built, with
 converters: `orrery-convert` with UFP, uploads, and the file watcher
 (`crates/orrery/src/files/convert.rs`, `crates/orrery/src/bin/orrery-convert.rs`, the case
-`files/ufp`). It isn't pushed, and it will be reworked into readers, below. Where files are
-stored is still open. Not yet tried with Cura on a printer.
+`files/ufp`). It isn't pushed, and it will be reworked into readers, below. Files are stored
+as uploaded, with the gcode as a cache (A, below). What a download gives is a proposal. Not yet
+tried with Cura on a printer.
 
 Orrery gets **tools** for files in the gcodes folder. A **reader** knows one format, and tells
 Orrery what to print, what the metadata is, and what the thumbnails are. A **processor**
@@ -115,7 +116,7 @@ orrery.toml has enabled = false. See docs/configuration/readers.md." A file a re
 
 ## Where files are stored
 
-Open. Orrery would keep the uploaded file as it was, and make what's printed from it when it's
+Decided: A, below (user, 2026-11-27). Orrery keeps the uploaded file as it was, and make what's printed from it when it's
 needed and cheap, as it is for UFP (user, 2026-11-27). What's made is a cache. Orrery already
 keeps one: the metadata in its database and the files in `.thumbs` are made from each gcode
 file, and are made again when its size or modified time changes (`has_valid_metadata`). The
@@ -141,6 +142,40 @@ that owns the name mapping, used everywhere Klipper's name reaches a client. B c
 for clients, but the gcode always exists, so nothing is made on demand.
 
 Either way, a file is read once when it arrives, for its metadata.
+
+### What clients get
+
+Proposal. Clients can't say which they want, the upload or the gcode. Fluidd fetches
+`/server/files/gcodes/<name>` for its gcode preview, its Download button, and its editor alike
+(`fluidd/src/mixins/files.ts:175`), and lists `.ufp` files as gcode files
+(`src/store/files/getters.ts:136`). Its preview follows a print by `virtual_sdcard.file_position`,
+a byte offset, so it needs the bytes Klipper prints: the cached gcode, after any processor.
+
+- **Moonraker's API gives the gcode.** `GET /server/files/gcodes/cube.ufp` sends the gcode Klipper
+  prints, and Orrery makes it first if it isn't cached. Every Moonraker client takes the gcodes
+  folder to hold gcode, and the preview works.
+- **The upload is asked for:** an Orrery-only parameter, such as
+  `GET /server/files/gcodes/cube.ufp?original=true`. A client that knows Orrery adds it to its
+  Download button.
+- **The metadata says the format,** such as `"format": "ufp"`, so a client knows there's an
+  original to offer. Moonraker's clients ignore fields they don't know.
+- **The list shows the upload,** with its size. A download's `Content-Length` is the gcode's.
+- **Fluidd's Download saves gcode named `cube.ufp`** until it asks for the original. Moonraker
+  would have kept only the gcode, so only the name is worse.
+
+### The name mapping
+
+One place, where Orrery talks to Klipper:
+
+- **Starting a print** of `cube.ufp` makes sure `.cache/cube.gcode` exists, and asks Klipper to
+  print that.
+- **Klipper's status** has `print_stats.filename` and `virtual_sdcard.file_path` mapped back to
+  `cube.ufp`, in subscriptions and queries alike.
+- **History and the job queue** store only `cube.ufp`, so they need nothing.
+- **A cached gcode stays while it's printed.**
+- **What leaks:** Klipper's console line `File opened:.cache/cube.gcode`, and a macro's
+  `SDCARD_PRINT_FILE FILENAME=cube.ufp`, which Klipper refuses, since it doesn't see the file.
+  That's a regression to list.
 
 ## Config
 
@@ -193,9 +228,9 @@ A UFP file is a zip with the gcode at `/3D/model.gcode`, and a picture at
 
 ## Open questions
 
-1. **Storage:** A or B, above?
-2. **With A,** when does a cached gcode go: after the print, after some days, or when the disk
-   is low? And does a download give the upload, the gcode, or either?
+1. **The original:** a parameter on the same path, as above, or a path of its own?
+2. **The cache:** when does a cached gcode go: after the print, after some days, or when the
+   disk is low?
 3. **Cheap:** which readers make their gcode on demand, and which keep it? Taking a file out of
    a zip is cheap. A processor, or a slow decoder, may not be.
 4. **Processors:** the same contract, with the gcode as the input and the new gcode as `gcode`?
