@@ -183,6 +183,31 @@ a byte offset, so it needs the bytes Klipper prints: the cached gcode, after any
 - **Fluidd's Download saves gcode named `cube.ufp`** until it asks for the original. Moonraker
   would have kept only the gcode, so only the name is worse.
 
+### Thumbnails, later
+
+For later (user, 2026-11-27). For now, thumbnails stay as they are: files in `.thumbs`, made
+when a file arrives, at the paths its metadata lists.
+
+Orrery gives no thumbnail URL, as Moonraker gives none. The metadata lists `relative_path`, such
+as `.thumbs/cube-32x32.png`, relative to the file's folder, and the client makes the URL. Fluidd
+joins it to the file's folder, and passes each segment of it through `encodeURIComponent`
+(`fluidd/src/mixins/files.ts`, `createFileUrl`). So a query in `relative_path`, such as
+`cube.ufp?content=thumbnail-32x32`, reaches the server as a file name with `%3F` in it.
+Mainsail and KlipperScreen weren't checked.
+
+- **Paths Orrery owns.** `.thumbs/cube-32x32.png` stays the path, but Orrery serves it from the
+  cache, or makes it when it isn't there. To a client it's a file, so no client changes.
+  `.thumbs` becomes a cache, with the same expiry as the gcode.
+- **Sizes known first.** Fluidd picks a thumbnail by its `size` in bytes, the largest or the
+  smallest (`getThumb`), so the metadata lists each one's size before a client asks for it.
+  Making them when the file arrives, as now, and keeping their sizes, does that.
+- **A query, for clients that know Orrery:** such as
+  `/server/files/gcodes/cube.ufp?content=thumbnail&size=64x64`, for any size, made on request.
+  Moonraker ignores it, as it ignores `content`.
+- **Paths a client encoded wrongly** could be recognized: a request for `cube.ufp%3Fcontent%3D…`
+  that names no file, sent to the same handler as the query. A workaround, if a client needs
+  it.
+
 ### The name mapping
 
 One place, where Orrery talks to Klipper:
