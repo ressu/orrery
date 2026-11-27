@@ -4,8 +4,10 @@
 Orrery, programs as readers, the placing routine, the gcode cache, the name mapping, `content`
 on downloads, and work folders in the data folder (`crates/orrery/src/files/readers.rs`,
 `place.rs`, `work.rs`, `map_printed_names` in `crates/orrery/src/klippy.rs`, and the case
-`files/ufp`). Processors, cache expiry, and thumbnails made on request are designed, not built.
-Not yet tried with Cura on a printer.
+`files/ufp`). Sliced 3MF files are built too, as the user's way to try it on a printer, without Cura
+(user, 2026-11-27); the 3MF layout is OrcaSlicer's (`src/libslic3r/Format/bbs_3mf.cpp`).
+Processors, cache expiry, and thumbnails made on request are designed, not built. UFP stays
+untried on a printer: the user doesn't run Cura.
 
 A first version, with converters and an `orrery-convert` program, was built and replaced before
 it was pushed.
@@ -305,8 +307,13 @@ A UFP file is a zip with the gcode at `/3D/model.gcode`, and a picture at
 - **An object processor.** preprocess_cancellation is a Python package. Orrery could run it
   when it's installed, or get its own processor later.
 - **klipper_estimator and `[analysis]`.** It fits as a processor, but it isn't in scope.
-- **3MF and binary gcode.** Binary gcode would be the first reader that converts, and something
-  Moonraker can't do.
+- **Binary gcode.** It would be the first reader that converts, and something Moonraker can't
+  do.
+- **A sliced 3MF's `slice_info.config`.** The 3MF reader, built, takes the one sliced plate's
+  gcode and pictures, and the gcode reader reads the metadata from the gcode. The slice info
+  could add the filaments' colors and weights.
+- **3MF with several sliced plates.** Refused for now: which plate to print would need a way
+  to say.
 
 ## Decided
 

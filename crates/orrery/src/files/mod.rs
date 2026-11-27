@@ -173,7 +173,7 @@ impl FileManager {
 
     /// Whether a file in the gcodes folder can be printed: gcode, or a format a reader reads.
     pub fn is_printable(&self, name: &str) -> bool {
-        is_gcode(name) || self.readers.reads(&extension(name))
+        is_gcode(name) || self.readers.for_path(name).is_some()
     }
 
     /// Where the gcode a reader made for `rel` is kept, for Klipper to print.

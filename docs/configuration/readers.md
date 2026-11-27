@@ -17,6 +17,29 @@ To turn UFP files off, so an upload of one is refused:
 enabled = false
 ```
 
+## Sliced 3MF
+
+OrcaSlicer and BambuStudio can export a sliced plate as a `.gcode.3mf` file, which Moonraker
+can't print. Orrery prints one without any settings. The plate's pictures are the thumbnails,
+and its gcode gives the metadata. The file must hold one sliced plate: export a plate, not all
+of them. A 3MF project that isn't sliced, a plain `.3mf`, isn't printable.
+
+Fluidd goes by the part of the name after the last dot, `.3mf`, which it doesn't know as a
+file to print. It has no Print button for the file yet, and right after an upload it shows the
+file without its thumbnail and details; reload the page to see them. Start the print with
+`printer.print.start`, for example:
+
+```
+curl -X POST "http://printer.local/printer/print/start?filename=cube.gcode.3mf"
+```
+
+To turn sliced 3MF files off:
+
+```toml
+[reader.gcode_3mf]
+enabled = false
+```
+
 ## What clients see
 
 `cube.ufp` stays `cube.ufp`: in the file list, in the print's status, in history, and in the job
@@ -33,6 +56,10 @@ A download of `cube.ufp` gives the gcode Klipper prints, so a client's gcode pre
 to either. The gcode is saved as `cube.gcode`, so a program that goes by the extension opens it
 as gcode. Until Fluidd asks for the original, its Download button saves the gcode.
 
+Fluidd's editor shows the gcode too, but its Save can't replace `cube.ufp` with the edited
+text: the save is refused, and the file stays as it was. To change the gcode, download it, and
+upload it under a `.gcode` name.
+
 A macro can't print `cube.ufp` with `SDCARD_PRINT_FILE`, since Klipper doesn't see the file.
 Start the print from a client, the job queue, or `printer.print.start`.
 
@@ -48,8 +75,8 @@ command = ["/opt/bgcode/bgcode-reader"]
 
 | Option | Default | What it does |
 |---|---|---|
-| `extension` | `.ufp` for `ufp`; needed for any other | The files it reads, with the dot |
-| `command` | Orrery's own, for `ufp`; needed for any other | The program to run, and its first arguments |
+| `extension` | `.ufp` for `ufp`, `.gcode.3mf` for `3mf`; needed for any other | The files it reads, with the dot. It can have parts, such as `.gcode.3mf` |
+| `command` | Orrery's own, for `ufp` and `3mf`; needed for any other | The program to run, and its first arguments |
 | `timeout` | `300` | Seconds before the file can't be read |
 | `enabled` | `true` | `false` turns the reader off |
 

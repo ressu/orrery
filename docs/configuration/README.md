@@ -25,7 +25,7 @@ sudo systemctl restart orrery
 | [Agents](agents.md) | Programs that add features to Orrery, and how Orrery starts them |
 | [Buttons](buttons.md) | Buttons on the printer computer's GPIO lines |
 | [OctoPrint's API](octoprint.md) | Uploading and printing from PrusaSlicer and other slicers |
-| [Readers](readers.md) | Printing Cura's UFP files, and other formats |
+| [Readers](readers.md) | Printing Cura's UFP files, sliced 3MF files, and other formats |
 | [Spoolman](spoolman.md) | Connecting Orrery to a Spoolman server |
 | [The update manager](update-manager.md) | Updates for Klipper, Orrery, and other software, from Fluidd and Mainsail |
 

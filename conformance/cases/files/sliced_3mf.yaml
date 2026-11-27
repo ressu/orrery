@@ -1,0 +1,54 @@
+name: a sliced 3MF file is kept as it was, and printed from its plate's gcode
+description: >
+  orrery only. OrcaSlicer and BambuStudio export a sliced plate as a .gcode.3mf: a zip with the
+  plate's gcode and pictures. Moonraker can't print one. Orrery keeps cube.gcode.3mf, reads the
+  plate's gcode for the metadata, and shows the plate's pictures as the thumbnails, not the
+  ones in the gcode. See docs/design/2026-11-27-file-tools.md.
+targets: [orrery]
+transports: [ws]
+steps:
+  - upload: cube.gcode.3mf
+    fixture: orca_cube.gcode.3mf
+    expect: {item: {path: cube.gcode.3mf, root: gcodes}, action: create_file}
+  - call: server.files.metadata
+    params: {filename: cube.gcode.3mf}
+    retry_ms: 5000
+    expect:
+      filename: cube.gcode.3mf
+      slicer: OrcaSlicer
+      slicer_version: 2.2.0
+      layer_height: 0.2
+      estimated_time: 930
+      filament_type: PLA
+      thumbnails:
+        - {width: 32, height: 32, size: $type:number, relative_path: ".thumbs/cube.gcode.3mf-32x32.png"}
+        - {width: 64, height: 64, size: $type:number, relative_path: ".thumbs/cube.gcode.3mf-64x64.png"}
+        - {width: 256, height: 256, size: $type:number, relative_path: ".thumbs/cube.gcode.3mf-256x256.png"}
+  - download: gcodes/cube.gcode.3mf
+    expect_fixture: orca_cube.gcode
+    expect_filename: cube.gcode
+  - download: gcodes/cube.gcode.3mf?content=original
+    expect_fixture: orca_cube.gcode.3mf
+    expect_filename: cube.gcode.3mf
+  # Fluidd's editor shows the gcode, and its Save uploads that text under the file's name. It's
+  # refused, and the 3MF file is unchanged.
+  - upload: cube.gcode.3mf
+    content: "G28\n"
+    expect_error: {code: 400, message: "$regex:^cube.gcode.3mf can't be replaced with what was sent: .*The file is unchanged\\.$"}
+  - download: gcodes/cube.gcode.3mf?content=original
+    expect_fixture: orca_cube.gcode.3mf
+  - call: server.files.metadata
+    params: {filename: cube.gcode.3mf}
+    expect: {slicer: OrcaSlicer}
+  - call: server.files.list
+    params: {root: gcodes}
+    expect: [{path: cube.gcode.3mf}]
+  # The gcode cache isn't listed: no client can read it.
+  - call: server.files.get_directory
+    params: {path: gcodes, extended: true}
+    expect:
+      dirs: {$excludes: [{dirname: .cache}]}
+      files: {$contains: [{filename: cube.gcode.3mf, thumbnails: $type:array}]}
+  - call: printer.print.start
+    params: {filename: cube.gcode.3mf}
+  - expect_klippy_request: {method: gcode/script, params: {script: 'SDCARD_PRINT_FILE FILENAME=".cache/cube.gcode.3mf.gcode"'}}

@@ -171,7 +171,9 @@ checks is described there only.
   cache, `.cache/cube.ufp.gcode`, which orrery reports as `cube.ufp`. There's no `cube.gcode`,
   so the macro fails, and `SDCARD_PRINT_FILE FILENAME=cube.ufp` does too: Klipper doesn't see
   the file. Klipper's console shows `File opened:.cache/cube.ufp.gcode`. Fluidd's Download
-  button saves the gcode, as `cube.gcode`, not the UFP file.
+  button saves the gcode, as `cube.gcode`, not the UFP file. Fluidd's editor opens the gcode, but
+  its Save is refused, since the text would replace the UFP file; with Moonraker the file was
+  `cube.gcode`, and could be edited.
 - **Why:** orrery keeps an upload as it was, and makes the gcode from it (user, 2026-11-27).
   A macro that prints a file by name, not through orrery, is rare enough to leave (user,
   2026-11-27).

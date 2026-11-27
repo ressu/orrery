@@ -17,6 +17,10 @@ Fluidd and Mainsail link to the release page on GitHub, which shows the same not
   turns it into a gcode file. A program can read other formats too, with `[reader.<name>]` in
   `orrery.toml`. See [Readers](docs/configuration/readers.md).
 
+- A sliced 3MF file, as OrcaSlicer and BambuStudio export a plate, `cube.gcode.3mf`, can be
+  printed, with the plate's pictures as its thumbnails. Moonraker can't print one. Fluidd has no
+  Print button for it yet; see [Sliced 3MF](docs/configuration/readers.md#sliced-3mf).
+
 - `orrery setup` can remove old logs, with `[setup] log_cleanup = true` in `orrery.toml` or
   `setup --log-cleanup`. Once a day, the printer's user then removes the files in
   `~/printer_data/logs` that nothing has written, read, or renamed for 14 days, whichever

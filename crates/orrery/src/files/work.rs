@@ -54,11 +54,11 @@ impl WorkDir {
         Ok(Self { dir })
     }
 
-    /// Puts `file` in the folder as `input<ext>`: a hard link when it can, a copy when it
-    /// can't, such as across filesystems.
-    pub fn link_input(&self, file: &Path) -> std::io::Result<PathBuf> {
-        let ext = file.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
-        let input = self.dir.join(format!("input{ext}"));
+    /// Puts `file` in the folder as `input<extension>`, such as `input.gcode.3mf`: a hard link
+    /// when it can, a copy when it can't, such as across filesystems. The extension is the
+    /// reader's, since an upload in a work folder has none of its own.
+    pub fn link_input(&self, file: &Path, extension: &str) -> std::io::Result<PathBuf> {
+        let input = self.dir.join(format!("input{extension}"));
         if std::fs::hard_link(file, &input).is_err() {
             std::fs::copy(file, &input)?;
         }
@@ -99,7 +99,7 @@ mod tests {
         {
             let work = WorkDir::new(data.path()).unwrap();
             dir = work.dir.clone();
-            let input = work.link_input(&file).unwrap();
+            let input = work.link_input(&file, ".ufp").unwrap();
             assert_eq!(input.file_name().unwrap(), "input.ufp");
             assert_eq!(std::fs::read(&input).unwrap(), b"zip");
             use std::os::unix::fs::MetadataExt as _;

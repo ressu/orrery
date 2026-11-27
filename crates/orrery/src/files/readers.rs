@@ -1,6 +1,6 @@
 //! Readers: one for each format, which tell Orrery what to print, the metadata, and the
 //! thumbnails (docs/design/2026-11-27-file-tools.md). Gcode's reader is [`super::metadata`].
-//! UFP's is built in. `[reader.<name>]` in `orrery.toml` changes one, or adds a program for
+//! UFP's and sliced 3MF's are built in. `[reader.<name>]` in `orrery.toml` changes one, or adds a program for
 //! another format.
 //!
 //! Every reader writes only into its work folder, and gives an [`Output`]. [`super::place`]
@@ -23,8 +23,8 @@ pub const OUTPUT_VERSION: u64 = 1;
 /// A UFP file can take a while, as in Moonraker, which gives it 300 seconds.
 const DEFAULT_TIMEOUT: f64 = 300.0;
 
-/// The readers Orrery has without a table.
-const BUILT_IN: &[(&str, &str)] = &[("ufp", ".ufp")];
+/// The readers Orrery has without a table: name, extension, and what runs.
+const BUILT_IN: &[(&str, &str, Run)] = &[("ufp", ".ufp", Run::Ufp), ("3mf", ".gcode.3mf", Run::Sliced3mf)];
 
 /// Gcode is read by Orrery's own metadata code, never by a table.
 const GCODE_EXTS: &[&str] = &[".gcode", ".g", ".gco", ".nc"];
@@ -36,6 +36,7 @@ const UFP_THUMBNAIL: &str = "Metadata/thumbnail.png";
 #[derive(Debug, Clone, PartialEq)]
 enum Run {
     Ufp,
+    Sliced3mf,
     Command(Vec<String>),
 }
 
@@ -77,7 +78,7 @@ pub struct Thumbnail {
 
 impl Readers {
     pub fn new(config: &Config) -> Result<Self> {
-        let mut names: Vec<String> = BUILT_IN.iter().map(|(n, _)| (*n).to_owned()).collect();
+        let mut names: Vec<String> = BUILT_IN.iter().map(|(n, _, _)| (*n).to_owned()).collect();
         for section in config.section_names("reader ") {
             let name = section["reader ".len()..].to_owned();
             if !names.contains(&name) {
@@ -90,13 +91,13 @@ impl Readers {
                 bail!("[reader.{name}]: a reader name may use letters, digits, '_' and '-'");
             }
             let section = format!("reader {name}");
-            let built_in = BUILT_IN.iter().find(|(n, _)| *n == name).map(|(_, e)| (*e).to_owned());
+            let built_in = BUILT_IN.iter().find(|(n, _, _)| *n == name);
             // A built-in reader without a table isn't read as a section, so that server.config
             // shows only what the config has.
             if config.section_json(&section).is_none() {
-                if let Some(extension) = built_in {
+                if let Some((_, extension, run)) = built_in {
                     let timeout = Duration::from_secs_f64(DEFAULT_TIMEOUT);
-                    list.push(Reader { name, extension, run: Run::Ufp, timeout });
+                    list.push(Reader { name, extension: (*extension).to_owned(), run: run.clone(), timeout });
                 }
                 continue;
             }
@@ -104,9 +105,9 @@ impl Readers {
             if !s.get_bool("enabled", true)? {
                 continue;
             }
-            let extension = match (s.get_opt_str("extension"), &built_in) {
+            let extension = match (s.get_opt_str("extension"), built_in) {
                 (Some(e), _) => e,
-                (None, Some(e)) => e.clone(),
+                (None, Some((_, e, _))) => (*e).to_owned(),
                 (None, None) => bail!("[reader.{name}]: extension is missing: the files it reads, such as \".{name}\""),
             }
             .to_lowercase();
@@ -115,8 +116,9 @@ impl Readers {
                     "[reader.{name}] extension: expected a file extension with its dot, such as \".{name}\", got {extension:?}"
                 );
             }
-            if super::extension(&format!("x{extension}")) != extension {
-                bail!("[reader.{name}] extension: expected one extension, such as \".{name}\", got {extension:?}");
+            // An extension can have parts, such as `.gcode.3mf`, which a sliced 3MF has.
+            if extension[1..].split('.').any(str::is_empty) {
+                bail!("[reader.{name}] extension: expected a file extension such as \".{name}\", got {extension:?}");
             }
             if GCODE_EXTS.contains(&extension.as_str()) {
                 bail!("[reader.{name}] extension: Orrery reads {extension} files itself; a processor changes gcode");
@@ -125,7 +127,7 @@ impl Readers {
                 bail!("[reader.{name}] extension: [reader.{}] reads {extension} files already", other.name);
             }
             let run = match s.get_value("command") {
-                None if built_in.is_some() => Run::Ufp,
+                None if built_in.is_some() => built_in.map(|(_, _, run)| run.clone()).expect("built in"),
                 None => bail!("[reader.{name}]: command is missing: the program that reads {extension} files"),
                 Some(Value::String(p)) if !p.is_empty() => Run::Command(vec![p]),
                 Some(Value::Array(items)) if !items.is_empty() => {
@@ -150,10 +152,15 @@ impl Readers {
         Ok(Self { list })
     }
 
-    /// The reader for a file's extension. Gcode files have none: Orrery reads them itself.
+    /// The reader for a file's extension, the longest that matches, so `.gcode.3mf` wins over
+    /// `.3mf`. Gcode files have none: Orrery reads them itself.
     pub fn for_path(&self, name: &str) -> Option<&Reader> {
-        let ext = super::extension(name);
-        self.list.iter().find(|c| c.extension == ext)
+        // ASCII only, so the name keeps its length, and the extension can be cut off it.
+        let base = name.rsplit('/').next().unwrap_or(name).to_ascii_lowercase();
+        self.list
+            .iter()
+            .filter(|c| base.len() > c.extension.len() && base.ends_with(&c.extension))
+            .max_by_key(|c| c.extension.len())
     }
 
     /// Whether a reader reads files with this extension, such as `.ufp`.
@@ -166,9 +173,12 @@ impl Reader {
     /// Reads `file`, writing into `work`. The error is the reader's reason.
     pub async fn read(&self, file: &Path, work: &WorkDir, cwd: &Path) -> Result<Output, String> {
         let output = match &self.run {
-            Run::Ufp => {
-                let (file, dir) = (file.to_path_buf(), work.dir.clone());
-                let job = super::work::low_priority(move || read_ufp(&file, &dir).map_err(|e| format!("{e:#}")));
+            Run::Ufp | Run::Sliced3mf => {
+                let (file, dir, run) = (file.to_path_buf(), work.dir.clone(), self.run.clone());
+                let job = super::work::low_priority(move || {
+                    let read = if run == Run::Ufp { read_ufp(&file, &dir) } else { read_sliced_3mf(&file, &dir) };
+                    read.map_err(|e| format!("{e:#}"))
+                });
                 match tokio::time::timeout(self.timeout, job).await {
                     Err(_) => return Err(self.too_long()),
                     Ok(None) => return Err("the reader stopped".into()),
@@ -176,8 +186,9 @@ impl Reader {
                 }
             }
             Run::Command(command) => {
-                let input =
-                    work.link_input(file).map_err(|e| format!("can't give the reader {}: {e}", file.display()))?;
+                let input = work
+                    .link_input(file, &self.extension)
+                    .map_err(|e| format!("can't give the reader {}: {e}", file.display()))?;
                 self.run_command(command, &input, &work.dir, cwd).await?
             }
         };
@@ -263,6 +274,48 @@ fn read_ufp(input: &Path, dir: &Path) -> Result<Output> {
     Ok(output)
 }
 
+/// A sliced 3MF, as OrcaSlicer and BambuStudio export a plate: a zip with each sliced plate's
+/// gcode at `Metadata/plate_<n>.gcode`, and its pictures at `Metadata/plate_<n>.png` and
+/// `Metadata/plate_<n>_small.png`. The other pictures, such as `pick_<n>.png`, aren't of the
+/// print. Exactly one plate must be sliced; the gcode reader reads its metadata.
+fn read_sliced_3mf(input: &Path, dir: &Path) -> Result<Output> {
+    let file = std::fs::File::open(input).map_err(|e| anyhow::anyhow!("can't open {}: {e}", input.display()))?;
+    let mut zip =
+        zip::ZipArchive::new(file).map_err(|_| anyhow::anyhow!("it isn't a 3MF file: it isn't a zip file"))?;
+    let names: Vec<String> = zip.file_names().flatten().map(|n| n.into_owned()).collect();
+    let plate = |n: &str| -> Option<u32> {
+        n.trim_start_matches('/').strip_prefix("Metadata/plate_")?.strip_suffix(".gcode")?.parse().ok()
+    };
+    let mut plates: Vec<(u32, &String)> = names.iter().filter_map(|n| plate(n).map(|p| (p, n))).collect();
+    plates.sort();
+    let (number, gcode) = match plates.as_slice() {
+        [] => bail!("it has no sliced plate: export a plate from the slicer after slicing it"),
+        [one] => *one,
+        more => bail!("it has {} sliced plates, and Orrery prints one: export one plate", more.len()),
+    };
+    copy_entry(&mut zip, gcode, &dir.join("model.gcode"))?;
+    let mut output = Output { version: Some(OUTPUT_VERSION), gcode: Some("model.gcode".into()), ..Output::default() };
+    for (want, file) in [
+        (format!("Metadata/plate_{number}_small.png"), "small.png"),
+        (format!("Metadata/plate_{number}.png"), "plate.png"),
+    ] {
+        let Some(entry) = names.iter().find(|n| n.trim_start_matches('/') == want) else { continue };
+        copy_entry(&mut zip, entry, &dir.join(file))?;
+        match image::image_dimensions(dir.join(file)) {
+            Ok((width, height)) => output.thumbnails.push(Thumbnail { file: file.into(), width, height }),
+            Err(e) => tracing::info!("The 3MF file's picture {want} can't be read: {e}"),
+        }
+    }
+    // A 32x32 one for lists, from the largest, as for gcode.
+    if let Some(largest) = output.thumbnails.iter().max_by_key(|t| t.width * t.height).cloned()
+        && !output.thumbnails.iter().any(|t| t.width <= 32 && t.height <= 32)
+        && let Ok((width, height)) = super::metadata::make_miniature(&dir.join(&largest.file), &dir.join("mini.png"))
+    {
+        output.thumbnails.insert(0, Thumbnail { file: "mini.png".into(), width, height });
+    }
+    Ok(output)
+}
+
 fn copy_entry(zip: &mut zip::ZipArchive<std::fs::File>, name: &str, dest: &Path) -> Result<()> {
     let shown = name.trim_start_matches('/');
     let mut entry = zip.by_name(name).map_err(|e| anyhow::anyhow!("can't read /{shown}: {e}"))?;
@@ -343,6 +396,13 @@ mod tests {
 
         let off = Readers::new(&config("[reader.ufp]\nenabled = false\n")).unwrap();
         assert!(off.for_path("a.ufp").is_none());
+
+        // The longest extension wins, and a 3MF project that isn't sliced has no reader.
+        let r = Readers::new(&config("[reader.project]\nextension = \".3mf\"\ncommand = \"x\"\n")).unwrap();
+        assert_eq!(r.for_path("dir/Cube.GCODE.3MF").unwrap().name, "gcode_3mf");
+        assert_eq!(r.for_path("cube.3mf").unwrap().name, "project");
+        assert!(Readers::new(&config("")).unwrap().for_path("cube.3mf").is_none());
+        assert!(Readers::new(&config("")).unwrap().for_path(".gcode.3mf").is_none());
     }
 
     #[test]
@@ -351,7 +411,7 @@ mod tests {
         assert!(err("[reader.bgcode]\ncommand = \"x\"\n").contains("extension is missing"));
         assert!(err("[reader.x]\nextension = \".x\"\n").contains("command is missing"));
         assert!(err("[reader.x]\nextension = \"x\"\ncommand = \"x\"\n").contains("with its dot"));
-        assert!(err("[reader.x]\nextension = \".tar.gz\"\ncommand = \"x\"\n").contains("one extension"));
+        assert!(err("[reader.x]\nextension = \".tar..gz\"\ncommand = \"x\"\n").contains("expected a file extension"));
         assert!(err("[reader.x]\nextension = \".gcode\"\ncommand = \"x\"\n").contains("reads .gcode files itself"));
         assert!(err("[reader.x]\nextension = \".ufp\"\ncommand = \"x\"\n").contains("[reader.ufp] reads .ufp"));
         assert!(err("[reader.x]\nextension = \".x\"\ncommand = \"x\"\ntimeout = 0\n").contains("above 0"));
@@ -385,6 +445,34 @@ mod tests {
         assert!(format!("{:#}", read_ufp(&input, out.path()).unwrap_err()).contains("no /3D/model.gcode"));
         std::fs::write(&input, "G28\n").unwrap();
         assert!(format!("{:#}", read_ufp(&input, out.path()).unwrap_err()).contains("isn't a zip file"));
+    }
+
+    #[test]
+    fn a_sliced_3mf_gives_its_one_plate() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("cube.gcode.3mf");
+        let (big, small) = (png(512, 512), png(128, 128));
+        write_zip(
+            &input,
+            &[
+                ("3D/3dmodel.model", b"<model/>"),
+                ("Metadata/plate_2.gcode", b"G28\n"),
+                ("Metadata/plate_2.gcode.md5", b"X"),
+                ("Metadata/plate_2.png", &big),
+                ("Metadata/plate_2_small.png", &small),
+                ("Metadata/pick_2.png", &big),
+            ],
+        );
+        let out = tempfile::tempdir().unwrap();
+        let output = read_sliced_3mf(&input, out.path()).unwrap();
+        assert_eq!(std::fs::read(out.path().join("model.gcode")).unwrap(), b"G28\n");
+        let sizes: Vec<(u32, u32)> = output.thumbnails.iter().map(|t| (t.width, t.height)).collect();
+        assert_eq!(sizes, [(32, 32), (128, 128), (512, 512)]);
+
+        write_zip(&input, &[("Metadata/plate_1.gcode", b"G28\n"), ("Metadata/plate_2.gcode", b"G28\n")]);
+        assert!(format!("{:#}", read_sliced_3mf(&input, out.path()).unwrap_err()).contains("2 sliced plates"));
+        write_zip(&input, &[("3D/3dmodel.model", b"<model/>")]);
+        assert!(format!("{:#}", read_sliced_3mf(&input, out.path()).unwrap_err()).contains("no sliced plate"));
     }
 
     #[tokio::test]

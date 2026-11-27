@@ -234,6 +234,23 @@ async fn finalize_upload(
         })?;
     }
     let target = if is_link { std::fs::canonicalize(&dest).unwrap_or_else(|_| dest.clone()) } else { dest.clone() };
+    // A file with a reader is read before it replaces anything. Fluidd's editor shows a
+    // `cube.gcode.3mf` as its gcode, and Save uploads that text under the same name: it must
+    // not take the 3MF file's place.
+    if has_reader && let Some(reader) = fm.readers.for_path(&name) {
+        let checked = match super::work::WorkDir::new(&app.paths.data) {
+            Ok(work) => reader.read(temp, &work, &app.paths.data).await.map(|_| ()),
+            Err(e) => Err(format!("can't make a work folder: {e}")),
+        };
+        if let Err(e) = checked {
+            tracing::info!("The upload {filename} can't be read: {e}");
+            return Err(ApiError::bad_request(if dest.exists() {
+                format!("{filename} can't be replaced with what was sent: {e}. The file is unchanged.")
+            } else {
+                format!("{filename} can't be printed: {e}")
+            }));
+        }
+    }
     let _own = fm.own_change(&[&dest, &target]);
     super::move_path(temp, &target).map_err(|e| {
         tracing::info!("Upload Write Error: {e}");
@@ -396,10 +413,15 @@ async fn download(
         return api_error(e);
     }
     let rel = app.files.relative_path(&root, &full);
-    if root == "gcodes" && !original && app.files.readers.for_path(&rel).is_some() {
+    if root == "gcodes"
+        && !original
+        && let Some(reader) = app.files.readers.for_path(&rel)
+    {
         // The gcode of `cube.ufp` is saved as `cube.gcode`, the name Moonraker would give it,
         // since programs go by the extension. The header wins over a link's `download` name.
-        let stem = full.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        // The whole extension goes, so `cube.gcode.3mf` is `cube.gcode` too.
+        let name = full.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let stem = name.get(..name.len().saturating_sub(reader.extension.len())).unwrap_or(&name).to_owned();
         return match super::printable_gcode(app, &rel).await {
             Ok(gcode) => send_file(&gcode, Some(&format!("{stem}.gcode")), headers, head_only).await,
             Err(e) => error_response(400, &format!("{rel} can't be printed: {e}")),
