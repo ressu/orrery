@@ -28,6 +28,11 @@ steps:
   # A macro: `action_call_remote_method("spoolman_set_active_spool", spool_id=params.ID)`.
   - klippy: {remote_method: {method: spoolman_set_active_spool, params: {spool_id: "3"}}}
   - expect_agent_received: {method: post_spool_id, params: {spool_id: "3"}}
+  # CLEAR_ACTIVE_SPOOL from Moonraker's docs: `spool_id=None`, which Klipper sends as null.
+  # Moonraker passes None to its function, which clears the spool. Orrery leaves the argument
+  # out, so the agent gets no params, which post_spool_id takes as no spool; null is refused.
+  - klippy: {remote_method: {method: spoolman_set_active_spool, params: {spool_id: null}}}
+  - expect_agent_received: {method: post_spool_id, params: null}
   # The same through run_action, with the full name.
   - klippy:
       remote_method:

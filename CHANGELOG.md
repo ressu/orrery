@@ -29,6 +29,9 @@ Fluidd and Mainsail link to the release page on GitHub, which shows the same not
 
 ### Fixed
 
+- A macro's `CLEAR_ACTIVE_SPOOL`, as Moonraker's docs write it, clears the active spool again.
+  It sends `spool_id=None`, which Orrery refused.
+
 - Fluidd no longer shows "Spoolman server not available" when it connects while Orrery is
   starting. A Spoolman request waits up to a few seconds for the first connection to
   Spoolman.

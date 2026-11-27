@@ -354,6 +354,10 @@ pub async fn from_klipper(app: Arc<App>, method: String, params: Value) {
             access.role = Some(Role::Admin);
             access.source = format!("Klipper's {method}, [moonraker_compat] klipper_shutdown");
         }
+        // Moonraker calls its Python function with the arguments as they are, and `None` is
+        // what an argument left out gets: `spool_id=None` clears the active spool, as the
+        // macro in Moonraker's docs does. An action's method would refuse `null` instead.
+        args.retain(|_, v| !v.is_null());
         (*action).to_owned()
     };
     // `run` logs the outcome. Klipper doesn't wait for a reply.

@@ -380,7 +380,8 @@ async fn run_step(ctx: &mut Ctx, step: &Step, index: usize, result: &mut RunResu
                 })
                 .await;
             if found.is_none() {
-                let seen: Vec<String> = agent.notifications().iter().map(|m| m.method.clone()).collect();
+                let seen: Vec<String> =
+                    agent.notifications().iter().map(|m| format!("{} {}", m.method, m.params)).collect();
                 return Err(anyhow!("the test agent never received {} (got: {})", short(&expected), seen.join(", ")));
             }
             Ok(())
