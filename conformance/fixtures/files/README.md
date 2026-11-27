@@ -10,3 +10,5 @@ Files that upload and download steps send and compare, by name.
 | `cura_cube.gcode` | The gcode in `cura_cube.ufp`: a Cura 5.6 file with ten layers. |
 | `orca_cube.gcode.3mf` | A sliced 3MF, as OrcaSlicer exports a plate: `Metadata/plate_1.gcode`, which is `orca_cube.gcode`, the plate's pictures `plate_1.png` (256x256) and `plate_1_small.png` (64x64), and `pick_1.png` and `top_1.png`, which aren't of the print. Written by a script after OrcaSlicer's `bbs_3mf.cpp`. |
 | `orca_cube.gcode` | `prusaslicer_cube.gcode`, said to be from OrcaSlicer 2.2.0. |
+| `prusaslicer_cube.bgcode` | PrusaSlicer 2.9.7's binary gcode of a 10x10x3 mm cube, with its default settings, from `prusa-slicer --export-gcode --binary-gcode`. Its command line writes no thumbnails, so a script added two thumbnail blocks after the printer metadata, with their CRC32: a 16x16 PNG and a 48x27 QOI. |
+| `prusaslicer_cube_bgcode_text.gcode` | The same slice, as PrusaSlicer writes it as text. The bgcode reader's unit test compares the commands. |

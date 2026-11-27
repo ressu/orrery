@@ -40,6 +40,23 @@ To turn sliced 3MF files off:
 enabled = false
 ```
 
+## Binary gcode
+
+PrusaSlicer can write binary gcode, `.bgcode`, which is smaller than text gcode and which
+Moonraker can't print. Orrery prints one without any settings. It turns the file into the text
+gcode PrusaSlicer itself would write, with the file's metadata, and Klipper prints that. The
+file's thumbnails are shown as they are, and aren't added to the text.
+
+Fluidd doesn't know `.bgcode` as a file to print, as with sliced 3MF files above: it has no
+Print button for it, and shows its thumbnail after a reload.
+
+To turn binary gcode off:
+
+```toml
+[reader.bgcode]
+enabled = false
+```
+
 ## What clients see
 
 `cube.ufp` stays `cube.ufp`: in the file list, in the print's status, in history, and in the job
@@ -68,15 +85,15 @@ Start the print from a client, the job queue, or `printer.print.start`.
 A program can read another format. Add a table for it, with its extension and command:
 
 ```toml
-[reader.bgcode]
-extension = ".bgcode"
-command = ["/opt/bgcode/bgcode-reader"]
+[reader.gx]
+extension = ".gx"
+command = ["/opt/gx/gx-reader"]
 ```
 
 | Option | Default | What it does |
 |---|---|---|
-| `extension` | `.ufp` for `ufp`, `.gcode.3mf` for `3mf`; needed for any other | The files it reads, with the dot. It can have parts, such as `.gcode.3mf` |
-| `command` | Orrery's own, for `ufp` and `3mf`; needed for any other | The program to run, and its first arguments |
+| `extension` | `.ufp` for `ufp`, `.gcode.3mf` for `gcode_3mf`, `.bgcode` for `bgcode`; needed for any other | The files it reads, with the dot. It can have parts, such as `.gcode.3mf` |
+| `command` | Orrery's own, for `ufp`, `gcode_3mf`, and `bgcode`; needed for any other | The program to run, and its first arguments |
 | `timeout` | `300` | Seconds before the file can't be read |
 | `enabled` | `true` | `false` turns the reader off |
 

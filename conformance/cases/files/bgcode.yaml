@@ -1,0 +1,41 @@
+name: PrusaSlicer's binary gcode is kept as it was, and printed as text gcode
+description: >
+  orrery only. Moonraker can't print a .bgcode file. Orrery keeps cube.bgcode, and its reader
+  writes the gcode text PrusaSlicer's own conversion writes, which Klipper prints and the gcode
+  reader reads the metadata and thumbnails from. See docs/design/2026-11-27-file-tools.md.
+targets: [orrery]
+transports: [ws]
+steps:
+  - upload: cube.bgcode
+    fixture: prusaslicer_cube.bgcode
+    expect: {item: {path: cube.bgcode, root: gcodes}, action: create_file}
+  - call: server.files.metadata
+    params: {filename: cube.bgcode}
+    retry_ms: 5000
+    expect:
+      filename: cube.bgcode
+      slicer: PrusaSlicer
+      slicer_version: 2.9.7
+      layer_height: 0.3
+      estimated_time: $type:number
+      filament_type: PLA
+      # The two in the file, the QOI one saved as PNG, and a copy of the larger to fit in 32x32.
+      thumbnails:
+        - {width: 32, height: 18, size: $type:number, relative_path: ".thumbs/cube.bgcode-32x18.png"}
+        - {width: 16, height: 16, size: $type:number, relative_path: ".thumbs/cube.bgcode-16x16.png"}
+        - {width: 48, height: 27, size: $type:number, relative_path: ".thumbs/cube.bgcode-48x27.png"}
+  # The gcode is text, saved as cube.gcode; the original is the binary file.
+  - download: gcodes/cube.bgcode
+    expect_filename: cube.gcode
+  - download: gcodes/cube.bgcode?content=original
+    expect_fixture: prusaslicer_cube.bgcode
+    expect_filename: cube.bgcode
+  # Fluidd's editor Save sends text under the same name: refused, and the file is unchanged.
+  - upload: cube.bgcode
+    content: "G28\n"
+    expect_error: {code: 400, message: "$regex:^cube.bgcode can't be replaced with what was sent: it isn't a binary gcode file\\. The file is unchanged\\.$"}
+  - download: gcodes/cube.bgcode?content=original
+    expect_fixture: prusaslicer_cube.bgcode
+  - call: printer.print.start
+    params: {filename: cube.bgcode}
+  - expect_klippy_request: {method: gcode/script, params: {script: 'SDCARD_PRINT_FILE FILENAME=".cache/cube.bgcode.gcode"'}}

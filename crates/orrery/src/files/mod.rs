@@ -5,6 +5,7 @@
 //! folders directly, with scp or by Klipper. It scans the gcodes folder for metadata when it
 //! starts.
 
+mod bgcode;
 pub mod http;
 mod metadata;
 pub mod place;

@@ -34,6 +34,8 @@ tracing-appender = "0.2.5"
 tracing-subscriber.workspace = true
 tracing.workspace = true
 uuid = { version = "1.29.0", features = ["v4", "v5"] }
+crc32fast = "1.5"
+flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
 zip = { version = "9.2.1", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 toml = { version = "1.2.1", default-features = false, features = ["parse", "preserve_order", "serde"] }
 

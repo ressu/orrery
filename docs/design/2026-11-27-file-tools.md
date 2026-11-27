@@ -6,6 +6,12 @@ on downloads, and work folders in the data folder (`crates/orrery/src/files/read
 `place.rs`, `work.rs`, `map_printed_names` in `crates/orrery/src/klippy.rs`, and the case
 `files/ufp`). Sliced 3MF files are built too, as the user's way to try it on a printer, without Cura
 (user, 2026-11-27); the 3MF layout is OrcaSlicer's (`src/libslic3r/Format/bbs_3mf.cpp`).
+Binary gcode is built (user, 2026-11-27): the reader writes the text libbgcode's
+`from_binary_to_ascii` writes, at the commit PrusaSlicer 2.9 builds with, so the gcode reader
+reads its metadata as in any PrusaSlicer gcode. The thumbnails are images in their own blocks,
+so the reader writes them as files, not as base64 in the text, which the gcode reader would
+only decode again and Klipper would read past (user, 2026-11-27). A unit test compares the
+commands with PrusaSlicer's text export of the same slice.
 Processors, cache expiry, and thumbnails made on request are designed, not built. UFP stays
 untried on a printer: the user doesn't run Cura.
 
@@ -272,9 +278,9 @@ One place, where Orrery talks to Klipper:
 Tools are set in `orrery.toml`, like agents:
 
 ```toml
-[reader.bgcode]
-extension = ".bgcode"
-command = ["orrery-reader-bgcode"]
+[reader.gx]
+extension = ".gx"
+command = ["orrery-reader-gx"]
 
 [processor.objects]
 command = ["preprocess_cancellation"]
@@ -311,8 +317,6 @@ A UFP file is a zip with the gcode at `/3D/model.gcode`, and a picture at
 - **An object processor.** preprocess_cancellation is a Python package. Orrery could run it
   when it's installed, or get its own processor later.
 - **klipper_estimator and `[analysis]`.** It fits as a processor, but it isn't in scope.
-- **Binary gcode.** It would be the first reader that converts, and something Moonraker can't
-  do.
 - **A sliced 3MF's `slice_info.config`.** The 3MF reader, built, takes the one sliced plate's
   gcode and pictures, and the gcode reader reads the metadata from the gcode. The slice info
   could add the filaments' colors and weights.

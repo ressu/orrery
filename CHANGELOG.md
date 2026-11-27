@@ -21,6 +21,10 @@ Fluidd and Mainsail link to the release page on GitHub, which shows the same not
   printed, with the plate's pictures as its thumbnails. Moonraker can't print one. Fluidd has no
   Print button for it yet; see [Sliced 3MF](docs/configuration/readers.md#sliced-3mf).
 
+- PrusaSlicer's binary gcode, `cube.bgcode`, can be printed, with its thumbnails and metadata.
+  Moonraker can't print it. Fluidd has no Print button for it yet; see
+  [Binary gcode](docs/configuration/readers.md#binary-gcode).
+
 - `orrery setup` can remove old logs, with `[setup] log_cleanup = true` in `orrery.toml` or
   `setup --log-cleanup`. Once a day, the printer's user then removes the files in
   `~/printer_data/logs` that nothing has written, read, or renamed for 14 days, whichever

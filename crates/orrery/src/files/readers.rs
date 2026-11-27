@@ -1,6 +1,6 @@
 //! Readers: one for each format, which tell Orrery what to print, the metadata, and the
 //! thumbnails (docs/design/2026-11-27-file-tools.md). Gcode's reader is [`super::metadata`].
-//! UFP's and sliced 3MF's are built in. `[reader.<name>]` in `orrery.toml` changes one, or adds a program for
+//! UFP's, sliced 3MF's, and PrusaSlicer's binary gcode's are built in. `[reader.<name>]` in `orrery.toml` changes one, or adds a program for
 //! another format.
 //!
 //! Every reader writes only into its work folder, and gives an [`Output`]. [`super::place`]
@@ -24,7 +24,8 @@ pub const OUTPUT_VERSION: u64 = 1;
 const DEFAULT_TIMEOUT: f64 = 300.0;
 
 /// The readers Orrery has without a table: name, extension, and what runs.
-const BUILT_IN: &[(&str, &str, Run)] = &[("ufp", ".ufp", Run::Ufp), ("3mf", ".gcode.3mf", Run::Sliced3mf)];
+const BUILT_IN: &[(&str, &str, Run)] =
+    &[("ufp", ".ufp", Run::Ufp), ("gcode_3mf", ".gcode.3mf", Run::Sliced3mf), ("bgcode", ".bgcode", Run::Bgcode)];
 
 /// Gcode is read by Orrery's own metadata code, never by a table.
 const GCODE_EXTS: &[&str] = &[".gcode", ".g", ".gco", ".nc"];
@@ -37,6 +38,7 @@ const UFP_THUMBNAIL: &str = "Metadata/thumbnail.png";
 enum Run {
     Ufp,
     Sliced3mf,
+    Bgcode,
     Command(Vec<String>),
 }
 
@@ -173,10 +175,14 @@ impl Reader {
     /// Reads `file`, writing into `work`. The error is the reader's reason.
     pub async fn read(&self, file: &Path, work: &WorkDir, cwd: &Path) -> Result<Output, String> {
         let output = match &self.run {
-            Run::Ufp | Run::Sliced3mf => {
+            Run::Ufp | Run::Sliced3mf | Run::Bgcode => {
                 let (file, dir, run) = (file.to_path_buf(), work.dir.clone(), self.run.clone());
                 let job = super::work::low_priority(move || {
-                    let read = if run == Run::Ufp { read_ufp(&file, &dir) } else { read_sliced_3mf(&file, &dir) };
+                    let read = match run {
+                        Run::Ufp => read_ufp(&file, &dir),
+                        Run::Sliced3mf => read_sliced_3mf(&file, &dir),
+                        _ => read_bgcode(&file, &dir),
+                    };
                     read.map_err(|e| format!("{e:#}"))
                 });
                 match tokio::time::timeout(self.timeout, job).await {
@@ -316,6 +322,23 @@ fn read_sliced_3mf(input: &Path, dir: &Path) -> Result<Output> {
     Ok(output)
 }
 
+/// PrusaSlicer's binary gcode: the gcode as text, with the metadata as comments, which the
+/// gcode reader reads, and the thumbnails as files. A 32x32 one is made when there's none, as
+/// the gcode reader does for a text gcode, from the one with the most pixels: the gcode reader
+/// goes by file size, as Moonraker does, which a QOI file's lack of compression would skew.
+fn read_bgcode(input: &Path, dir: &Path) -> Result<Output> {
+    let mut thumbnails = super::bgcode::read(input, dir, "model.gcode")?;
+    if !thumbnails.iter().any(|t| t.width == 32 && t.height == 32)
+        && let Some(largest) = thumbnails.iter().max_by_key(|t| t.width * t.height).cloned()
+    {
+        match super::metadata::make_miniature(&dir.join(&largest.file), &dir.join("small.png")) {
+            Ok((width, height)) => thumbnails.insert(0, Thumbnail { file: "small.png".into(), width, height }),
+            Err(e) => tracing::info!("{e}"),
+        }
+    }
+    Ok(Output { version: Some(OUTPUT_VERSION), gcode: Some("model.gcode".into()), thumbnails, ..Output::default() })
+}
+
 fn copy_entry(zip: &mut zip::ZipArchive<std::fs::File>, name: &str, dest: &Path) -> Result<()> {
     let shown = name.trim_start_matches('/');
     let mut entry = zip.by_name(name).map_err(|e| anyhow::anyhow!("can't read /{shown}: {e}"))?;
@@ -408,7 +431,7 @@ mod tests {
     #[test]
     fn a_table_must_name_a_new_extension_and_a_program() {
         let err = |t: &str| Readers::new(&config(t)).unwrap_err().to_string();
-        assert!(err("[reader.bgcode]\ncommand = \"x\"\n").contains("extension is missing"));
+        assert!(err("[reader.sl1]\ncommand = \"x\"\n").contains("extension is missing"));
         assert!(err("[reader.x]\nextension = \".x\"\n").contains("command is missing"));
         assert!(err("[reader.x]\nextension = \"x\"\ncommand = \"x\"\n").contains("with its dot"));
         assert!(err("[reader.x]\nextension = \".tar..gz\"\ncommand = \"x\"\n").contains("expected a file extension"));
