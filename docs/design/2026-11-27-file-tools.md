@@ -213,8 +213,13 @@ a byte offset, so it needs the bytes Klipper prints: the cached gcode, after any
 - **The metadata says the format,** such as `"format": "ufp"`, so a client knows there's an
   original to offer. Moonraker's clients ignore fields they don't know.
 - **The list shows the upload,** with its size. A download's `Content-Length` is the gcode's.
-- **Fluidd's Download saves gcode named `cube.ufp`** until it asks for the original. Moonraker
-  would have kept only the gcode, so only the name is worse.
+- **The gcode is saved as `cube.gcode`.** A program, on Windows above all, goes by the
+  extension, so gcode named `cube.ufp` would confuse it (user, 2026-11-27). The download's
+  `Content-Disposition` names it after the file, with `.gcode`, the name Moonraker would give
+  it. Fluidd's Download button is a link with `download="cube.ufp"`
+  (`fluidd/src/util/download-url.ts`), and the header's name wins over the link's, as the HTML
+  spec says. `content=original` is named `cube.ufp`. `files/upload_download` checks the name
+  on both servers, and `files/ufp` on Orrery.
 
 ### Thumbnails, later
 
