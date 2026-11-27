@@ -139,8 +139,16 @@ The routine trusts nothing in the work folder:
   a place.
 - **Metadata is only fields Orrery knows,** with the types Moonraker gives them.
 
-To shut a tool off fully, it would also need the input without seeing the gcodes folder: a copy
-or a hard link in its work folder, or the open file. That's for when it's needed.
+**The input is in the work folder too** (user, 2026-11-27): a hard link to the stored file
+when it can be, and a copy when it can't, such as across filesystems. A tool then needs nothing
+outside its work folder. A hard link is the same file, so a tool that writes to its input
+changes the stored file. That's accepted: the contract says a tool must not, and Orrery's own
+don't.
+
+**Work folders are on the data folder's filesystem,** not in `/tmp`, so the hard link and the
+moves into place are renames, not copies. `/tmp` is often in memory on a printer computer, and a
+gcode file can be hundreds of megabytes. Uploads go there today
+(`crates/orrery/src/files/http.rs`, `std::env::temp_dir()`), and would move too.
 
 ## Messages
 
