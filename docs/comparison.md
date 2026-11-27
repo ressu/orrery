@@ -70,6 +70,8 @@ difference the conformance cases check. What's missing here is also the list to 
 - **Each file says whether it can be printed.** Listings, metadata, and change announcements
   give each file a `file_info` block: whether Orrery prints it, its format, and URLs for its
   gcode, the file as uploaded, and each thumbnail. No client uses it yet.
+- **Capabilities instead of versions.** `server.info` says what the API does, including the
+  file formats this printer reads ([Capabilities](capabilities.md)). No client uses it yet.
 - **Agents.** Spoolman, the update manager, and buttons are separate programs, started by
   Orrery, and any program can join as an agent.
 

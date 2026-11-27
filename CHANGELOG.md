@@ -25,10 +25,14 @@ Fluidd and Mainsail link to the release page on GitHub, which shows the same not
   Moonraker can't print it. Fluidd has no Print button for it yet; see
   [Binary gcode](docs/configuration/readers.md#binary-gcode).
 
-- Each file in listings, metadata, and change announcements has a `file_info` block: whether
-  Orrery prints it, its format, and what a download gives, with a URL for each, thumbnails
-  included. History and the job queue have a `file_info` map, with each file they name once. Clients written for Moonraker ignore it; it's for clients to use instead of going
-  by the file's extension.
+- Each file in metadata and change announcements, and in listings that ask with
+  `file_info: true`, has a `file_info` block: whether Orrery prints it, its format, and what a
+  download gives, with a URL for each, thumbnails included. History and the job queue have a
+  `file_info` map, with each file they name once. Clients written for Moonraker ignore it; it's
+  for clients to use instead of going by the file's extension.
+
+- `server.info` lists the API's [capabilities](docs/capabilities.md), including the file formats
+  this printer reads, so a client can check what Orrery does instead of comparing versions.
 
 - `orrery setup` can remove old logs, with `[setup] log_cleanup = true` in `orrery.toml` or
   `setup --log-cleanup`. Once a day, the printer's user then removes the files in

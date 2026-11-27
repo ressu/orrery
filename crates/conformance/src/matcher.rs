@@ -24,6 +24,8 @@ use serde_json::Value;
 pub const ADDITIONS: &[&str] = &[
     // docs/design/2026-11-27-file-info.md
     "file_info",
+    // docs/capabilities.md
+    "capabilities",
 ];
 
 /// Returns one line per mismatch, each naming its JSON path. Empty means the values match.

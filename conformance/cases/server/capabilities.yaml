@@ -1,0 +1,31 @@
+name: server.info lists the API's capabilities, with the file formats this printer reads
+description: >
+  orrery only (docs/capabilities.md). A client checks capabilities instead of comparing
+  versions. file_formats follows orrery.toml: a reader turned off isn't listed, and one added
+  is.
+targets: [orrery]
+transports: [ws, http]
+files:
+  config/orrery.toml: |
+    [reader.gcode_3mf]
+    enabled = false
+
+    [reader.gx]
+    extension = ".gx"
+    command = ["/bin/false"]
+steps:
+  - call: server.info
+    expect:
+      capabilities:
+        $exact: true
+        file_info: {$exact: true, version: 1}
+        download_content: {$exact: true, version: 1}
+        webcams: {$exact: true, version: 1}
+        file_formats:
+          $exact: true
+          version: 1
+          formats:
+            - {name: gcode, extensions: [.gcode, .g, .gco, .nc]}
+            - {name: ufp, extensions: [.ufp]}
+            - {name: bgcode, extensions: [.bgcode]}
+            - {name: gx, extensions: [.gx]}

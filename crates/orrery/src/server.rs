@@ -683,6 +683,7 @@ async fn server_info(app: Arc<App>, req: Request) -> ApiResult {
         "missing_klippy_requirements": app.klippy.missing_requirements(),
         "api_version": API_VERSION,
         "api_version_string": API_VERSION.map(|v| v.to_string()).join("."),
+        "capabilities": crate::capabilities::capabilities(&app),
     }))
 }
 

@@ -165,6 +165,11 @@ impl Readers {
             .max_by_key(|c| c.extension.len())
     }
 
+    /// The readers, in the order they're configured: built in first.
+    pub fn iter(&self) -> impl Iterator<Item = &Reader> {
+        self.list.iter()
+    }
+
     /// Whether a reader reads files with this extension, such as `.ufp`.
     pub fn reads(&self, extension: &str) -> bool {
         self.list.iter().any(|c| c.extension == extension)

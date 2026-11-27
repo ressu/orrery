@@ -10,6 +10,7 @@ mod agents;
 mod api;
 mod auth;
 mod buttons;
+mod capabilities;
 mod compat;
 pub mod config;
 mod data_store;
