@@ -257,6 +257,10 @@ One place, where Orrery talks to Klipper:
 - **Klipper's status** has `print_stats.filename` and `virtual_sdcard.file_path` mapped back to
   `cube.ufp`, in subscriptions and queries alike.
 - **History and the job queue** store only `cube.ufp`, so they need nothing.
+- **The cache is hidden.** Clients can't read it, so folder listings and the file watcher's
+  announcements leave it out (user, 2026-11-27). It showed in Fluidd's Jobs list as a folder
+  that only answered "forbidden". Moonraker lists its reserved paths, but none of them is in a
+  folder clients browse.
 - **A cached gcode stays while it's printed.** Cached files expire after a time, such as 14
   days (user, 2026-11-27). That's for later: for now they stay.
 - **What leaks:** Klipper's console line `File opened:.cache/cube.gcode`, and a macro's
